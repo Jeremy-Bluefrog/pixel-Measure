@@ -91,7 +91,7 @@ firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.r
 firebase-ai = { group = "com.google.firebase", name = "firebase-ai" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 retrofit-converter-serialization = { group = "com.squareup.retrofit2", name = "converter-kotlinx-serialization", version.ref = "converterSerialization" }
-arcore = { group = "com.google.ar", name = "core", version = "1.46.0" }
+arcore = { group = "com.google.ar", name = "core", version = "1.54.0" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

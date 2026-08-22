@@ -16,8 +16,8 @@ android {
 
   defaultConfig {
     applicationId = "com.aistudio.measureapp.uxcmqp"
-    minSdk = 24
-    targetSdk = 35
+    minSdk = 29
+    targetSdk = 37
     versionCode = 1
     versionName = "1.0"
 
@@ -186,9 +186,9 @@ tasks.register("downloadFonts") {
     }
 }
 
-tasks.matching { it.name.startsWith("preBuild") }.all {
-    dependsOn("downloadFonts")
-}
+// tasks.matching { it.name.startsWith("preBuild") }.all {
+//     dependsOn("downloadFonts")
+// }
 
 tasks.matching { it.name == "assembleDebug" }.all {
     finalizedBy("copyApkToBuildOutputs")

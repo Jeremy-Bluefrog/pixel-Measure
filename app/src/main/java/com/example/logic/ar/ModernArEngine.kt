@@ -1,0 +1,374 @@
+package com.example.logic.ar
+
+import android.content.Context
+import android.util.Log
+import com.example.ui.viewmodel.Point3D
+import com.google.ar.core.*
+import com.google.ar.core.exceptions.*
+import java.util.EnumSet
+
+/**
+ * Geometric information about a detected surface in AR space.
+ */
+data class DetectedPlaneInfo(
+    val id: String,
+    val type: Plane.Type,
+    val centerPose: Pose,
+    val extentX: Float,
+    val extentZ: Float,
+    val polygonVertices: FloatArray,
+    val isTracking: Boolean
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+        other as DetectedPlaneInfo
+        return id == other.id
+    }
+
+    override fun hashCode(): Int {
+        return id.hashCode()
+    }
+}
+
+/**
+ * Enhanced data packet extracted from an AR frame on the GL rendering thread.
+ */
+data class ModernArFrame(
+    val trackingState: TrackingState,
+    val trackingFailureReason: TrackingFailureReason,
+    val viewMatrix: FloatArray,
+    val projectionMatrix: FloatArray,
+    val pointCloud: FloatArray?,
+    val planes: List<DetectedPlaneInfo>,
+    val cameraPoseX: Float,
+    val cameraPoseY: Float,
+    val cameraPoseZ: Float,
+    val cameraPitch: Float,
+    val cameraYaw: Float,
+    val isDepthAvailable: Boolean,
+    val lightIntensity: Float,
+    val surfaceTypeAtCenter: String
+)
+
+/**
+ * Modern AR Engine managing ARCore Session lifecycle, configurations,
+ * multi-tier hit-testing (Planes, Depth, InstantPlacement, Points),
+ * and dynamic Anchor management for zero-drift physical tracking.
+ */
+class ModernArEngine(private val context: Context) {
+
+    var session: Session? = null
+        private set
+
+    var isSupported: Boolean = false
+        private set
+
+    /**
+     * Check device compatibility and create configured ARCore Session.
+     */
+    fun createSession(): Session? {
+        if (session != null) return session
+
+        try {
+            val availability = ArCoreApk.getInstance().checkAvailability(context)
+            if (!availability.isSupported) {
+                Log.w("ModernArEngine", "ARCore is not supported on this device.")
+                isSupported = false
+                return null
+            }
+
+            isSupported = true
+            val sessionInstance = Session(context)
+            session = sessionInstance
+
+            // Configure 60 FPS Target Camera if supported
+            try {
+                val filter = CameraConfigFilter(sessionInstance)
+                filter.setTargetFps(EnumSet.of(CameraConfig.TargetFps.TARGET_FPS_60))
+                val cameraConfigs = sessionInstance.getSupportedCameraConfigs(filter)
+                if (cameraConfigs.isNotEmpty()) {
+                    sessionInstance.setCameraConfig(cameraConfigs[0])
+                    Log.i("ModernArEngine", "ARCore configured for 60 FPS target.")
+                }
+            } catch (e: Exception) {
+                Log.w("ModernArEngine", "60 FPS config filter unavailable, using default camera config: ${e.message}")
+            }
+
+            // Apply modern ARCore configuration
+            val config = Config(sessionInstance).apply {
+                focusMode = Config.FocusMode.AUTO
+                updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
+                planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
+                lightEstimationMode = Config.LightEstimationMode.AMBIENT_INTENSITY
+
+                // Enable Instant Placement for immediate zero-wait measuring
+                try {
+                    instantPlacementMode = Config.InstantPlacementMode.LOCAL_Y_UP
+                    Log.i("ModernArEngine", "Instant Placement Mode enabled.")
+                } catch (e: Exception) {
+                    Log.w("ModernArEngine", "Instant Placement not supported: ${e.message}")
+                }
+
+                // Enable Depth API if device hardware supports it
+                if (sessionInstance.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
+                    depthMode = Config.DepthMode.AUTOMATIC
+                    Log.i("ModernArEngine", "Automatic Depth Mode enabled.")
+                }
+            }
+
+            sessionInstance.configure(config)
+            sessionInstance.setCameraTextureName(0)
+            sessionInstance.resume()
+
+            return sessionInstance
+        } catch (e: Exception) {
+            Log.e("ModernArEngine", "Failed to create ARCore session", e)
+            return null
+        }
+    }
+
+    fun pause() {
+        session?.pause()
+    }
+
+    fun resume() {
+        try {
+            session?.resume()
+        } catch (e: Exception) {
+            Log.e("ModernArEngine", "Failed to resume ARCore session", e)
+        }
+    }
+
+    fun setDisplayGeometry(rotation: Int, width: Int, height: Int) {
+        session?.setDisplayGeometry(rotation, width, height)
+    }
+
+    fun destroy() {
+        try {
+            session?.close()
+        } catch (e: Exception) {
+            Log.e("ModernArEngine", "Error closing ARCore session", e)
+        }
+        session = null
+    }
+
+    /**
+     * Multi-tier precision hit testing at pixel coordinate (x, y).
+     * Priority:
+     * 1. Plane polygon hit (highest confidence)
+     * 2. Plane estimated hit
+     * 3. Depth point hit
+     * 4. Instant placement point hit
+     * 5. Point cloud feature point hit
+     */
+    fun performHitTest(frame: Frame, x: Float, y: Float): HitTestResult? {
+        try {
+            val hits = frame.hitTest(x, y)
+            if (hits.isEmpty()) return null
+
+            // Filter hits within a reliable physical distance range (0.05m to 25.0m)
+            val validHits = hits.filter { it.distance in 0.05f..25.0f }
+            if (validHits.isEmpty()) return null
+
+            // Tier 1: Detected Plane within polygon bounds
+            val planePolygonHit = validHits.firstOrNull { hit ->
+                val trackable = hit.trackable
+                trackable is Plane && trackable.trackingState == TrackingState.TRACKING && trackable.isPoseInPolygon(hit.hitPose)
+            }
+            if (planePolygonHit != null) {
+                val plane = planePolygonHit.trackable as Plane
+                val anchor = try { planePolygonHit.createAnchor() } catch (e: Exception) { null }
+                return HitTestResult(
+                    pose = planePolygonHit.hitPose,
+                    anchor = anchor,
+                    hitType = HitType.PLANE_POLYGON,
+                    distance = planePolygonHit.distance,
+                    planeType = plane.type
+                )
+            }
+
+            // Tier 2: Plane estimated (outside current polygon)
+            val planeHit = validHits.firstOrNull { hit ->
+                val trackable = hit.trackable
+                trackable is Plane && trackable.trackingState == TrackingState.TRACKING
+            }
+            if (planeHit != null) {
+                val plane = planeHit.trackable as Plane
+                val anchor = try { planeHit.createAnchor() } catch (e: Exception) { null }
+                return HitTestResult(
+                    pose = planeHit.hitPose,
+                    anchor = anchor,
+                    hitType = HitType.PLANE_ESTIMATED,
+                    distance = planeHit.distance,
+                    planeType = plane.type
+                )
+            }
+
+            // Tier 3: Depth Point (from Depth API)
+            val depthHit = validHits.firstOrNull { hit ->
+                val trackable = hit.trackable
+                trackable is com.google.ar.core.Point && trackable.orientationMode == com.google.ar.core.Point.OrientationMode.ESTIMATED_SURFACE_NORMAL
+            }
+            if (depthHit != null) {
+                val anchor = try { depthHit.createAnchor() } catch (e: Exception) { null }
+                return HitTestResult(
+                    pose = depthHit.hitPose,
+                    anchor = anchor,
+                    hitType = HitType.DEPTH_POINT,
+                    distance = depthHit.distance,
+                    planeType = null
+                )
+            }
+
+            // Tier 4: Instant Placement Point
+            val instantHit = validHits.firstOrNull { it.trackable is InstantPlacementPoint }
+            if (instantHit != null) {
+                val anchor = try { instantHit.createAnchor() } catch (e: Exception) { null }
+                return HitTestResult(
+                    pose = instantHit.hitPose,
+                    anchor = anchor,
+                    hitType = HitType.INSTANT_PLACEMENT,
+                    distance = instantHit.distance,
+                    planeType = null
+                )
+            }
+
+            // Tier 5: PointCloud feature point
+            val featurePointHit = validHits.firstOrNull { it.trackable is com.google.ar.core.Point }
+            if (featurePointHit != null) {
+                val anchor = try { featurePointHit.createAnchor() } catch (e: Exception) { null }
+                return HitTestResult(
+                    pose = featurePointHit.hitPose,
+                    anchor = anchor,
+                    hitType = HitType.FEATURE_POINT,
+                    distance = featurePointHit.distance,
+                    planeType = null
+                )
+            }
+
+        } catch (e: Exception) {
+            Log.e("ModernArEngine", "Hit test exception: ${e.message}")
+        }
+        return null
+    }
+
+    /**
+     * Extract frame data matrices and state safely on GL thread.
+     */
+    fun extractFrameData(frame: Frame): ModernArFrame {
+        val camera = frame.camera
+        val vMatrix = FloatArray(16)
+        val pMatrix = FloatArray(16)
+        camera.getViewMatrix(vMatrix, 0)
+        camera.getProjectionMatrix(pMatrix, 0, 0.05f, 50.0f)
+
+        var points: FloatArray? = null
+        try {
+            val pointCloud = frame.acquirePointCloud()
+            points = FloatArray(pointCloud.points.remaining())
+            pointCloud.points.get(points)
+            pointCloud.release()
+        } catch (e: Exception) {}
+
+        // Extract detected planes with polygon 2D vertices
+        val planeInfos = mutableListOf<DetectedPlaneInfo>()
+        val allPlanes = session?.getAllTrackables(Plane::class.java)
+        allPlanes?.forEach { plane ->
+            if (plane.subsumedBy == null) {
+                val poly2d = plane.polygon
+                val polyArray = FloatArray(poly2d.remaining())
+                poly2d.get(polyArray)
+                planeInfos.add(
+                    DetectedPlaneInfo(
+                        id = plane.hashCode().toString(),
+                        type = plane.type,
+                        centerPose = plane.centerPose,
+                        extentX = plane.extentX,
+                        extentZ = plane.extentZ,
+                        polygonVertices = polyArray,
+                        isTracking = plane.trackingState == TrackingState.TRACKING
+                    )
+                )
+            }
+        }
+
+        val pose = camera.pose
+        val quaternion = pose.rotationQuaternion // [x, y, z, w]
+        val qx = quaternion[0]
+        val qy = quaternion[1]
+        val qz = quaternion[2]
+        val qw = quaternion[3]
+
+        // Pitch & Yaw from Camera Pose
+        val sinP = 2.0 * (qw * qx - qy * qz)
+        val pRad = if (Math.abs(sinP) >= 1) Math.copySign(Math.PI / 2, sinP) else Math.asin(sinP)
+        val pitchDeg = Math.toDegrees(pRad).toFloat()
+
+        val sinY = 2.0 * (qw * qy + qz * qx)
+        val cosY = 1.0 - 2.0 * (qx * qx + qy * qy)
+        val yawDeg = Math.toDegrees(Math.atan2(sinY, cosY)).toFloat()
+
+        val lightVal = try {
+            frame.lightEstimate.pixelIntensity
+        } catch (e: Exception) {
+            1.0f
+        }
+
+        val hasDepth = try {
+            frame.acquireDepthImage16Bits()?.let { image ->
+                image.close()
+                true
+            } ?: false
+        } catch (e: Exception) {
+            false
+        }
+
+        // Check surface classification at frame center
+        val centerHits = try {
+            frame.hitTest(frame.camera.imageIntrinsics.imageDimensions[0] / 2f, frame.camera.imageIntrinsics.imageDimensions[1] / 2f)
+        } catch (e: Exception) {
+            emptyList()
+        }
+        val surfaceLabel = when {
+            centerHits.any { it.trackable is Plane && (it.trackable as Plane).type == Plane.Type.HORIZONTAL_UPWARD_FACING } -> "水平地面/桌面"
+            centerHits.any { it.trackable is Plane && (it.trackable as Plane).type == Plane.Type.VERTICAL } -> "垂直牆面"
+            centerHits.any { it.trackable is Plane && (it.trackable as Plane).type == Plane.Type.HORIZONTAL_DOWNWARD_FACING } -> "天花板表面"
+            hasDepth -> "深度表面"
+            else -> "空間特徵點"
+        }
+
+        return ModernArFrame(
+            trackingState = camera.trackingState,
+            trackingFailureReason = camera.trackingFailureReason,
+            viewMatrix = vMatrix,
+            projectionMatrix = pMatrix,
+            pointCloud = points,
+            planes = planeInfos,
+            cameraPoseX = pose.tx(),
+            cameraPoseY = pose.ty(),
+            cameraPoseZ = pose.tz(),
+            cameraPitch = pitchDeg,
+            cameraYaw = yawDeg,
+            isDepthAvailable = hasDepth,
+            lightIntensity = lightVal,
+            surfaceTypeAtCenter = surfaceLabel
+        )
+    }
+}
+
+enum class HitType {
+    PLANE_POLYGON,
+    PLANE_ESTIMATED,
+    DEPTH_POINT,
+    INSTANT_PLACEMENT,
+    FEATURE_POINT
+}
+
+data class HitTestResult(
+    val pose: Pose,
+    val anchor: Anchor?,
+    val hitType: HitType,
+    val distance: Float,
+    val planeType: Plane.Type? = null
+)

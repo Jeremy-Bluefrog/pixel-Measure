@@ -1,9 +1,9 @@
 package com.example.ui.screens
 
+import android.os.Build
 import androidx.compose.animation.*
-import androidx.compose.animation.core.*
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -11,29 +11,24 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.ui.components.CameraViewComponent
+import com.example.data.model.MeasureRecord
+import com.example.logic.TranslationManager
+import com.example.ui.components.ModernArCameraView
 import com.example.ui.components.RulerComponent
-import com.example.ui.components.SurfaceLevelComponent
-import com.example.ui.components.OnboardingTutorialOverlay
-import com.example.ui.components.InitialWelcomeScreen
-import com.example.ui.theme.*
+import com.example.ui.components.SensorSuiteComponent
 import com.example.ui.viewmodel.MeasureViewModel
-import com.example.ui.viewmodel.Point3D
-import com.example.ui.viewmodel.deserializePoints
+import java.text.DecimalFormat
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -43,1531 +38,421 @@ fun MainScreen(viewModel: MeasureViewModel) {
     val currentMode by viewModel.currentMode.collectAsState()
     val selectedUnit by viewModel.selectedUnit.collectAsState()
     val savedRecords by viewModel.savedRecords.collectAsState()
-    val vibrateOnAlignment by viewModel.vibrateOnAlignment.collectAsState()
-    val isFirstTimeUser by viewModel.isFirstTimeUser.collectAsState()
-    val showSplashScreen by viewModel.showSplashScreen.collectAsState()
     val currentLang by viewModel.currentLanguage.collectAsState()
-    
-    val pitch by viewModel.pitch.collectAsState()
-    val roll by viewModel.roll.collectAsState()
 
     var showHistorySheet by remember { mutableStateOf(false) }
-    var showSettingsSheet by remember { mutableStateOf(false) }
+    var showSettingsDialog by remember { mutableStateOf(false) }
+    var showUnitMenu by remember { mutableStateOf(false) }
 
-    val configuration = LocalConfiguration.current
-    val isWideScreen = configuration.screenWidthDp >= 680
+    val snackbarHostState = remember { SnackbarHostState() }
 
-    val iconScale0 by animateFloatAsState(
-        targetValue = if (currentMode == 0) 1.25f else 1.0f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessMediumLow
-        ),
-        label = "tabScale0"
-    )
-    val iconScale1 by animateFloatAsState(
-        targetValue = if (currentMode == 1) 1.25f else 1.0f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessMediumLow
-        ),
-        label = "tabScale1"
-    )
-    val iconScale2 by animateFloatAsState(
-        targetValue = if (currentMode == 2) 1.25f else 1.0f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessMediumLow
-        ),
-        label = "tabScale2"
-    )
+    LaunchedEffect(Unit) {
+        viewModel.toastMessage.collect { message ->
+            snackbarHostState.showSnackbar(
+                message = message,
+                duration = SnackbarDuration.Short
+            )
+        }
+    }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        BoxWithConstraints(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-            Row(modifier = Modifier.fillMaxSize()) {
-                // Main tool container panel
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight(),
-                    verticalArrangement = Arrangement.SpaceBetween
-                ) {
-                                // Top Global Header Bar
-                                Surface(
-                                    color = MaterialTheme.colorScheme.surface,
-                                    tonalElevation = 4.dp,
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .statusBarsPadding()
-                                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        AnimatedContent(
-                                            targetState = currentMode,
-                                            transitionSpec = {
-                                                (fadeIn(animationSpec = tween(220, delayMillis = 90)) + 
-                                                 scaleIn(initialScale = 0.92f, animationSpec = tween(220, delayMillis = 90)))
-                                                .togetherWith(fadeOut(animationSpec = tween(90)))
-                                            },
-                                            label = "TitleAnim"
-                                        ) { targetMode ->
-                                            Text(
-                                                text = when (targetMode) {
-                                                    0 -> viewModel.getString("nav_camera")
-                                                    1 -> viewModel.getString("nav_ruler")
-                                                    2 -> viewModel.getString("nav_level")
-                                                    else -> viewModel.getString("app_title")
-                                                },
-                                                style = MaterialTheme.typography.titleLarge,
-                                                fontWeight = FontWeight.ExtraBold,
-                                                color = MaterialTheme.colorScheme.primary
-                                            )
-                                        }
+    val colorPrimary = MaterialTheme.colorScheme.primary
 
-                                        // Quick Unit Selector Capsule HUD
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            // Calibration Button
-                                            FilledTonalIconButton(
-                                                onClick = { viewModel.calibrateSensors() },
-                                                colors = IconButtonDefaults.filledTonalIconButtonColors(
-                                                    containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                                                    contentColor = MaterialTheme.colorScheme.onTertiaryContainer
-                                                ),
-                                                modifier = Modifier
-                                                    .padding(end = 8.dp)
-                                                    .size(48.dp)
-                                                    .testTag("calibrate_sensor_button")
-                                            ) {
-                                                Icon(
-                                                    Icons.Default.Balance,
-                                                    contentDescription = viewModel.getString("calibration_zero"),
-                                                    modifier = Modifier.size(24.dp)
-                                                )
-                                            }
+    Scaffold(
+        snackbarHost = {
+            SnackbarHost(
+                hostState = snackbarHostState,
+                snackbar = { data ->
+                    Snackbar(
+                        snackbarData = data,
+                        shape = RoundedCornerShape(16.dp),
+                        containerColor = MaterialTheme.colorScheme.inverseSurface,
+                        contentColor = MaterialTheme.colorScheme.inverseOnSurface
+                    )
+                }
+            )
+        },
+        topBar = {
+            if (currentMode == 1) {
+                CenterAlignedTopAppBar(
+                    title = {
+                        Text(
+                            text = "螢幕高精直尺",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                    },
+                    actions = {
+                        // Unit selector button
+                        Box {
+                            TextButton(
+                                onClick = { showUnitMenu = true },
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text(
+                                    text = selectedUnit.uppercase(),
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = colorPrimary
+                                )
+                                Icon(
+                                    Icons.Rounded.ArrowDropDown,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
 
-                                            // Settings Button
-                                            FilledTonalIconButton(
-                                                onClick = { showSettingsSheet = true },
-                                                colors = IconButtonDefaults.filledTonalIconButtonColors(
-                                                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-                                                ),
-                                                modifier = Modifier
-                                                    .padding(end = 8.dp)
-                                                    .size(48.dp)
-                                                    .testTag("settings_button")
-                                            ) {
-                                                Icon(
-                                                    Icons.Default.Settings,
-                                                    contentDescription = viewModel.getString("select_lang"),
-                                                    modifier = Modifier.size(24.dp)
-                                                )
-                                            }
- 
-                                            // Non-interactive current unit pill
-                                            val context = androidx.compose.ui.platform.LocalContext.current
-                                            Box(
-                                                modifier = Modifier
-                                                    .background(
-                                                        MaterialTheme.colorScheme.primaryContainer,
-                                                        MaterialTheme.shapes.medium
-                                                    )
-                                                    .clickable {
-                                                        val msg = viewModel.getString("dynamic_color")
-                                                         android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
-                                                    }
-                                                    .padding(horizontal = 14.dp, vertical = 10.dp)
-                                            ) {
-                                                Row(
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                                ) {
-                                                    Text(
-                                                        text = "${viewModel.getString("unit_label")}: $selectedUnit",
-                                                        style = MaterialTheme.typography.labelMedium,
-                                                        fontWeight = FontWeight.Black,
-                                                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Tool viewport loader with animation
-                                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                                    AnimatedContent(
-                                        targetState = currentMode,
-                                        transitionSpec = {
-                                            val springSpec = spring<Float>(
-                                                dampingRatio = Spring.DampingRatioMediumBouncy,
-                                                stiffness = Spring.StiffnessMediumLow
-                                            )
-                                            val slideSpring = spring<androidx.compose.ui.unit.IntOffset>(
-                                                dampingRatio = Spring.DampingRatioMediumBouncy,
-                                                stiffness = Spring.StiffnessMediumLow
-                                            )
-                                            if (targetState > initialState) {
-                                                (slideInHorizontally(animationSpec = slideSpring) { width -> width / 3 } + fadeIn(animationSpec = springSpec))
-                                                    .togetherWith(slideOutHorizontally(animationSpec = slideSpring) { width -> -width / 3 } + fadeOut(animationSpec = springSpec))
-                                            } else {
-                                                (slideInHorizontally(animationSpec = slideSpring) { width -> -width / 3 } + fadeIn(animationSpec = springSpec))
-                                                    .togetherWith(slideOutHorizontally(animationSpec = slideSpring) { width -> width / 3 } + fadeOut(animationSpec = springSpec))
-                                            }.using(
-                                                SizeTransform(clip = false)
-                                            )
+                            DropdownMenu(
+                                expanded = showUnitMenu,
+                                onDismissRequest = { showUnitMenu = false }
+                            ) {
+                                listOf("cm" to "公分 (cm)", "m" to "公尺 (m)", "in" to "英吋 (in)", "ft" to "英呎 (ft)", "yd" to "碼 (yd)").forEach { (unitCode, label) ->
+                                    DropdownMenuItem(
+                                        text = { Text(label, fontWeight = if (selectedUnit == unitCode) FontWeight.Bold else FontWeight.Normal) },
+                                        onClick = {
+                                            viewModel.setSelectedUnit(unitCode)
+                                            showUnitMenu = false
                                         },
-                                        label = "ToolModeAnimation"
-                                    ) { targetMode ->
-                        when (targetMode) {
-                            0 -> CameraViewComponent(
-                                viewModel = viewModel,
-                                onShowHistoryClick = { showHistorySheet = !showHistorySheet }
-                            )
-                            1 -> RulerComponent(
-                                onSaveClick = { title, cmVal ->
-                                    viewModel.saveRulerMeasurement(title, cmVal)
-                                },
-                                selectedUnit = selectedUnit,
-                                viewModel = viewModel
-                            )
-                            2 -> SurfaceLevelComponent(
-                                pitch = pitch,
-                                roll = roll,
-                                vibrateOnAlignment = vibrateOnAlignment,
-                                onCalibrate = { viewModel.calibrateSensors() },
-                                onReset = { viewModel.resetCalibration() },
-                                viewModel = viewModel
+                                        leadingIcon = if (selectedUnit == unitCode) {
+                                            { Icon(Icons.Rounded.Check, null, tint = colorPrimary) }
+                                        } else null
+                                    )
+                                }
+                            }
+                        }
+
+                        // History sheet button
+                        IconButton(onClick = { showHistorySheet = true }) {
+                            Icon(
+                                Icons.Rounded.History,
+                                contentDescription = "歷史記錄",
+                                tint = MaterialTheme.colorScheme.onSurface
                             )
                         }
-                    }
-                }
 
-                // Visual Bottom Navigation tabs bar
-                NavigationBar(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    tonalElevation = 8.dp
-                ) {
-                    NavigationBarItem(
-                        selected = currentMode == 0,
-                        onClick = { viewModel.setMode(0) },
-                        icon = { 
+                        // Settings dialog button
+                        IconButton(onClick = { showSettingsDialog = true }) {
                             Icon(
-                                Icons.Default.CameraAlt, 
-                                contentDescription = viewModel.getString("nav_camera"),
-                                modifier = Modifier.graphicsLayer(scaleX = iconScale0, scaleY = iconScale0)
-                            ) 
-                        },
-                        label = { Text(viewModel.getString("nav_camera")) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            selectedTextColor = MaterialTheme.colorScheme.primary,
-                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                            indicatorColor = MaterialTheme.colorScheme.primaryContainer
-                        )
+                                Icons.Rounded.Settings,
+                                contentDescription = "設定",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
                     )
-                    NavigationBarItem(
-                        selected = currentMode == 1,
-                        onClick = { viewModel.setMode(1) },
-                        icon = { 
+                )
+            } else if (currentMode == 2) {
+                CenterAlignedTopAppBar(
+                    title = {
+                        Text(
+                            text = "感應器儀表箱",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                    },
+                    actions = {
+                        IconButton(onClick = { showHistorySheet = true }) {
                             Icon(
-                                Icons.Default.Straighten, 
-                                contentDescription = viewModel.getString("nav_ruler"),
-                                modifier = Modifier.graphicsLayer(scaleX = iconScale1, scaleY = iconScale1)
-                            ) 
-                        },
-                        label = { Text(viewModel.getString("nav_ruler")) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            selectedTextColor = MaterialTheme.colorScheme.primary,
-                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                            indicatorColor = MaterialTheme.colorScheme.primaryContainer
-                        )
-                    )
-                    NavigationBarItem(
-                        selected = currentMode == 2,
-                        onClick = { viewModel.setMode(2) },
-                        icon = { 
+                                Icons.Rounded.History,
+                                contentDescription = "歷史記錄",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        IconButton(onClick = { showSettingsDialog = true }) {
                             Icon(
-                                Icons.Default.Explore, 
-                                contentDescription = viewModel.getString("nav_level"),
-                                modifier = Modifier.graphicsLayer(scaleX = iconScale2, scaleY = iconScale2)
-                            ) 
-                        },
-                        label = { Text(viewModel.getString("nav_level")) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            selectedTextColor = MaterialTheme.colorScheme.primary,
-                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                            indicatorColor = MaterialTheme.colorScheme.primaryContainer
-                        )
+                                Icons.Rounded.Settings,
+                                contentDescription = "設定",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
                     )
-                }
+                )
             }
-
-            // Wide Tablet side-by-side History Panel (Material 3 Supporting Pane Layout)
-            if (isWideScreen) {
-                VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 1.dp)
-                Box(
-                    modifier = Modifier
-                        .width(320.dp)
-                        .fillMaxHeight()
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .statusBarsPadding()
-                        .padding(16.dp)
-                ) {
-                    HistoryContentPane(
+        },
+        bottomBar = {
+            NavigationBar(
+                containerColor = MaterialTheme.colorScheme.surface,
+                tonalElevation = 8.dp
+            ) {
+                NavigationBarItem(
+                    selected = currentMode == 0,
+                    onClick = { viewModel.setMode(0) },
+                    icon = { Icon(Icons.Rounded.CameraAlt, contentDescription = "相機 AR") },
+                    label = { Text("相機 AR", fontWeight = if (currentMode == 0) FontWeight.Bold else FontWeight.Normal) }
+                )
+                NavigationBarItem(
+                    selected = currentMode == 1,
+                    onClick = { viewModel.setMode(1) },
+                    icon = { Icon(Icons.Rounded.Straighten, contentDescription = "螢幕尺") },
+                    label = { Text("螢幕尺", fontWeight = if (currentMode == 1) FontWeight.Bold else FontWeight.Normal) }
+                )
+                NavigationBarItem(
+                    selected = currentMode == 2,
+                    onClick = { viewModel.setMode(2) },
+                    icon = { Icon(Icons.Rounded.Sensors, contentDescription = "感應器") },
+                    label = { Text("感應器", fontWeight = if (currentMode == 2) FontWeight.Bold else FontWeight.Normal) }
+                )
+            }
+        }
+    ) { innerPadding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(if (currentMode == 0) PaddingValues(bottom = innerPadding.calculateBottomPadding()) else innerPadding)
+        ) {
+            AnimatedContent(
+                targetState = currentMode,
+                transitionSpec = {
+                    fadeIn(animationSpec = tween(220)) togetherWith fadeOut(animationSpec = tween(180))
+                },
+                label = "ToolModeTransition"
+            ) { mode ->
+                when (mode) {
+                    0 -> ModernArCameraView(
                         viewModel = viewModel,
-                        savedRecords = savedRecords,
-                        onDeleteRecord = { viewModel.deleteRecord(it) },
-                        onClearAll = { viewModel.clearAllRecords() }
+                        onShowHistoryClick = { showHistorySheet = true },
+                        onShowSettingsClick = { showSettingsDialog = true }
+                    )
+                    1 -> RulerComponent(
+                        viewModel = viewModel,
+                        onShowHistoryClick = { showHistorySheet = true }
+                    )
+                    else -> SensorSuiteComponent(
+                        viewModel = viewModel,
+                        onShowHistoryClick = { showHistorySheet = true }
                     )
                 }
             }
         }
     }
 
-    // Phone standard Bottom sheet overlay
-        if (showHistorySheet && !isWideScreen) {
-            ModalBottomSheet(
-                onDismissRequest = { showHistorySheet = false },
-                containerColor = MaterialTheme.colorScheme.surface,
-                scrimColor = Color.Black.copy(alpha = 0.6f)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxHeight(0.65f)
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                ) {
-                    HistoryContentPane(
-                        viewModel = viewModel,
-                        savedRecords = savedRecords,
-                        onDeleteRecord = { viewModel.deleteRecord(it) },
-                        onClearAll = { viewModel.clearAllRecords() }
-                    )
-                }
-            }
-        }
-
-        if (showSettingsSheet) {
-            ModalBottomSheet(
-                onDismissRequest = { showSettingsSheet = false },
-                containerColor = MaterialTheme.colorScheme.surface,
-                scrimColor = Color.Black.copy(alpha = 0.6f)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxHeight(0.75f)
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                ) {
-                    SettingsContentPane(
-                        viewModel = viewModel,
-                        onDismiss = { showSettingsSheet = false }
-                    )
-                }
-            }
-        }
-
-        if (showSplashScreen) {
-            InitialWelcomeScreen(
+    // History Bottom Sheet
+    if (showHistorySheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showHistorySheet = false },
+            containerColor = MaterialTheme.colorScheme.surface
+        ) {
+            HistorySheetContent(
+                records = savedRecords,
                 viewModel = viewModel,
-                onEnterApp = { viewModel.dismissSplashScreen() }
-            )
-        } else if (isFirstTimeUser) {
-            OnboardingTutorialOverlay(
-                viewModel = viewModel,
-                onDismiss = { viewModel.setFirstTimeUser(false) }
+                onClose = { showHistorySheet = false }
             )
         }
+    }
+
+    // Settings Dialog
+    if (showSettingsDialog) {
+        SettingsDialog(
+            viewModel = viewModel,
+            onDismiss = { showSettingsDialog = false }
+        )
     }
 }
 
-// Reusable custom Measurement History Logs List Pane
 @Composable
-fun HistoryContentPane(
-    viewModel: com.example.ui.viewmodel.MeasureViewModel,
-    savedRecords: List<com.example.data.model.MeasureRecord>,
-    onDeleteRecord: (Int) -> Unit,
-    onClearAll: () -> Unit
+fun HistorySheetContent(
+    records: List<MeasureRecord>,
+    viewModel: MeasureViewModel,
+    onClose: () -> Unit
 ) {
-    val currentLang by viewModel.currentLanguage.collectAsState()
-    val dateTimeFormatter = remember { SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()) }
-    val context = androidx.compose.ui.platform.LocalContext.current
     var searchQuery by remember { mutableStateOf("") }
-    var expandedRecordId by remember { mutableStateOf<Int?>(null) }
+    var showClearConfirm by remember { mutableStateOf(false) }
 
-    val filteredRecords = remember(savedRecords, searchQuery) {
-        if (searchQuery.isBlank()) {
-            savedRecords
-        } else {
-            savedRecords.filter {
-                it.title.contains(searchQuery, ignoreCase = true) ||
-                (it.notes ?: "").contains(searchQuery, ignoreCase = true) ||
-                it.unit.contains(searchQuery, ignoreCase = true)
-            }
+    val filteredRecords = remember(records, searchQuery) {
+        if (searchQuery.isBlank()) records
+        else records.filter {
+            it.title.contains(searchQuery, ignoreCase = true) ||
+            (it.notes?.contains(searchQuery, ignoreCase = true) == true)
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    val dateFormat = remember { SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault()) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp, vertical = 8.dp)
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                viewModel.getString("history_title"),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface
+                text = "歷史測量紀錄 (${records.size})",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
             )
 
-            if (savedRecords.isNotEmpty()) {
+            if (records.isNotEmpty()) {
                 TextButton(
-                    onClick = onClearAll,
-                    colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFEF4444))
+                    onClick = { showClearConfirm = true },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
                 ) {
-                    Text(viewModel.getString("clear_all"), fontWeight = FontWeight.Bold)
+                    Icon(Icons.Rounded.DeleteSweep, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("全部清除")
                 }
             }
         }
 
-        if (savedRecords.isNotEmpty()) {
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                placeholder = { Text(viewModel.getString("search_placeholder"), color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)) },
-                leadingIcon = { Icon(Icons.Default.Search, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                trailingIcon = {
-                    if (searchQuery.isNotEmpty()) {
-                        IconButton(onClick = { searchQuery = "" }) {
-                            Icon(Icons.Default.Clear, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                },
-                singleLine = true,
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = MaterialTheme.colorScheme.primary,
-                    unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest
-                ),
-                shape = MaterialTheme.shapes.medium,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp)
-            )
-        }
+        Spacer(modifier = Modifier.height(12.dp))
 
-        Spacer(modifier = Modifier.height(6.dp))
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = { Text("搜尋測量紀錄...") },
+            leadingIcon = { Icon(Icons.Rounded.Search, null) },
+            singleLine = true,
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
 
         if (filteredRecords.isEmpty()) {
-            Column(
+            Box(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .fillMaxWidth()
+                    .height(200.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    Icons.Default.History,
-                    contentDescription = viewModel.getString("no_records"),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                    modifier = Modifier.size(56.dp)
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                
-                val emptyStateText = if (savedRecords.isEmpty()) viewModel.getString("no_records") else viewModel.getString("search_placeholder")
-                
-                val emptyStateSubText = if (savedRecords.isEmpty()) viewModel.getString("save_record_desc") else viewModel.getString("search_placeholder")
-                
                 Text(
-                    emptyStateText,
-                    style = MaterialTheme.typography.bodyMedium,
+                    text = if (records.isEmpty()) "尚未儲存任何測量紀錄" else "找不到符合的紀錄",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    emptyStateSubText,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 24.dp)
                 )
             }
         } else {
             LazyColumn(
-                modifier = Modifier.weight(1f).fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 items(filteredRecords, key = { it.id }) { record ->
-                    val isExpanded = record.id == expandedRecordId
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .animateContentSize(
-                                animationSpec = spring(
-                                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                                    stiffness = Spring.StiffnessMediumLow
-                                )
-                            )
-                            .clickable { expandedRecordId = if (isExpanded) null else record.id },
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    // Source type visual icon capsule
-                                    Box(
-                                        modifier = Modifier
-                                            .size(36.dp)
-                                            .background(
-                                                MaterialTheme.colorScheme.primaryContainer,
-                                                CircleShape
-                                            ),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = if (record.type == "CAM") Icons.Default.CameraAlt else Icons.Default.Straighten,
-                                            contentDescription = viewModel.getString("nav_camera"),
-                                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }
-
-                                    Spacer(modifier = Modifier.width(10.dp))
-
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = record.title,
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            text = dateTimeFormatter.format(Date(record.timestamp)),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = String.format("%.2f %s", record.value, record.unit),
-                                        style = MaterialTheme.typography.bodyMedium.copy(
-                                            fontFamily = FontFamily.Monospace,
-                                            fontWeight = FontWeight.Black
-                                        ),
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    IconButton(
-                                        onClick = { 
-                                            onDeleteRecord(record.id)
-                                            if (isExpanded) expandedRecordId = null
-                                        },
-                                        modifier = Modifier.size(48.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Delete,
-                                            contentDescription = viewModel.getString("clear_all"),
-                                            tint = Color(0xFFEF4444),
-                                            modifier = Modifier.size(24.dp)
-                                        )
-                                    }
-                                }
-                            }
-
-                            if (isExpanded) {
-                                Divider(
-                                    color = MaterialTheme.colorScheme.outlineVariant,
-                                    thickness = 1.dp,
-                                    modifier = Modifier.padding(horizontal = 12.dp)
-                                )
-                                Column(modifier = Modifier.padding(12.dp)) {
-                                    if (!record.notes.isNullOrBlank()) {
-                                        Text(
-                                            viewModel.getString("record_notes_placeholder"),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.primary
-                                        )
-                                        Text(
-                                            record.notes,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
-                                        Spacer(modifier = Modifier.height(10.dp))
-                                    }
-
-                                    // Display 3D annotated vector coordinate analysis if CAM model is loaded
-                                    if (record.type == "CAM" && !record.pointsData.isNullOrBlank()) {
-                                        val points = try {
-                                            record.pointsData.deserializePoints()
-                                        } catch (e: Exception) {
-                                            emptyList<Point3D>()
-                                        }
-                                        if (points.isNotEmpty()) {
-                                            Text(
-                                                "${viewModel.getString("diagnostics_title")} (${points.size}):",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.tertiary
-                                            )
-                                            Spacer(modifier = Modifier.height(4.dp))
-                                            points.forEachIndexed { pIdx, pt ->
-                                                val pointName = if (pt.label.isNotBlank()) pt.label else "${viewModel.getString("add_label")} ${pIdx + 1}"
-                                                Text(
-                                                    " • $pointName: (X:${String.format("%.2f", pt.x)}, Y:${String.format("%.2f", pt.y)}, Z:${String.format("%.2f", pt.z)})",
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    fontFamily = FontFamily.Monospace,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                            }
-                                            Spacer(modifier = Modifier.height(10.dp))
-                                        }
-                                    }
-
-                                    // Precision sharing utilities hud
-                                    Text(
-                                        viewModel.getString("save_record_title"),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Button(
-                                            onClick = { com.example.logic.ShareUtility.shareTextReport(context, record) },
-                                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh, contentColor = MaterialTheme.colorScheme.onSurface),
-                                            shape = MaterialTheme.shapes.small,
-                                            modifier = Modifier.weight(1f).height(32.dp),
-                                            contentPadding = PaddingValues(0.dp)
-                                        ) {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Icon(Icons.Default.Share, null, modifier = Modifier.size(12.dp))
-                                                Spacer(modifier = Modifier.width(4.dp))
-                                                Text(viewModel.getString("share_all"), style = MaterialTheme.typography.labelMedium)
-                                            }
-                                        }
-                                        
-                                        Button(
-                                            onClick = { com.example.logic.ShareUtility.shareImageReport(context, record) },
-                                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh, contentColor = MaterialTheme.colorScheme.onSurface),
-                                            shape = MaterialTheme.shapes.small,
-                                            modifier = Modifier.weight(1f).height(32.dp),
-                                            contentPadding = PaddingValues(0.dp)
-                                        ) {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Icon(Icons.Default.Image, null, modifier = Modifier.size(12.dp))
-                                                Spacer(modifier = Modifier.width(4.dp))
-                                                Text(viewModel.getString("take_photo"), style = MaterialTheme.typography.labelMedium)
-                                            }
-                                        }
-
-                                        Button(
-                                            onClick = { com.example.logic.ShareUtility.sharePdfReport(context, record) },
-                                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh, contentColor = MaterialTheme.colorScheme.onSurface),
-                                            shape = MaterialTheme.shapes.small,
-                                            modifier = Modifier.weight(1f).height(32.dp),
-                                            contentPadding = PaddingValues(0.dp)
-                                        ) {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Icon(Icons.Default.Description, null, modifier = Modifier.size(12.dp))
-                                                Spacer(modifier = Modifier.width(4.dp))
-                                                Text("PDF", style = MaterialTheme.typography.labelMedium)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun SettingsContentPane(
-    viewModel: MeasureViewModel,
-    onDismiss: () -> Unit
-) {
-    val selectedUnit by viewModel.selectedUnit.collectAsState()
-    val cameraHeightCm by viewModel.cameraHeightCm.collectAsState()
-    val sensorAlpha by viewModel.sensorAlpha.collectAsState()
-    val vibrateOnAlignment by viewModel.vibrateOnAlignment.collectAsState()
-    val dynamicColorEnabled by viewModel.dynamicColorEnabled.collectAsState()
-    val arCoreActive by viewModel.arCoreActive.collectAsState()
-    val currentLang by viewModel.currentLanguage.collectAsState()
-    
-    val context = androidx.compose.ui.platform.LocalContext.current
-    var showClearConfirm by remember { mutableStateOf(false) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 12.dp)
-    ) {
-        // Sheet Header
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .background(
-                            MaterialTheme.colorScheme.primaryContainer,
-                            RoundedCornerShape(24.dp)
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        Icons.Default.Settings,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
-                Column {
-                    Text(
-                        text = viewModel.getString("select_lang"),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Black,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = viewModel.getString("onboarding_title_1"),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                    )
-                }
-            }
-            
-            IconButton(
-                onClick = onDismiss,
-                modifier = Modifier
-                    .size(36.dp)
-                    .background(
-                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        CircleShape
-                    )
-            ) {
-                Icon(
-                    Icons.Default.Close,
-                    contentDescription = viewModel.getString("undo"),
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-        
-        Divider(
-            modifier = Modifier.padding(bottom = 12.dp),
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
-        )
-
-        LazyColumn(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-            contentPadding = PaddingValues(bottom = 32.dp)
-        ) {
-            // Group 1: 測量參數規格
-            item {
-                SettingsGroupHeader(
-                    icon = Icons.Default.Straighten,
-                    title = if (currentLang.startsWith("zh")) "測量規格與參考高度" else "Measurement Spec & Reference Height",
-                    iconColor = MaterialTheme.colorScheme.primary
-                )
-                
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-                    ),
-                    shape = RoundedCornerShape(24.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f))
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        // Standard Unit Selection row
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = viewModel.getString("unit_label"),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = viewModel.getString("onboarding_title_1"),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                        
-                        Spacer(modifier = Modifier.height(10.dp))
-                        
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(20.dp))
-                                .padding(4.dp),
-                            horizontalArrangement = Arrangement.SpaceEvenly
-                        ) {
-                            listOf("cm", "m", "in", "ft").forEach { unit ->
-                                val isSelected = selectedUnit == unit
-                                val labelText = when(unit) {
-                                    "cm" -> viewModel.getString("unit_cm")
-                                    "m" -> viewModel.getString("unit_meter")
-                                    "in" -> viewModel.getString("unit_inch")
-                                    "ft" -> viewModel.getString("unit_ft")
-                                    else -> unit
-                                }
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .background(
-                                            if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent,
-                                            RoundedCornerShape(16.dp)
-                                        )
-                                        .clickable { viewModel.setUnit(unit) }
-                                        .padding(vertical = 8.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = labelText,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Bold,
-                                        color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
-
-                        Divider(
-                            modifier = Modifier.padding(vertical = 16.dp),
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f)
-                        )
-
-                        // Camera hold height selector
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
+                                .padding(16.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = viewModel.getString("height_preset"),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = viewModel.getString("height_preset_desc"),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .background(
-                                        MaterialTheme.colorScheme.primaryContainer,
-                                        RoundedCornerShape(8.dp)
-                                    )
-                                    .padding(horizontal = 10.dp, vertical = 4.dp)
-                            ) {
-                                Text(
-                                    text = String.format("%.0f cm", cameraHeightCm),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                            }
-                        }
-                        
-                        Spacer(modifier = Modifier.height(10.dp))
-                        
-                        Slider(
-                            value = cameraHeightCm,
-                            onValueChange = { viewModel.setCameraHeight(it) },
-                            valueRange = 100f..200f,
-                            steps = 19,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("100 cm", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
-                            Text("140 cm (${viewModel.getString("diagnostics_status_searching")})", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-                            Text("200 cm", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
-                        }
-
-                        Divider(
-                            modifier = Modifier.padding(vertical = 16.dp),
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f)
-                        )
-
-                        // ARCore spatial tracking toggle
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                modifier = Modifier.weight(1f),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .background(
-                                            MaterialTheme.colorScheme.primaryContainer,
-                                            RoundedCornerShape(10.dp)
-                                        ),
-                                    contentAlignment = Alignment.Center
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    Icon(
-                                        Icons.Default.ViewInAr,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                                Column {
-                                    Text(
-                                        text = viewModel.getString("arcore_3d"),
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Text(
-                                        text = viewModel.getString("arcore_3d_desc"),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                            Switch(
-                                checked = arCoreActive,
-                                onCheckedChange = { viewModel.setArCoreActive(it) }
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Group 2: 感測器配置
-            item {
-                SettingsGroupHeader(
-                    icon = Icons.Default.Tune,
-                    title = viewModel.getString("onboarding_title_3"),
-                    iconColor = MaterialTheme.colorScheme.secondary
-                )
-                
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-                    ),
-                    shape = RoundedCornerShape(24.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f))
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        // Smoothing alpha parameter
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = viewModel.getString("sensor_alpha"),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = if (sensorAlpha <= 0.12f) viewModel.getString("diagnostics_title") else viewModel.getString("diagnostics_status_tracking"),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .background(
-                                        MaterialTheme.colorScheme.secondaryContainer,
-                                        RoundedCornerShape(8.dp)
-                                    )
-                                    .padding(horizontal = 10.dp, vertical = 4.dp)
-                            ) {
-                                Text(
-                                    text = String.format("%.2f α", sensorAlpha),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                                )
-                            }
-                        }
-                        
-                        Spacer(modifier = Modifier.height(8.dp))
-                        
-                        Slider(
-                            value = sensorAlpha,
-                            onValueChange = { viewModel.setSensorAlpha(it) },
-                            valueRange = 0.05f..0.5f,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(viewModel.getString("diagnostics_title"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
-                            Text("0.20 (${viewModel.getString("diagnostics_status_searching")})", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Bold)
-                            Text(viewModel.getString("diagnostics_status_tracking"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
-                        }
-
-                        Divider(
-                            modifier = Modifier.padding(vertical = 16.dp),
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f)
-                        )
-
-                        // Vib alignment
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                modifier = Modifier.weight(1f),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .background(
-                                            MaterialTheme.colorScheme.surfaceContainerHigh,
-                                            RoundedCornerShape(10.dp)
-                                        ),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        Icons.Default.Vibration,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.secondary,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                                Column {
-                                    Text(
-                                        text = viewModel.getString("vibrate_on_align"),
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Text(
-                                        text = if (currentLang.startsWith("zh")) "震動提醒" else "Haptic Feedback",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                            Switch(
-                                checked = vibrateOnAlignment,
-                                onCheckedChange = { viewModel.setVibrateOnAlignment(it) }
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Group 3: 介面外觀設定
-            item {
-                SettingsGroupHeader(
-                    icon = Icons.Default.Palette,
-                    title = if (currentLang.startsWith("zh")) "介面主題" else "Visual Theme",
-                    iconColor = MaterialTheme.colorScheme.tertiary
-                )
-                
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-                    ),
-                    shape = RoundedCornerShape(24.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f))
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                modifier = Modifier.weight(1f),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .background(
-                                            MaterialTheme.colorScheme.surfaceContainerHigh,
-                                            RoundedCornerShape(10.dp)
-                                        ),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        Icons.Default.Palette,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.tertiary,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                                Column {
-                                    Text(
-                                        text = viewModel.getString("dynamic_color"),
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Text(
-                                        text = if (currentLang.startsWith("zh")) "動態配色方案" else "Dynamic Color Palette",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                            Switch(
-                                checked = dynamicColorEnabled,
-                                onCheckedChange = { viewModel.setDynamicColorEnabled(it) }
-                            )
-                        }
-
-                        // Google Pixel Android 14+ specific Monet Dynamic Color System signature badge
-                        if (dynamicColorEnabled) {
-                            val isPixelDevice = remember {
-                                android.os.Build.MANUFACTURER.equals("Google", ignoreCase = true) ||
-                                android.os.Build.BRAND.equals("Google", ignoreCase = true) ||
-                                android.os.Build.MODEL.startsWith("Pixel", ignoreCase = true) ||
-                                android.os.Build.PRODUCT.startsWith("pixel", ignoreCase = true)
-                            }
-                            
-                            androidx.compose.animation.AnimatedVisibility(
-                                visible = isPixelDevice,
-                                enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandVertically(),
-                                exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkVertically()
-                            ) {
-                                Column {
-                                    Spacer(modifier = Modifier.height(12.dp))
                                     Surface(
-                                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f),
-                                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                        shape = RoundedCornerShape(12.dp),
-                                        border = androidx.compose.foundation.BorderStroke(
-                                            width = 1.dp,
-                                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-                                        ),
-                                        modifier = Modifier.fillMaxWidth()
+                                        color = MaterialTheme.colorScheme.primaryContainer,
+                                        shape = RoundedCornerShape(6.dp)
                                     ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(
-                                                Icons.Default.AutoAwesome,
-                                                contentDescription = null,
-                                                tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                            Text(
-                                                text = if (currentLang.startsWith("zh")) 
-                                                    "已偵測到首選 Google Pixel 裝置並完全最佳化！" 
-                                                    else "Google Pixel device fully optimized!",
-                                                style = MaterialTheme.typography.bodySmall.copy(
-                                                    fontWeight = FontWeight.Bold,
-                                                    lineHeight = 15.sp
-                                                )
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Language Selection section
-            item {
-                SettingsGroupHeader(
-                    icon = Icons.Default.Language,
-                    title = viewModel.getString("select_lang"),
-                    iconColor = MaterialTheme.colorScheme.primary
-                )
-                
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-                    ),
-                    shape = RoundedCornerShape(24.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f))
-                ) {
-                    var expanded by remember { mutableStateOf(false) }
-                    val currentLangName = remember(currentLang) {
-                        com.example.logic.TranslationManager.supportedLanguages.find { it.code == currentLang }?.name ?: "English"
-                    }
-                    
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = if (currentLang.startsWith("zh")) "語言設定" else "Language",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = if (currentLang.startsWith("zh")) "切換不同語言顯示" else "Switch application language",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            
-                            Box {
-                                Button(
-                                    onClick = { expanded = true },
-                                    shape = RoundedCornerShape(10.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                                    ),
-                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        Text(currentLangName, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-                                        Icon(
-                                            if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                    }
-                                }
-                                
-                                DropdownMenu(
-                                    expanded = expanded,
-                                    onDismissRequest = { expanded = false },
-                                    modifier = Modifier
-                                        .width(220.dp)
-                                        .heightIn(max = 320.dp)
-                                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                                ) {
-                                    com.example.logic.TranslationManager.supportedLanguages.forEach { lang ->
-                                        DropdownMenuItem(
-                                            text = {
-                                                Text(
-                                                    text = lang.name,
-                                                    style = MaterialTheme.typography.bodyMedium,
-                                                    fontWeight = if (currentLang == lang.code) FontWeight.ExtraBold else FontWeight.Normal,
-                                                    color = if (currentLang == lang.code) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                                )
+                                        Text(
+                                            text = when (record.type) {
+                                                "AREA" -> "面積"
+                                                "HEIGHT" -> "垂直高度"
+                                                "VOLUME" -> "3D 體積"
+                                                "CIRCLE" -> "圓形直徑"
+                                                "ANGLE" -> "空間夾角"
+                                                "RULER" -> "螢幕尺"
+                                                "LEVEL" -> "水平儀"
+                                                "COMPASS" -> "羅盤"
+                                                "BAROMETER" -> "氣壓"
+                                                "LIGHT" -> "照度"
+                                                "ACCEL" -> "加速度"
+                                                else -> "長度"
                                             },
-                                            onClick = {
-                                                viewModel.setLanguage(lang.code)
-                                                expanded = false
-                                            }
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                         )
                                     }
+                                    Text(
+                                        text = record.title,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
                                 }
+
+                                Spacer(modifier = Modifier.height(4.dp))
+
+                                val formattedVal = when (record.type) {
+                                    "AREA" -> viewModel.formatArea(record.value, record.unit)
+                                    "VOLUME" -> viewModel.formatVolume(record.value, record.unit)
+                                    "ANGLE", "LEVEL", "COMPASS" -> "${DecimalFormat("0.0").format(record.value)}${record.unit}"
+                                    "BAROMETER" -> "${DecimalFormat("#,##0.0").format(record.value)} ${record.unit}"
+                                    "LIGHT" -> "${DecimalFormat("#,##0").format(record.value)} ${record.unit}"
+                                    "ACCEL" -> "${DecimalFormat("0.00").format(record.value)} ${record.unit}"
+                                    else -> viewModel.formatLength(record.value, record.unit)
+                                }
+                                Text(
+                                    text = formattedVal,
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    fontWeight = FontWeight.Black,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+
+                                if (!record.notes.isNullOrBlank()) {
+                                    Text(
+                                        text = record.notes,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+
+                                Text(
+                                    text = dateFormat.format(Date(record.timestamp)),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                            }
+
+                            IconButton(
+                                onClick = { viewModel.deleteRecord(record) }
+                            ) {
+                                Icon(
+                                    Icons.Rounded.DeleteOutline,
+                                    contentDescription = "刪除",
+                                    tint = MaterialTheme.colorScheme.error
+                                )
                             }
                         }
                     }
                 }
-            }
-
-            // Group 4: 進階物理校準與系統控制
-            item {
-                SettingsGroupHeader(
-                    icon = Icons.Default.Build,
-                    title = if (currentLang.startsWith("zh")) "進階校準與管理" else "Advanced Calibration",
-                    iconColor = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-                    ),
-                    shape = RoundedCornerShape(24.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f))
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
-                    ) {
-                        // Calibrate Zero State Row
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = viewModel.getString("calibration_zero"),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = if (currentLang.startsWith("zh")) "重新校準感應器點" else "Recalibrate sensor zero point",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Button(
-                                onClick = { 
-                                    viewModel.calibrateSensors()
-                                    android.widget.Toast.makeText(context, viewModel.getString("toast_calibrated"), android.widget.Toast.LENGTH_SHORT).show()
-                                },
-                                shape = RoundedCornerShape(10.dp),
-                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Icon(Icons.Default.Balance, contentDescription = null, modifier = Modifier.size(14.dp))
-                                    Text(viewModel.getString("calibration_zero"), style = MaterialTheme.typography.labelSmall)
-                                }
-                            }
-                        }
-
-                        Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
-
-                        // Reset offsets to true manufacturer defaults
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = viewModel.getString("reset_deviation"),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = if (currentLang.startsWith("zh")) "清除所有校準偏置" else "Clear all custom offsets",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            OutlinedButton(
-                                onClick = { 
-                                    viewModel.resetCalibration()
-                                    android.widget.Toast.makeText(context, viewModel.getString("toast_reset"), android.widget.Toast.LENGTH_SHORT).show()
-                                },
-                                shape = RoundedCornerShape(10.dp),
-                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
-                                    Text(viewModel.getString("reset_deviation"), style = MaterialTheme.typography.labelSmall)
-                                }
-                            }
-                        }
-
-                        Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
-
-                        // Trigger Tutorial Guide View Overlay
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = viewModel.getString("tutorial_title"),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = viewModel.getString("onboarding_title_1"),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Button(
-                                onClick = { 
-                                    viewModel.setFirstTimeUser(true)
-                                    onDismiss()
-                                    android.widget.Toast.makeText(context, viewModel.getString("toast_tutorial"), android.widget.Toast.LENGTH_SHORT).show()
-                                },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-                                ),
-                                shape = RoundedCornerShape(10.dp),
-                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Icon(Icons.Default.Help, contentDescription = null, modifier = Modifier.size(14.dp))
-                                    Text(viewModel.getString("tutorial_title"), style = MaterialTheme.typography.labelSmall)
-                                }
-                            }
-                        }
-
-                        Divider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f))
-
-                        // Danger Zone Cleanse Data
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = viewModel.getString("clear_all"),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.error
-                                )
-                                Text(
-                                    text = viewModel.getString("no_records"),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Button(
-                                onClick = { showClearConfirm = true },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                                    contentColor = MaterialTheme.colorScheme.onErrorContainer
-                                ),
-                                shape = RoundedCornerShape(10.dp),
-                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(14.dp))
-                                    Text(viewModel.getString("clear_all"), style = MaterialTheme.typography.labelSmall)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            item {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = if (currentLang.startsWith("zh")) "設定皆會自動儲存於本地。如遇水平感應數值有偏誤，請將手機平放於桌面上，並點擊「校準歸零」建立全新基準線。" else "All preferences are auto-saved. If sensor metrics mismatch, place the phone flat on a workspace and tap 'Calibrate Zero' to configure raw bias references.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    lineHeight = 16.sp
-                )
             }
         }
+        Spacer(modifier = Modifier.height(24.dp))
     }
 
     if (showClearConfirm) {
         AlertDialog(
             onDismissRequest = { showClearConfirm = false },
-            title = {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Delete,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.error
-                    )
-                    Text(
-                        viewModel.getString("clear_confirm_title"),
-                        fontWeight = FontWeight.ExtraBold,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                }
-            },
-            text = { Text(viewModel.getString("clear_confirm_desc")) },
+            title = { Text("確定清除所有紀錄？", fontWeight = FontWeight.Bold) },
+            text = { Text("此動作將永久刪除所有的歷史測量紀錄，無法復原。") },
             confirmButton = {
-                TextButton(
-                        onClick = {
-                            viewModel.clearAllRecords()
-                            showClearConfirm = false
-                            android.widget.Toast.makeText(context, viewModel.getString("toast_reset"), android.widget.Toast.LENGTH_SHORT).show()
-                        }
+                Button(
+                    onClick = {
+                        viewModel.clearAllRecords()
+                        showClearConfirm = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                 ) {
-                    Text(viewModel.getString("ok_clear"), color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                    Text("確認清除")
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showClearConfirm = false }) {
-                    Text(viewModel.getString("cancel"))
+                    Text("取消")
                 }
             }
         )
@@ -1575,30 +460,126 @@ fun SettingsContentPane(
 }
 
 @Composable
-fun SettingsGroupHeader(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    title: String,
-    iconColor: Color
+fun SettingsDialog(
+    viewModel: MeasureViewModel,
+    onDismiss: () -> Unit
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 4.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        Icon(
-            icon,
-            contentDescription = null,
-            tint = iconColor,
-            modifier = Modifier.size(16.dp)
-        )
-        Text(
-            text = title,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Bold,
-            color = iconColor,
-            letterSpacing = 0.5.sp
-        )
-    }
+    val currentLang by viewModel.currentLanguage.collectAsState()
+    val vibrateOnAlign by viewModel.vibrateOnAlignment.collectAsState()
+    val dynamicColorEnabled by viewModel.dynamicColorEnabled.collectAsState()
+    val isDynamicColorSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.Tune, null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(8.dp))
+                Text("偏好設定", fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Dynamic Color (Material You)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("動態色彩 (Material You)", fontWeight = FontWeight.Bold)
+                        }
+                        Text(
+                            if (isDynamicColorSupported) "依據系統桌布主題自動調整應用程式色彩" else "需要 Android 12 以上版本支援系統桌布配色",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = dynamicColorEnabled,
+                        onCheckedChange = { viewModel.setDynamicColorEnabled(it) }
+                    )
+                }
+
+                HorizontalDivider()
+
+                // Vibration toggle
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("對齊震動回饋", fontWeight = FontWeight.Bold)
+                        Text(
+                            "錨點吸附與測量操作時產生觸覺震動回饋",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = vibrateOnAlign,
+                        onCheckedChange = { viewModel.setVibrateOnAlignment(it) }
+                    )
+                }
+
+                HorizontalDivider()
+
+                // Scanning Feature Point Cloud Toggle (掃描時的點點)
+                val showPointCloud by viewModel.showPointCloud.collectAsState()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("顯示掃描點 (特徵點雲)", fontWeight = FontWeight.Bold)
+                        Text(
+                            "在空間中顯示表面識別點，掌握 AR 追蹤與表面偵測狀態",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = showPointCloud,
+                        onCheckedChange = { viewModel.setShowPointCloud(it) }
+                    )
+                }
+
+                HorizontalDivider()
+
+                // Language selector
+                Column {
+                    Text("應用程式語言", fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(
+                            "zh-TW" to "繁體中文",
+                            "zh-CN" to "简体中文",
+                            "en" to "English",
+                            "ja" to "日本語"
+                        ).forEach { (code, name) ->
+                            FilterChip(
+                                selected = currentLang == code,
+                                onClick = { viewModel.setLanguage(code) },
+                                label = { Text(name, fontSize = 12.sp) }
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("完成")
+            }
+        }
+    )
 }

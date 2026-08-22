@@ -2,44 +2,44 @@ package com.example.ui.viewmodel
 
 import android.app.Application
 import android.content.Context
-import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
-import android.hardware.SensorManager
+import android.content.SharedPreferences
+import android.hardware.camera2.CameraManager
 import androidx.compose.runtime.mutableStateListOf
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.db.MeasureDatabase
 import com.example.data.model.MeasureRecord
 import com.example.data.repository.MeasureRepository
-import com.example.logic.ARMeasureEngine
-import com.example.logic.ArCoreSessionHelper
-import com.example.logic.TrigonometricMeasureEngine
-import com.google.ar.core.ArCoreApk
-import com.google.ar.core.Config
-import com.google.ar.core.Frame
-import com.google.ar.core.Plane
-import com.google.ar.core.Session
-import com.google.ar.core.TrackingState
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.map
-import androidx.compose.runtime.snapshots.SnapshotStateList
-import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.getValue
-import kotlinx.coroutines.delay
+import com.example.logic.TranslationManager
+import com.example.logic.ar.*
+import com.example.logic.sensor.DeviceSensorInfo
+import com.example.logic.sensor.SensorSuiteManager
+import com.example.logic.sensor.SensorSuiteState
+import com.google.ar.core.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.text.DecimalFormat
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.*
 
-class MeasureViewModel(application: Application) : AndroidViewModel(application), SensorEventListener {
+/**
+ * Modern, clean ViewModel managing AR measurements, sensor fusion,
+ * persistence, unit conversions, and UI state.
+ */
+class MeasureViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val _currentLanguage = MutableStateFlow("zh-TW")
+    private val prefs: SharedPreferences =
+        application.getSharedPreferences("measure_app_prefs", Context.MODE_PRIVATE)
+
+    private val database = MeasureDatabase.getDatabase(application)
+    private val repository = MeasureRepository(database.measureDao())
+
+    // Language state
+    private val _currentLanguage = MutableStateFlow(
+        prefs.getString("selected_language", "zh-TW") ?: "zh-TW"
+    )
     val currentLanguage: StateFlow<String> = _currentLanguage.asStateFlow()
 
     fun setLanguage(langCode: String) {
@@ -48,37 +48,62 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun getString(key: String): String {
-        return com.example.logic.TranslationManager.getString(key, _currentLanguage.value)
+        return TranslationManager.getString(key, _currentLanguage.value)
     }
 
-    private val database = MeasureDatabase.getDatabase(application)
-    private val repository = MeasureRepository(database.measureDao())
-    
-    // 測量引擎實作（預設使用三角運算）
-    private val measureEngine: ARMeasureEngine = TrigonometricMeasureEngine()
-    
-    // ARCore Session 助手
-    private var arCoreSessionHelper: ArCoreSessionHelper? = null
-    val arSession: Session? get() = arCoreSessionHelper?.session
-    
-    private var latestFrame: Frame? = null
-    private var displayWidth = 1080
-    private var displayHeight = 2400
+    // Top-level Tool Navigation Mode: 0 = Camera AR, 1 = Screen Ruler
+    private val _currentMode = MutableStateFlow(0)
+    val currentMode: StateFlow<Int> = _currentMode.asStateFlow()
 
-    fun updateDisplayGeometry(rotation: Int, width: Int, height: Int) {
-        displayWidth = width
-        displayHeight = height
-        arCoreSessionHelper?.setDisplayGeometry(rotation, width, height)
+    fun setMode(mode: Int) {
+        _currentMode.value = mode
     }
-    
+
+    // Camera SubMode:
+    // 0 = Distance/Polyline, 1 = Area, 2 = Height, 3 = 3D Box Volume, 4 = Circle/Diameter, 5 = Angle
+    private val _cameraSubMode = MutableStateFlow(0)
+    val cameraSubMode: StateFlow<Int> = _cameraSubMode.asStateFlow()
+
+    fun setCameraSubMode(mode: Int) {
+        _cameraSubMode.value = mode
+        clearActivePoints()
+    }
+
+    // Unit Selection: "cm", "m", "in", "ft", "yd"
+    private val _selectedUnit = MutableStateFlow(
+        prefs.getString("selected_unit", "cm") ?: "cm"
+    )
+    val selectedUnit: StateFlow<String> = _selectedUnit.asStateFlow()
+
+    fun setSelectedUnit(unit: String) {
+        _selectedUnit.value = unit
+        prefs.edit().putString("selected_unit", unit).apply()
+    }
+
+    // Modern AR Engine & Session
+    val modernArEngine = ModernArEngine(application)
+    val arSession: Session? get() = modernArEngine.session
+
     private val _arTrackingState = MutableStateFlow(TrackingState.STOPPED)
     val arTrackingState: StateFlow<TrackingState> = _arTrackingState.asStateFlow()
-    
-    private val _arPointCloud = MutableStateFlow<FloatArray?>(null)
-    val arPointCloud: StateFlow<FloatArray?> = _arPointCloud.asStateFlow()
 
-    private val _arPlanes = mutableStateListOf<Plane>()
-    val arPlanes: List<Plane> get() = _arPlanes
+    private val _trackingFailureReason = MutableStateFlow(TrackingFailureReason.NONE)
+    val trackingFailureReason: StateFlow<TrackingFailureReason> = _trackingFailureReason.asStateFlow()
+
+    private val _isDepthAvailable = MutableStateFlow(false)
+    val isDepthAvailable: StateFlow<Boolean> = _isDepthAvailable.asStateFlow()
+
+    private val _arPlanesCount = MutableStateFlow(0)
+    val arPlanesCount: StateFlow<Int> = _arPlanesCount.asStateFlow()
+
+    private val _detectedPlanes = MutableStateFlow<List<DetectedPlaneInfo>>(emptyList())
+    val detectedPlanes: StateFlow<List<DetectedPlaneInfo>> = _detectedPlanes.asStateFlow()
+
+    private val _surfaceTypeAtCenter = MutableStateFlow("尋找空間特徵中...")
+    val surfaceTypeAtCenter: StateFlow<String> = _surfaceTypeAtCenter.asStateFlow()
+
+    private val _lightIntensity = MutableStateFlow(1.0f)
+    val lightIntensity: StateFlow<Float> = _lightIntensity.asStateFlow()
 
     private val _viewMatrix = MutableStateFlow(FloatArray(16))
     val viewMatrix: StateFlow<FloatArray> = _viewMatrix.asStateFlow()
@@ -86,50 +111,48 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     private val _projectionMatrix = MutableStateFlow(FloatArray(16))
     val projectionMatrix: StateFlow<FloatArray> = _projectionMatrix.asStateFlow()
 
-    fun updateArFrame(frame: Frame) {
-        latestFrame = frame
-        _arTrackingState.value = frame.camera.trackingState
-        
-        // Update matrices
-        val camera = frame.camera
-        camera.getViewMatrix(_viewMatrix.value, 0)
-        camera.getProjectionMatrix(_projectionMatrix.value, 0, 0.1f, 100.0f)
-        
-        // Update Point Cloud
-        try {
-            val pointCloud = frame.acquirePointCloud()
-            val points = FloatArray(pointCloud.points.remaining())
-            pointCloud.points.get(points)
-            _arPointCloud.value = points
-            pointCloud.release()
-        } catch (e: Exception) {}
-        
-        // Update Planes & Auto-calibrate Height
-        val allPlanes = arSession?.getAllTrackables(Plane::class.java)
-        if (allPlanes != null) {
-            _arPlanes.clear()
-            val trackingPlanes = allPlanes.filter { it.trackingState == TrackingState.TRACKING }
-            _arPlanes.addAll(trackingPlanes)
-            
-            // Auto-calibration: detect ground plane to fix holding height
-            val groundPlane = trackingPlanes.firstOrNull { 
-                it.type == Plane.Type.HORIZONTAL_UPWARD_FACING && 
-                it.centerPose.ty() < frame.camera.pose.ty() // Must be below camera
-            }
-            
-            if (groundPlane != null) {
-                // Distance from camera Y to plane Y
-                val verticalDist = abs(frame.camera.pose.ty() - groundPlane.centerPose.ty())
-                if (verticalDist in 0.5..2.5) { // Safe range for human height
-                    val newHeightCm = (verticalDist * 100.0).toFloat()
-                    // Smooth update
-                    _cameraHeightCm.value = _cameraHeightCm.value * 0.95f + newHeightCm * 0.05f
-                }
-            }
-        }
+    // Screen dimensions
+    var displayWidth: Int = 1080
+        private set
+    var displayHeight: Int = 2400
+        private set
+
+    fun updateDisplayGeometry(rotation: Int, width: Int, height: Int) {
+        displayWidth = width
+        displayHeight = height
     }
 
-    // Saved database records
+    // Active placed points in 3D space
+    val capturedPoints = mutableStateListOf<Point3D>()
+    private val undoStack = mutableListOf<List<Point3D>>()
+
+    // Real-time live targeting preview from current reticle position
+    private val _liveTargetPoint = MutableStateFlow<Point3D?>(null)
+    val liveTargetPoint: StateFlow<Point3D?> = _liveTargetPoint.asStateFlow()
+
+    private val _liveDistanceMeters = MutableStateFlow<Double?>(null)
+    val liveDistanceMeters: StateFlow<Double?> = _liveDistanceMeters.asStateFlow()
+
+    private val _isSnapped = MutableStateFlow(false)
+    val isSnapped: StateFlow<Boolean> = _isSnapped.asStateFlow()
+
+    // Torch / Flashlight state
+    private val _isTorchOn = MutableStateFlow(false)
+    val isTorchOn: StateFlow<Boolean> = _isTorchOn.asStateFlow()
+
+    // Toast / Feedback event channel
+    private val _toastMessage = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    val toastMessage = _toastMessage.asSharedFlow()
+
+    // Haptic feedback channel
+    private val _hapticEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val hapticEvent = _hapticEvent.asSharedFlow()
+
+    fun triggerHapticFeedback() {
+        _hapticEvent.tryEmit(Unit)
+    }
+
+    // Database records
     val savedRecords: StateFlow<List<MeasureRecord>> = repository.allRecords
         .stateIn(
             scope = viewModelScope,
@@ -137,14 +160,73 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
             initialValue = emptyList()
         )
 
-    // App state flows
-    private val _currentMode = MutableStateFlow(0) // 0: 相機 AR 測量, 1: 螢幕直尺, 2: 泡泡水平儀
-    val currentMode: StateFlow<Int> = _currentMode.asStateFlow()
+    val vibrateOnAlignment = MutableStateFlow(prefs.getBoolean("vibrate_align", true))
+    fun setVibrateOnAlignment(enabled: Boolean) {
+        vibrateOnAlignment.value = enabled
+        prefs.edit().putBoolean("vibrate_align", enabled).apply()
+    }
 
-    private val _selectedUnit = MutableStateFlow("cm") // "cm", "m", "in", "ft"
-    val selectedUnit: StateFlow<String> = _selectedUnit.asStateFlow()
+    // Dynamic color preference
+    private val _dynamicColorEnabled = MutableStateFlow(prefs.getBoolean("dynamic_color", true))
+    val dynamicColorEnabled: StateFlow<Boolean> = _dynamicColorEnabled.asStateFlow()
 
-    private val _rulerCalibration = MutableStateFlow(1.0f)
+    fun setDynamicColorEnabled(enabled: Boolean) {
+        _dynamicColorEnabled.value = enabled
+        prefs.edit().putBoolean("dynamic_color", enabled).apply()
+    }
+
+    // Scanning Feature Point Cloud preference
+    private val _showPointCloud = MutableStateFlow(prefs.getBoolean("show_point_cloud", true))
+    val showPointCloud: StateFlow<Boolean> = _showPointCloud.asStateFlow()
+
+    fun setShowPointCloud(enabled: Boolean) {
+        _showPointCloud.value = enabled
+        prefs.edit().putBoolean("show_point_cloud", enabled).apply()
+    }
+
+    // Hardware Sensors Suite Manager & State
+    val sensorSuiteManager = SensorSuiteManager(application)
+    val sensorState: StateFlow<SensorSuiteState> = sensorSuiteManager.sensorState
+    val installedSensors: StateFlow<List<DeviceSensorInfo>> = sensorSuiteManager.installedSensors
+
+    fun calibrateSensorLevel() {
+        sensorSuiteManager.calibrateLevelZero()
+        triggerHapticFeedback()
+        _toastMessage.tryEmit("已將當前角度設為零度水平基準")
+    }
+
+    fun resetSensorLevelCalibration() {
+        sensorSuiteManager.resetLevelCalibration()
+        _toastMessage.tryEmit("已重設水平儀為出廠絕對基準")
+    }
+
+    fun saveSensorRecord(title: String, value: Double, unit: String, type: String = "SENSOR") {
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    repository.insert(
+                        MeasureRecord(
+                            title = title,
+                            value = value,
+                            unit = unit,
+                            type = type
+                        )
+                    )
+                }
+                _toastMessage.tryEmit("已儲存感應器數據: $title")
+                triggerHapticFeedback()
+            } catch (e: Exception) {
+                _toastMessage.tryEmit("儲存失敗: ${e.localizedMessage}")
+            }
+        }
+    }
+
+    init {
+        sensorSuiteManager.startListening()
+    }
+
+    // Ruler calibration & Vernier caliper positions
+    private val _rulerCalibration = MutableStateFlow(prefs.getFloat("ruler_calibration", 1.0f))
     val rulerCalibration: StateFlow<Float> = _rulerCalibration.asStateFlow()
 
     fun updateRulerCalibration(factor: Float) {
@@ -152,432 +234,143 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         prefs.edit().putFloat("ruler_calibration", factor).apply()
     }
 
-    private val _cameraHeightCm = MutableStateFlow(140f) // 預設持手機高度 140 公分
-    val cameraHeightCm: StateFlow<Float> = _cameraHeightCm.asStateFlow()
+    // Queue for hit-testing requested from UI touches
+    private val pendingHitTestQueue = AtomicReference<Pair<Float, Float>?>()
 
-    private val _sensorAlpha = MutableStateFlow(0.2f)
-    val sensorAlpha: StateFlow<Float> = _sensorAlpha.asStateFlow()
+    // AR Frame Processing on GL Thread
+    fun processGlFrame(frame: Frame, engine: ModernArEngine) {
+        // 1. Process any pending tap hit-test
+        val tapRequest = pendingHitTestQueue.getAndSet(null)
+        val hitX = tapRequest?.first ?: (displayWidth / 2f)
+        val hitY = tapRequest?.second ?: (displayHeight / 2f)
 
-    private val _vibrateOnAlignment = MutableStateFlow(true)
-    val vibrateOnAlignment: StateFlow<Boolean> = _vibrateOnAlignment.asStateFlow()
+        val hitResult = engine.performHitTest(frame, hitX, hitY)
 
-    private val _dynamicColorEnabled = MutableStateFlow(true)
-    val dynamicColorEnabled: StateFlow<Boolean> = _dynamicColorEnabled.asStateFlow()
+        // 2. Real-time live targeting preview at screen center
+        val centerHit = if (tapRequest == null) hitResult else engine.performHitTest(frame, displayWidth / 2f, displayHeight / 2f)
 
-    private val _isFirstTimeUser = MutableStateFlow(true)
-    val isFirstTimeUser: StateFlow<Boolean> = _isFirstTimeUser.asStateFlow()
-
-    private val _showSplashScreen = MutableStateFlow(true)
-    val showSplashScreen: StateFlow<Boolean> = _showSplashScreen.asStateFlow()
-
-    // 測量模式: 0 = 水平地面投影測量 (Ground Plane), 1 = 垂直高度測量 (Vertical Height Tool)
-    private val _cameraMeasureSubMode = MutableStateFlow(0)
-    val cameraMeasureSubMode: StateFlow<Int> = _cameraMeasureSubMode.asStateFlow()
-
-    // 垂直高度鎖定的底座距離
-    private val _lockedBaseDistance = MutableStateFlow<Double?>(null)
-    val lockedBaseDistance: StateFlow<Double?> = _lockedBaseDistance.asStateFlow()
-
-    // ARCore Engine states
-    private val _arCoreState = MutableStateFlow("UNKNOWN") // "CHECKING", "SUPPORTED_INSTALLED", "UNSUPPORTED", "APK_NOT_INSTALLED"
-    val arCoreState: StateFlow<String> = _arCoreState.asStateFlow()
-
-    private val _arCoreActive = MutableStateFlow(true) // Auto enable standard AR space positioning
-    val arCoreActive: StateFlow<Boolean> = _arCoreActive.asStateFlow()
-
-    private fun isEmulator(): Boolean {
-        val brand = android.os.Build.BRAND
-        val device = android.os.Build.DEVICE
-        val model = android.os.Build.MODEL
-        val product = android.os.Build.PRODUCT
-        val hardware = android.os.Build.HARDWARE
-        val fingerprint = android.os.Build.FINGERPRINT
-        return brand.startsWith("generic") || 
-                device.startsWith("generic") || 
-                model.contains("google_sdk") || 
-                model.contains("Emulator") || 
-                model.contains("Android SDK built for x86") || 
-                product.contains("sdk_google") || 
-                hardware.contains("goldfish") || 
-                hardware.contains("ranchu") || 
-                fingerprint.startsWith("generic")
-    }
-
-    fun checkArCoreSupport(context: Context) {
-        if (arCoreSessionHelper == null) {
-            arCoreSessionHelper = ArCoreSessionHelper(context)
-        }
-        
-        viewModelScope.launch {
-            try {
-                val availability = ArCoreApk.getInstance().checkAvailability(context)
-                if (availability.isTransient) {
-                    _arCoreState.value = "CHECKING"
-                } else if (availability.isSupported) {
-                    if (availability.name == "SUPPORTED_INSTALLED") {
-                        val session = arCoreSessionHelper?.createSession()
-                        if (session != null) {
-                            _arCoreState.value = "SUPPORTED_INSTALLED"
-                        } else {
-                            _arCoreState.value = "UNSUPPORTED"
-                        }
-                    } else {
-                        _arCoreState.value = "APK_NOT_INSTALLED"
-                    }
-                } else {
-                    _arCoreState.value = "UNSUPPORTED"
-                }
-            } catch (e: Exception) {
-                _arCoreState.value = "UNSUPPORTED"
-            }
-        }
-    }
-
-    fun onResume() {
-        arCoreSessionHelper?.resume()
-        startListening()
-    }
-
-    fun onPause() {
-        arCoreSessionHelper?.pause()
-        stopListening()
-    }
-
-    fun destroyArCore() {
-        arCoreSessionHelper?.destroy()
-        arCoreSessionHelper = null
-    }
-
-    fun setArCoreActive(active: Boolean) {
-        _arCoreActive.value = active
-    }
-
-    // Sensor calibration offsets
-    private val _pitchOffset = MutableStateFlow(0f)
-    private val _rollOffset = MutableStateFlow(0f)
-    private val _yawOffset = MutableStateFlow(0f)
-
-    private val prefs = application.getSharedPreferences("measure_prefs", Context.MODE_PRIVATE)
-
-    init {
-        // Load calibration data
-        _pitchOffset.value = prefs.getFloat("pitch_offset", 0f)
-        _rollOffset.value = prefs.getFloat("roll_offset", 0f)
-        _yawOffset.value = prefs.getFloat("yaw_offset", 0f)
-
-        // Load settings data
-        _selectedUnit.value = prefs.getString("selected_unit", "cm") ?: "cm"
-        _rulerCalibration.value = prefs.getFloat("ruler_calibration", 1.0f)
-        _cameraHeightCm.value = prefs.getFloat("default_camera_height_cm", 140f)
-        _sensorAlpha.value = prefs.getFloat("sensor_alpha", 0.2f)
-        _vibrateOnAlignment.value = prefs.getBoolean("vibrate_on_alignment", true)
-        _dynamicColorEnabled.value = prefs.getBoolean("dynamic_color_enabled", true)
-        _isFirstTimeUser.value = prefs.getBoolean("is_first_time_user", true)
-        val defaultSystemLang = try {
-            val systemLocale = java.util.Locale.getDefault()
-            val lang = systemLocale.language
-            val country = systemLocale.country
-            when {
-                lang == "zh" && (country.equals("CN", ignoreCase = true) || country.equals("SG", ignoreCase = true)) -> "zh-CN"
-                lang == "zh" -> "zh-TW"
-                com.example.logic.TranslationManager.supportedLanguages.any { it.code == lang } -> lang
-                else -> "en"
-            }
-        } catch (e: Exception) {
-            "en"
-        }
-        _currentLanguage.value = prefs.getString("selected_language", defaultSystemLang) ?: defaultSystemLang
-    }
-
-    fun calibrateSensors() {
-        // If we calibrate, unfreeze for 0.5s to capture new zero
-        _isLevelFrozen.value = false
-        
-        // Get the current values to use as the new zero-reference
-        // Since _pitch etc are already calibrated, we add back the old offset to get the raw value
-        val rawPitch = _pitch.value + _pitchOffset.value
-        val rawRoll = _roll.value + _rollOffset.value
-        val rawYaw = _yaw.value + _yawOffset.value
-
-        _pitchOffset.value = rawPitch
-        _rollOffset.value = rawRoll
-        _yawOffset.value = rawYaw
-        
-        // Immediate UI feedback: reset flows to 0 so it doesn't wait for smoothing
-        _pitch.value = 0f
-        _roll.value = 0f
-        _yaw.value = 0f
-        
-        viewModelScope.launch {
-            delay(500)
-            if (_currentMode.value == 2) {
-                _isLevelFrozen.value = true
-            }
-        }
-
-        prefs.edit().apply {
-            putFloat("pitch_offset", _pitchOffset.value)
-            putFloat("roll_offset", _rollOffset.value)
-            putFloat("yaw_offset", _yawOffset.value)
-            apply()
-        }
-    }
-
-    fun resetCalibration() {
-        _pitchOffset.value = 0f
-        _rollOffset.value = 0f
-        _yawOffset.value = 0f
-        // Let the next sensor reading update the flows naturally
-        prefs.edit().clear().apply()
-    }
-
-    // Raw Sensor state
-    private val _pitch = MutableStateFlow(0f)  // degree (-90 is straight down, 0 is flat looking ahead)
-    val pitch: StateFlow<Float> = _pitch.asStateFlow()
-
-    private val _roll = MutableStateFlow(0f)   // degree (tilting left/right)
-    val roll: StateFlow<Float> = _roll.asStateFlow()
-
-    private val _yaw = MutableStateFlow(0f)     // azimuth heading (yaw angle)
-    val yaw: StateFlow<Float> = _yaw.asStateFlow()
-
-    // Current camera measurement points clicked
-    val capturedPoints = mutableStateListOf<Point3D>()
-
-    // Total length of the path formed by captured points
-    val totalPathDistance: Double
-        get() {
-            if (capturedPoints.size < 2) return 0.0
-            var sum = 0.0
-            for (i in 0 until capturedPoints.size - 1) {
-                sum += measureEngine.calculateDistance(capturedPoints[i], capturedPoints[i+1])
-            }
-            return sum
-        }
-
-    // Computed area of the horizontal polygon enclosed by the captured points (Shoelace formula)
-    val totalEnclosedArea: Double
-        get() {
-            if (capturedPoints.size < 3) return 0.0
-            var sum = 0.0
-            val n = capturedPoints.size
-            for (i in 0 until n) {
-                val p1 = capturedPoints[i]
-                val p2 = capturedPoints[(i + 1) % n]
-                // Shoelace formula on X-Z ground plane (since vertical axis in ARCore is Y)
-                sum += (p1.x * p2.z - p2.x * p1.z)
-            }
-            return abs(sum) / 2.0
-        }
-
-    fun formatAreaValue(squareMeters: Double): String {
-        return when (_selectedUnit.value) {
-            "cm" -> {
-                if (squareMeters < 0.1) {
-                    val sqCm = squareMeters * 10000.0
-                    String.format("%.1f cm²", sqCm)
-                } else {
-                    String.format("%.2f m²", squareMeters)
-                }
-            }
-            "m" -> String.format("%.2f m²", squareMeters)
-            "in" -> {
-                val sqIn = squareMeters * 1550.003
-                String.format("%.1f in²", sqIn)
-            }
-            "ft" -> {
-                val sqFt = squareMeters * 10.7639
-                String.format("%.2f ft²", sqFt)
-            }
-            else -> String.format("%.2f m²", squareMeters)
-        }
-    }
-
-    // Pocket Ruler Callipers (State in DP offset from center)
-    private val _rulerCaliperLeft = MutableStateFlow(-120.0f)
-    val rulerCaliperLeft: StateFlow<Float> = _rulerCaliperLeft.asStateFlow()
-
-    private val _rulerCaliperRight = MutableStateFlow(120.0f)
-    val rulerCaliperRight: StateFlow<Float> = _rulerCaliperRight.asStateFlow()
-
-    // Sensor support structure
-    private val sensorManager = application.getSystemService(Context.SENSOR_SERVICE) as SensorManager
-    private val accelerometerReading = FloatArray(3)
-    private val magnetometerReading = FloatArray(3)
-    private val rotationMatrix = FloatArray(9)
-    private val processedRotationMatrix = FloatArray(9)
-    private val orientationAngles = FloatArray(3)
-    
-    private val fastAlpha = 0.8f // Faster response when moving
-    
-    private var hasAccelerometer = false
-    private var hasMagnetometer = false
-    private var hasRotationVector = false
-    private var hasGravity = false
-
-    private val _isLevelFrozen = MutableStateFlow(false)
-    val isLevelFrozen: StateFlow<Boolean> = _isLevelFrozen.asStateFlow()
-
-    fun setMode(mode: Int) {
-        _currentMode.value = mode
-        
-        // Specific requirement: Surface level only moves for 0.5s then freezes
-        if (mode == 2) {
-            _isLevelFrozen.value = false
-            viewModelScope.launch {
-                delay(500)
-                _isLevelFrozen.value = true
-            }
-        } else {
-            _isLevelFrozen.value = false
-        }
-    }
-
-    fun setUnit(unit: String) {
-        _selectedUnit.value = unit
-        prefs.edit().putString("selected_unit", unit).apply()
-    }
-
-    fun setCameraHeight(height: Float) {
-        _cameraHeightCm.value = height
-        prefs.edit().putFloat("default_camera_height_cm", height).apply()
-    }
-
-    fun setSensorAlpha(alpha: Float) {
-        _sensorAlpha.value = alpha
-        prefs.edit().putFloat("sensor_alpha", alpha).apply()
-    }
-
-    fun setVibrateOnAlignment(enabled: Boolean) {
-        _vibrateOnAlignment.value = enabled
-        prefs.edit().putBoolean("vibrate_on_alignment", enabled).apply()
-    }
-
-    fun setDynamicColorEnabled(enabled: Boolean) {
-        _dynamicColorEnabled.value = enabled
-        prefs.edit().putBoolean("dynamic_color_enabled", enabled).apply()
-    }
-
-    fun setFirstTimeUser(enabled: Boolean) {
-        _isFirstTimeUser.value = enabled
-        prefs.edit().putBoolean("is_first_time_user", enabled).apply()
-    }
-
-    fun dismissSplashScreen() {
-        _showSplashScreen.value = false
-    }
-
-    fun setCameraMeasureSubMode(subMode: Int) {
-        _cameraMeasureSubMode.value = subMode
-        clearActivePoints()
-    }
-
-    private fun triggerHapticFeedback() {
-        // This will be called via an flow/event that the UI observes
-        viewModelScope.launch {
-            _hapticEvent.emit(Unit)
-        }
-    }
-
-    private val _hapticEvent = MutableSharedFlow<Unit>(replay = 0)
-    val hapticEvent = _hapticEvent.asSharedFlow()
-
-    fun isAutoMeasuringHeight(currentPitch: Float): Boolean {
-        if (capturedPoints.isEmpty()) return false
-        val basePoint = capturedPoints.first()
-        val pitchDiff = currentPitch - basePoint.pitch
-        // 如果俯仰角向上抬起超過 5 度，或者目前角度接近水平/朝上（小於 -15 度表示朝下）
-        return pitchDiff > 5.0f || currentPitch > -15.0f
-    }
-
-    fun updateRulerCalipers(left: Float, right: Float) {
-        _rulerCaliperLeft.value = left
-        _rulerCaliperRight.value = right
-    }
-
-    // Capture standard point (Accepts specific hit coordinates in pixels)
-    fun addPoint(pixelX: Float? = null, pixelY: Float? = null) {
-        val currentPitch = _pitch.value
-        val currentYaw = _yaw.value
-        val camHeightM = cameraHeightCm.value / 100.0
-        
-        // Trigger haptic feedback for point capture
-        triggerHapticFeedback()
-        
-        // 嘗試使用 ARCore HitTest
-        var arPoint: Point3D? = null
-        if (_arCoreActive.value && _arCoreState.value == "SUPPORTED_INSTALLED") {
-            val session = arSession
-            val frame = latestFrame
-            
-            if (session != null && frame != null) {
-                // If coordinates are provided, use them; otherwise default to center of display screen
-                val hX = pixelX ?: (displayWidth / 2f)
-                val hY = pixelY ?: (displayHeight / 2f)
-                
-                val hits = frame.hitTest(hX, hY)
-                val hit = hits.firstOrNull { 
-                    val trackable = it.trackable
-                    (trackable is Plane && trackable.isPoseInPolygon(it.hitPose)) || 
-                    (it.trackable is com.google.ar.core.Point)
-                }
-                
-                if (hit != null) {
-                    val pose = hit.hitPose
-                    arPoint = Point3D(
-                        x = pose.tx().toDouble(),
-                        y = pose.ty().toDouble(),
-                        z = pose.tz().toDouble(),
-                        pitch = currentPitch,
-                        yaw = currentYaw,
-                        isArPrecision = true
-                    )
-                }
-            }
-        }
-
-        val isHeight = isAutoMeasuringHeight(currentPitch)
-        val point = arPoint ?: if (!isHeight) {
-            // Ground project
-            val groundPoint = measureEngine.calculateGroundPoint(currentPitch, currentYaw, camHeightM)
-            if (capturedPoints.isEmpty()) {
-                _lockedBaseDistance.value = sqrt(groundPoint.x.pow(2) + groundPoint.y.pow(2))
-            }
-            groundPoint
-        } else {
-            // Height mode: base locking
-            val baseDist = _lockedBaseDistance.value ?: run {
-                val groundPoint = measureEngine.calculateGroundPoint(currentPitch, currentYaw, camHeightM)
-                val d = sqrt(groundPoint.x.pow(2) + groundPoint.y.pow(2))
-                _lockedBaseDistance.value = d
-                d
-            }
-            val zHeight = measureEngine.calculateVerticalHeight(baseDist, currentPitch, camHeightM)
-            val yawRad = Math.toRadians(currentYaw.toDouble())
-            Point3D(
-                x = baseDist * sin(yawRad),
-                y = baseDist * cos(yawRad),
-                z = zHeight,
-                pitch = currentPitch,
-                yaw = currentYaw
+        if (centerHit != null) {
+            val pose = centerHit.pose
+            val rawPoint = Point3D(
+                x = pose.tx().toDouble(),
+                y = pose.ty().toDouble(),
+                z = pose.tz().toDouble(),
+                isArPrecision = true
             )
+
+            // 1. Apply Temporal EMA Jitter Filter
+            val smoothedPoint = ArMath.filterJitterEMA(_liveTargetPoint.value, rawPoint)
+
+            // 2. Magnetic Vertex Snapping check
+            val snappedVertex = ArMath.findVertexSnap(smoothedPoint, capturedPoints, 0.07)
+            val finalTargetPoint: Point3D
+
+            if (snappedVertex != null) {
+                finalTargetPoint = snappedVertex
+                if (!_isSnapped.value) {
+                    _isSnapped.value = true
+                    triggerHapticFeedback()
+                }
+            } else {
+                _isSnapped.value = false
+                finalTargetPoint = smoothedPoint
+            }
+
+            _liveTargetPoint.value = finalTargetPoint
+
+            // 3. Calculate live real-time distance with stability
+            if (capturedPoints.isNotEmpty()) {
+                val lastPoint = capturedPoints.last()
+                val dist = ArMath.distance(lastPoint, finalTargetPoint)
+                _liveDistanceMeters.value = dist
+            } else {
+                _liveDistanceMeters.value = centerHit.distance.toDouble()
+            }
         }
-        
-        capturedPoints.add(point)
+
+        // 3. If a tap was requested, commit the point
+        if (tapRequest != null && hitResult != null) {
+            val pose = hitResult.pose
+            val point = Point3D(
+                x = pose.tx().toDouble(),
+                y = pose.ty().toDouble(),
+                z = pose.tz().toDouble(),
+                isArPrecision = true,
+                anchor = hitResult.anchor
+            )
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                saveUndoState()
+                capturedPoints.add(point)
+                triggerHapticFeedback()
+            }
+        }
     }
 
-    fun removeLastPoint() {
-        if (capturedPoints.isNotEmpty()) {
-            capturedPoints.removeAt(capturedPoints.size - 1)
-            if (capturedPoints.isEmpty()) {
-                _lockedBaseDistance.value = null
+    fun onArFrameUpdated(data: ModernArFrame) {
+        _arTrackingState.value = data.trackingState
+        _trackingFailureReason.value = data.trackingFailureReason
+        _viewMatrix.value = data.viewMatrix
+        _projectionMatrix.value = data.projectionMatrix
+        _isDepthAvailable.value = data.isDepthAvailable
+        _detectedPlanes.value = data.planes
+        _arPlanesCount.value = data.planes.count { it.isTracking }
+        _surfaceTypeAtCenter.value = data.surfaceTypeAtCenter
+        _lightIntensity.value = data.lightIntensity
+
+        // Update active anchor positions to eliminate world drift
+        if (capturedPoints.isNotEmpty() && data.trackingState == TrackingState.TRACKING) {
+            for (i in capturedPoints.indices) {
+                val pt = capturedPoints[i]
+                val anchor = pt.anchor
+                if (anchor != null && anchor.trackingState == TrackingState.TRACKING) {
+                    val pose = anchor.pose
+                    val newX = pose.tx().toDouble()
+                    val newY = pose.ty().toDouble()
+                    val newZ = pose.tz().toDouble()
+                    val candidate = pt.copy(x = newX, y = newY, z = newZ)
+
+                    if (ArMath.isPointValid(candidate)) {
+                        val dx = abs(newX - pt.x)
+                        val dy = abs(newY - pt.y)
+                        val dz = abs(newZ - pt.z)
+                        if (dx > 0.0001 || dy > 0.0001 || dz > 0.0001) {
+                            capturedPoints[i] = candidate
+                        }
+                    }
+                }
             }
+        }
+    }
+
+    fun requestHitTest(pixelX: Float? = null, pixelY: Float? = null) {
+        val x = pixelX ?: (displayWidth / 2f)
+        val y = pixelY ?: (displayHeight / 2f)
+        pendingHitTestQueue.set(Pair(x, y))
+    }
+
+    private fun saveUndoState() {
+        undoStack.add(capturedPoints.toList())
+        if (undoStack.size > 20) undoStack.removeAt(0)
+    }
+
+    fun undo() {
+        if (undoStack.isNotEmpty()) {
+            val previous = undoStack.removeAt(undoStack.size - 1)
+            capturedPoints.clear()
+            capturedPoints.addAll(previous)
+            triggerHapticFeedback()
+        } else if (capturedPoints.isNotEmpty()) {
+            capturedPoints.removeAt(capturedPoints.size - 1)
+            triggerHapticFeedback()
         }
     }
 
     fun clearActivePoints() {
+        saveUndoState()
+        capturedPoints.forEach { it.anchor?.detach() }
         capturedPoints.clear()
-        _lockedBaseDistance.value = null
+        _liveDistanceMeters.value = null
+        triggerHapticFeedback()
     }
 
     fun updatePointLabel(index: Int, newLabel: String) {
@@ -586,317 +379,227 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    // Realtime distance estimation to current crosshair
-    fun getLiveDistanceText(): String {
-        val currentPitch = _pitch.value
-        val currentYaw = _yaw.value
-        val camHeightM = cameraHeightCm.value / 100.0
-        
-        val isHeight = isAutoMeasuringHeight(currentPitch)
-        if (!isHeight) {
-            // Horizontal multi-point distance
-            val currentGroundPoint = measureEngine.calculateGroundPoint(currentPitch, currentYaw, camHeightM)
-            
-            if (capturedPoints.isEmpty()) {
-                // Distance to target point on ground
-                val d = sqrt(currentGroundPoint.x.pow(2) + currentGroundPoint.y.pow(2))
-                return formatLengthValue(d)
-            } else {
-                // Distance from last point to live target
-                val lastPoint = capturedPoints.last()
-                val liveDist = measureEngine.calculateDistance(lastPoint, currentGroundPoint)
-                return formatLengthValue(liveDist)
-            }
+    // Toggle Torch
+    fun toggleTorch(context: Context) {
+        try {
+            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val cameraId = cameraManager.cameraIdList.firstOrNull() ?: return
+            val newState = !_isTorchOn.value
+            cameraManager.setTorchMode(cameraId, newState)
+            _isTorchOn.value = newState
+            triggerHapticFeedback()
+        } catch (e: Exception) {
+            _isTorchOn.value = false
+        }
+    }
+
+    // Measurement Calculations
+    fun calculateTotalDistance(): Double {
+        return ArMath.polylineLength(capturedPoints)
+    }
+
+    fun calculatePolygonArea(): Double {
+        return ArMath.polygonArea(capturedPoints)
+    }
+
+    fun calculateBoundingBox(): BoundingBoxResult {
+        return ArMath.calculateBoundingBox(capturedPoints)
+    }
+
+    fun calculateVerticalHeight(): Double {
+        return if (capturedPoints.size >= 2) {
+            ArMath.verticalHeight(capturedPoints.first(), capturedPoints.last())
         } else {
-            // Altitude height meter
-            val baseDist = _lockedBaseDistance.value
-            if (baseDist == null) {
-                return getString("diagnostics_status_searching")
-            } else {
-                val zHeight = measureEngine.calculateVerticalHeight(baseDist, currentPitch, camHeightM)
-                return formatLengthValue(zHeight)
+            0.0
+        }
+    }
+
+    fun calculateCircle(): CircleResult? {
+        return if (capturedPoints.size >= 3) {
+            ArMath.fitCircle3Points(capturedPoints[0], capturedPoints[1], capturedPoints[2])
+        } else {
+            null
+        }
+    }
+
+    fun calculateAngle(): Double {
+        return if (capturedPoints.size >= 3) {
+            ArMath.calculateAngleDegrees(capturedPoints[0], capturedPoints[1], capturedPoints[2])
+        } else {
+            0.0
+        }
+    }
+
+    // Formatting utilities
+    fun formatLength(meters: Double, unit: String = _selectedUnit.value): String {
+        val df = DecimalFormat("#,##0.00")
+        return when (unit.lowercase()) {
+            "m" -> "${df.format(meters)} m"
+            "in" -> "${df.format(meters * 39.3701)} in"
+            "ft" -> "${df.format(meters * 3.28084)} ft"
+            "yd" -> "${df.format(meters * 1.09361)} yd"
+            else -> {
+                val cm = meters * 100.0
+                "${df.format(cm)} cm"
             }
         }
     }
 
-    fun saveCurrentMeasurement(customLabel: String? = null, customNotes: String? = null) {
-        viewModelScope.launch {
-            val isHeight = if (capturedPoints.isNotEmpty()) {
-                isAutoMeasuringHeight(capturedPoints.last().pitch)
-            } else {
-                false
+    fun formatArea(sqMeters: Double, unit: String = _selectedUnit.value): String {
+        val df = DecimalFormat("#,##0.00")
+        return when (unit.lowercase()) {
+            "m" -> "${df.format(sqMeters)} m²"
+            "in" -> "${df.format(sqMeters * 1550.0)} in²"
+            "ft" -> "${df.format(sqMeters * 10.7639)} sq ft"
+            "yd" -> "${df.format(sqMeters * 1.19599)} sq yd"
+            else -> {
+                val sqCm = sqMeters * 10000.0
+                if (sqCm >= 10000.0) "${df.format(sqMeters)} m²" else "${df.format(sqCm)} cm²"
             }
-            val label = customLabel ?: if (!isHeight) {
-                if (capturedPoints.size >= 2) getString("default_record_name_long") else getString("default_record_name_dist")
-            } else getString("onboarding_title_2") // or just "Height"
-            
-            var measuredValue = 0.0
-            if (!isHeight) {
-                if (capturedPoints.size >= 2) {
-                    // Sum distances up
-                    var accum = 0.0
-                    for (i in 0 until capturedPoints.size - 1) {
-                        val p1 = capturedPoints[i]
-                        val p2 = capturedPoints[i + 1]
-                        accum += measureEngine.calculateDistance(p1, p2)
+        }
+    }
+
+    fun formatVolume(cuMeters: Double, unit: String = _selectedUnit.value): String {
+        val df = DecimalFormat("#,##0.00")
+        return when (unit.lowercase()) {
+            "m" -> "${df.format(cuMeters)} m³"
+            "ft" -> "${df.format(cuMeters * 35.3147)} cu ft"
+            else -> {
+                val liters = cuMeters * 1000.0
+                "${df.format(liters)} L (${df.format(cuMeters)} m³)"
+            }
+        }
+    }
+
+    // Save record to Room database automatically without tedious manual typing
+    fun saveMeasurementRecord(customTitle: String? = null, customNotes: String? = null) {
+        viewModelScope.launch {
+            val subMode = _cameraSubMode.value
+            val unit = _selectedUnit.value
+            val timeStr = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
+
+            val (value, typeStr, autoTitle) = when (subMode) {
+                1 -> {
+                    val area = calculatePolygonArea()
+                    Triple(area, "AREA", "AR 平面面積 (${formatArea(area, unit)}) · $timeStr")
+                }
+                2 -> {
+                    val height = calculateVerticalHeight()
+                    Triple(height, "HEIGHT", "AR 垂直高程 (${formatLength(height, unit)}) · $timeStr")
+                }
+                3 -> {
+                    val box = calculateBoundingBox()
+                    Triple(box.volume, "VOLUME", "3D 空間體積 (${formatVolume(box.volume, unit)}) · $timeStr")
+                }
+                4 -> {
+                    val circle = calculateCircle()
+                    val d = circle?.diameter ?: 0.0
+                    Triple(d, "CIRCLE", "AR 圓形直徑 (${formatLength(d, unit)}) · $timeStr")
+                }
+                5 -> {
+                    val angle = calculateAngle()
+                    Triple(angle, "ANGLE", "3D 空間夾角 (${DecimalFormat("0.0").format(angle)}°) · $timeStr")
+                }
+                else -> {
+                    val dist = calculateTotalDistance()
+                    Triple(dist, "CAM", "AR 空間距離 (${formatLength(dist, unit)}) · $timeStr")
+                }
+            }
+
+            if (value > 0.0) {
+                val title = if (!customTitle.isNullOrBlank()) customTitle else autoTitle
+                val serializedPoints = capturedPoints.joinToString(";") { "${it.x},${it.y},${it.z},${it.label ?: ""}" }
+
+                try {
+                    withContext(Dispatchers.IO) {
+                        repository.insert(
+                            MeasureRecord(
+                                title = title,
+                                value = value,
+                                unit = if (subMode == 5) "°" else unit,
+                                type = typeStr,
+                                notes = customNotes,
+                                pointsData = serializedPoints
+                            )
+                        )
                     }
-                    measuredValue = accum
-                } else if (capturedPoints.size == 1) {
-                    val p = capturedPoints[0]
-                    measuredValue = sqrt(p.x * p.x + p.y * p.y)
-                }
-            } else {
-                // Height mode
-                if (capturedPoints.size >= 2) {
-                    // Difference between bottom and top Z
-                    val bottomVal = capturedPoints.first().z
-                    val topVal = capturedPoints.last().z
-                    measuredValue = abs(topVal - bottomVal)
-                } else if (capturedPoints.size == 1) {
-                    // Just relative to locked ground base
-                    val currentPitch = _pitch.value
-                    val camHeightM = cameraHeightCm.value / 100.0
-                    val base = _lockedBaseDistance.value ?: 0.0
-                    measuredValue = measureEngine.calculateVerticalHeight(base, currentPitch, camHeightM)
+                    _toastMessage.tryEmit("已自動儲存紀錄: $title")
+                    clearActivePoints()
+                    triggerHapticFeedback()
+                } catch (e: Exception) {
+                    _toastMessage.tryEmit("儲存失敗: ${e.localizedMessage}")
                 }
             }
+        }
+    }
 
-            if (measuredValue > 0.0) {
-                // Convert from base meters to CM
-                val centimeters = measuredValue * 100.0
-                repository.insert(
-                    MeasureRecord(
-                        title = label,
-                        value = convertCmToSelected(centimeters, _selectedUnit.value),
-                        unit = _selectedUnit.value,
-                        type = "CAM",
-                        notes = customNotes,
-                        pointsData = capturedPoints.serializePoints()
+    fun saveRulerRecord(customTitle: String? = null, cmVal: Double) {
+        viewModelScope.launch {
+            val timeStr = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
+            val formatted = formatLength(cmVal / 100.0, _selectedUnit.value)
+            val title = if (!customTitle.isNullOrBlank()) customTitle else "螢幕尺測量 ($formatted) · $timeStr"
+            try {
+                withContext(Dispatchers.IO) {
+                    repository.insert(
+                        MeasureRecord(
+                            title = title,
+                            value = cmVal,
+                            unit = _selectedUnit.value,
+                            type = "RULER"
+                        )
                     )
-                )
-                clearActivePoints()
+                }
+                _toastMessage.tryEmit("已自動儲存: $title")
+                triggerHapticFeedback()
+            } catch (e: Exception) {
+                _toastMessage.tryEmit("儲存失敗: ${e.localizedMessage}")
             }
         }
     }
 
-    fun saveRulerMeasurement(title: String, cmVal: Double) {
+    fun deleteRecord(record: MeasureRecord) {
         viewModelScope.launch {
-            repository.insert(
-                MeasureRecord(
-                    title = title,
-                    value = convertCmToSelected(cmVal, _selectedUnit.value),
-                    unit = _selectedUnit.value,
-                    type = "RULER"
-                )
-            )
+            try {
+                withContext(Dispatchers.IO) {
+                    repository.delete(record)
+                }
+            } catch (e: Exception) {}
         }
     }
 
-    fun deleteRecord(id: Int) {
+    fun deleteRecordById(id: Int) {
         viewModelScope.launch {
-            repository.deleteById(id)
+            try {
+                withContext(Dispatchers.IO) {
+                    repository.deleteById(id)
+                }
+            } catch (e: Exception) {}
         }
     }
 
     fun clearAllRecords() {
         viewModelScope.launch {
-            repository.clearAll()
+            try {
+                withContext(Dispatchers.IO) {
+                    repository.clearAll()
+                }
+            } catch (e: Exception) {}
         }
     }
 
-    // Helper functions for unit conversion
-    fun convertCmToSelected(cm: Double, unit: String): Double {
-        return when (unit) {
-            "cm" -> cm
-            "m" -> cm / 100.0
-            "in" -> cm / 2.54
-            "ft" -> cm / 30.48
-            else -> cm
-        }
+    fun onResume() {
+        modernArEngine.resume()
+        sensorSuiteManager.startListening()
     }
 
-    fun formatLengthValue(meters: Double): String {
-        val cm = meters * 100.0
-        val converted = convertCmToSelected(cm, _selectedUnit.value)
-        return String.format("%.1f %s", converted, _selectedUnit.value)
+    fun onPause() {
+        modernArEngine.pause()
+        sensorSuiteManager.stopListening()
     }
 
-    private var isListening = false
-
-    // Sensor Registration Lifecycle
-    fun startListening() {
-        if (isListening) return
-        isListening = true
-        
-        // Pixel Optimization: Prioritize high-precision Fused Rotation Vector
-        val rotationVector = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
-        if (rotationVector != null) {
-            sensorManager.registerListener(this, rotationVector, SensorManager.SENSOR_DELAY_FASTEST)
-            hasRotationVector = true
-            return 
-        }
-
-        // Alternative optimization: Geomagnetic Rotation Vector
-        val geoRotation = sensorManager.getDefaultSensor(Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR)
-        if (geoRotation != null) {
-            sensorManager.registerListener(this, geoRotation, SensorManager.SENSOR_DELAY_FASTEST)
-            hasRotationVector = true
-            return
-        }
-
-        // Fallback to Gravity (more stable than Accelerometer for level tools)
-        val gravity = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
-        if (gravity != null) {
-            sensorManager.registerListener(this, gravity, SensorManager.SENSOR_DELAY_FASTEST)
-            hasGravity = true
-        } else {
-            val accel = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-            if (accel != null) {
-                sensorManager.registerListener(this, accel, SensorManager.SENSOR_DELAY_FASTEST)
-                hasAccelerometer = true
-            }
-        }
-
-        val magnet = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
-        if (magnet != null) {
-            sensorManager.registerListener(this, magnet, SensorManager.SENSOR_DELAY_FASTEST)
-            hasMagnetometer = true
-        }
+    override fun onCleared() {
+        super.onCleared()
+        modernArEngine.destroy()
+        sensorSuiteManager.stopListening()
     }
-
-    fun stopListening() {
-        sensorManager.unregisterListener(this)
-        isListening = false
-        hasRotationVector = false
-        hasAccelerometer = false
-        hasMagnetometer = false
-        hasGravity = false
-    }
-
-    private fun applyLowPassFilter(input: FloatArray, output: FloatArray) {
-        val alpha = _sensorAlpha.value
-        for (i in input.indices) {
-            output[i] = output[i] + alpha * (input[i] - output[i])
-        }
-    }
-
-    override fun onSensorChanged(event: SensorEvent) {
-        if (event.sensor.type == Sensor.TYPE_ROTATION_VECTOR || 
-            event.sensor.type == Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR) {
-            SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
-            remapAndProcess()
-            return
-        }
-
-        when (event.sensor.type) {
-            Sensor.TYPE_GRAVITY -> {
-                System.arraycopy(event.values, 0, accelerometerReading, 0, 3)
-            }
-            Sensor.TYPE_ACCELEROMETER -> {
-                applyLowPassFilter(event.values, accelerometerReading)
-            }
-            Sensor.TYPE_MAGNETIC_FIELD -> {
-                applyLowPassFilter(event.values, magnetometerReading)
-            }
-        }
-
-        val success = SensorManager.getRotationMatrix(
-            rotationMatrix,
-            null,
-            accelerometerReading,
-            magnetometerReading
-        )
-
-        if (success) {
-            remapAndProcess()
-        } else {
-            processFallbackOrientation()
-        }
-    }
-
-    private fun remapAndProcess() {
-        val display = (getApplication<Application>().getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager).defaultDisplay
-        val rotation = display.rotation
-        
-        var axisX = SensorManager.AXIS_X
-        var axisY = SensorManager.AXIS_Y
-        
-        when (rotation) {
-            android.view.Surface.ROTATION_0 -> {
-                axisX = SensorManager.AXIS_X
-                axisY = SensorManager.AXIS_Y
-            }
-            android.view.Surface.ROTATION_90 -> {
-                axisX = SensorManager.AXIS_Y
-                axisY = SensorManager.AXIS_MINUS_X
-            }
-            android.view.Surface.ROTATION_180 -> {
-                axisX = SensorManager.AXIS_MINUS_X
-                axisY = SensorManager.AXIS_MINUS_Y
-            }
-            android.view.Surface.ROTATION_270 -> {
-                axisX = SensorManager.AXIS_MINUS_Y
-                axisY = SensorManager.AXIS_X
-            }
-        }
-        
-        if (SensorManager.remapCoordinateSystem(rotationMatrix, axisX, axisY, processedRotationMatrix)) {
-            processRotationMatrix(processedRotationMatrix)
-        } else {
-            processRotationMatrix(rotationMatrix)
-        }
-    }
-
-    private fun processRotationMatrix(matrix: FloatArray) {
-        // If surface level is frozen, skip updates
-        if (_currentMode.value == 2 && _isLevelFrozen.value) return
-        
-        SensorManager.getOrientation(matrix, orientationAngles)
-        
-        // azimuth (yaw)
-        var azimuth = Math.toDegrees(orientationAngles[0].toDouble()).toFloat()
-        if (azimuth < 0) azimuth += 360f
-        
-        val newYaw = azimuth - _yawOffset.value
-        val yawDiff = abs(newYaw - _yaw.value)
-        val yawAlpha = if (yawDiff > 10f) fastAlpha else _sensorAlpha.value
-        _yaw.value = _yaw.value + yawAlpha * (newYaw - _yaw.value)
-
-        // pitch (around X axis)
-        val newPitchRaw = Math.toDegrees(orientationAngles[1].toDouble()).toFloat()
-        val calibratedPitch = newPitchRaw - _pitchOffset.value
-        val pitchDiff = abs(calibratedPitch - _pitch.value)
-        val pitchAlpha = if (pitchDiff > 5f) fastAlpha else _sensorAlpha.value
-        _pitch.value = _pitch.value + pitchAlpha * (calibratedPitch - _pitch.value)
-        
-        // roll (around Y axis)
-        val newRollRaw = Math.toDegrees(orientationAngles[2].toDouble()).toFloat()
-        val calibratedRoll = newRollRaw - _rollOffset.value
-        val rollDiff = abs(calibratedRoll - _roll.value)
-        val rollAlpha = if (rollDiff > 5f) fastAlpha else _sensorAlpha.value
-        _roll.value = _roll.value + rollAlpha * (calibratedRoll - _roll.value)
-    }
-
-    private fun processFallbackOrientation() {
-        val ax = accelerometerReading[0]
-        val ay = accelerometerReading[1]
-        val az = accelerometerReading[2]
-        val norm = sqrt((ax * ax + ay * ay + az * az).toDouble())
-        if (norm > 0) {
-            val x = ax / norm
-            val y = ay / norm
-            val z = az / norm
-
-            val alpha = _sensorAlpha.value
-            val computedPitch = -asin(y) * (180.0 / Math.PI)
-            val calibratedPitch = computedPitch.toFloat() - _pitchOffset.value
-            _pitch.value = _pitch.value + alpha * (calibratedPitch - _pitch.value)
-
-            val computedRoll = atan2(x, z) * (180.0 / Math.PI)
-            val calibratedRoll = computedRoll.toFloat() - _rollOffset.value
-            _roll.value = _roll.value + alpha * (calibratedRoll - _roll.value)
-        }
-    }
-
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 }

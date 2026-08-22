@@ -122,7 +122,7 @@ object ShareUtility {
             if (points.isNotEmpty()) {
                 sb.append("\n📍 [AR 空間標註點紀錄] :\n")
                 points.forEachIndexed { index, p ->
-                    val lbl = if (p.label.isNotBlank()) " - \"${p.label}\"" else ""
+                    val lbl = if (!p.label.isNullOrBlank()) " - \"${p.label}\"" else ""
                     sb.append("   - 標註點 #${index + 1}: ${String.format("(X:%.2f, Y:%.2f, Z:%.2f)", p.x, p.y, p.z)}$lbl\n")
                 }
                 
@@ -142,8 +142,8 @@ object ShareUtility {
                             else -> cmValue
                         }
                         
-                        val lbl1 = if (p1.label.isNotBlank()) p1.label else "#${i + 1}"
-                        val lbl2 = if (p2.label.isNotBlank()) p2.label else "#${i + 2}"
+                        val lbl1 = if (!p1.label.isNullOrBlank()) p1.label else "#${i + 1}"
+                        val lbl2 = if (!p2.label.isNullOrBlank()) p2.label else "#${i + 2}"
                         sb.append("   👉 [$lbl1] ↗ [$lbl2] : ${String.format("%.2f %s", displayDist, record.unit)}\n")
                     }
                 }
@@ -411,7 +411,7 @@ object ShareUtility {
                     
                     // Label text on screen
                     val pLabel = points[i].label
-                    val visualLabel = if (pLabel.isNotBlank()) "點${i+1}: $pLabel" else "標記點 ${i+1}"
+                    val visualLabel = if (!pLabel.isNullOrBlank()) "點${i+1}: $pLabel" else "標記點 ${i+1}"
                     canvas.drawText(visualLabel, offset.x + 24f, offset.y + 6f, textAnnoLabelPaint)
                 }
             }
@@ -550,6 +550,22 @@ object ShareUtility {
         } catch (e: Exception) {
             Toast.makeText(context, "產生圖檔失敗: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
             e.printStackTrace()
+        }
+    }
+
+    /**
+     * Shares arbitrary formatted text using standard Android Share Sheet
+     */
+    fun shareText(context: Context, text: String, title: String = "分享資訊") {
+        try {
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, title)
+                putExtra(Intent.EXTRA_TEXT, text)
+            }
+            context.startActivity(Intent.createChooser(shareIntent, title))
+        } catch (e: Exception) {
+            Toast.makeText(context, "分享失敗: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
         }
     }
 }
