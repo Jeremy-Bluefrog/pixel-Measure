@@ -33,6 +33,7 @@ jobs:
         if [ ! -f debug.keystore ]; then
           keytool -genkey -v -keystore debug.keystore -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
         fi
+        cp debug.keystore app/debug.keystore || true
 
     - name: 設定 Gradle 8.9 (相容 AGP 8.6.1)
       uses: gradle/actions/setup-gradle@v3
@@ -40,6 +41,8 @@ jobs:
         gradle-version: '8.9'
 
     - name: 執行 Gradle 編譯 APK
+      env:
+        GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g"
       run: gradle :app:assembleDebug --stacktrace --no-daemon
 
     - name: 更新 APK 至 build-outputs
