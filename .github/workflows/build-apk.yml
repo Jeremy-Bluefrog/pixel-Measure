@@ -21,7 +21,9 @@ jobs:
       with:
         java-version: '17'
         distribution: 'temurin'
-        cache: gradle
+
+    - name: 安裝並設定 Gradle
+      uses: gradle/actions/setup-gradle@v4
 
     - name: 準備環境與金鑰 (Keystore & Env Setup)
       run: |
@@ -30,11 +32,8 @@ jobs:
           base64 -d debug.keystore.base64 > debug.keystore
         fi
 
-    - name: 授權 Gradle 執行權限
-      run: chmod +x ./gradlew || true
-
     - name: 使用 Gradle 自動編譯 APK
-      run: ./gradlew assembleDebug --stacktrace --no-daemon
+      run: gradle :app:assembleDebug --stacktrace --no-daemon
 
     - name: 將編譯好的 APK 自動發布並更新到 build-outputs
       run: |
