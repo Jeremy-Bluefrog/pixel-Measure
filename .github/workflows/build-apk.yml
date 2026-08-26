@@ -21,7 +21,6 @@ jobs:
       with:
         java-version: '17'
         distribution: 'temurin'
-        cache: 'gradle'
 
     - name: 準備 Keystore 簽名與環境檔 (.env)
       run: |
@@ -41,9 +40,11 @@ jobs:
         gradle-version: '8.9'
 
     - name: 執行 Gradle 編譯 APK
-      env:
-        GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g"
-      run: gradle :app:assembleDebug --stacktrace --no-daemon
+      run: |
+        sed -i 's/-Xmx4g/-Xmx2g/g' gradle.properties || true
+        echo "org.gradle.workers.max=2" >> gradle.properties
+        echo "kotlin.compiler.execution.strategy=in-process" >> gradle.properties
+        gradle :app:assembleDebug --stacktrace --info --no-daemon
 
     - name: 更新 APK 至 build-outputs
       continue-on-error: true
