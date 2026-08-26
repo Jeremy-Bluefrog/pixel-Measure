@@ -1,0 +1,58 @@
+name: Build & Release APK Automatically
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 檢出專案代碼 (Checkout)
+      uses: actions/checkout@v4
+
+    - name: 設定 JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: gradle
+
+    - name: 準備環境與金鑰 (Keystore & Env Setup)
+      run: |
+        touch .env
+        if [ -f debug.keystore.base64 ]; then
+          base64 -d debug.keystore.base64 > debug.keystore
+        fi
+
+    - name: 授權 Gradle 執行權限
+      run: chmod +x ./gradlew || true
+
+    - name: 使用 Gradle 自動編譯 APK
+      run: ./gradlew assembleDebug --stacktrace --no-daemon
+
+    - name: 將編譯好的 APK 自動發布並更新到 build-outputs
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        mkdir -p build-outputs
+        cp app/build/outputs/apk/debug/app-debug.apk build-outputs/app-debug.apk
+        git add -f build-outputs/app-debug.apk
+        if git diff --staged --quiet; then
+          echo "No changes in APK"
+        else
+          git commit -m "🤖 自動建置：GitHub Actions 產出最新 APK [skip ci]"
+          git push
+        fi
+
+    - name: 上傳 APK 至 GitHub Artifacts (隨時可下載)
+      uses: actions/upload-artifact@v4
+      with:
+        name: pixel-measure-app-debug
+        path: app/build/outputs/apk/debug/app-debug.apk
+        retention-days: 30
