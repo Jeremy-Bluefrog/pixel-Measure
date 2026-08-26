@@ -203,10 +203,8 @@ object ArMath {
             x = (p1.x + p2.x) / 2.0,
             y = (p1.y + p2.y) / 2.0,
             z = (p1.z + p2.z) / 2.0,
-            pitch = 0f,
-            yaw = 0f,
+            label = "",
             isArPrecision = true,
-            label = null,
             anchor = null
         )
     }

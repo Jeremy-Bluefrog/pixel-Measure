@@ -10,7 +10,8 @@ data class MeasureRecord(
     val value: Double,
     val unit: String,
     val timestamp: Long = System.currentTimeMillis(),
-    val type: String, // "CAM" (Camera Mode) or "RULER" (Screen Ruler Mode)
+    val type: String, // "CAM", "AREA", "HEIGHT", "VOLUME", "CIRCLE", "ANGLE", "RULER"
     val notes: String? = null,
-    val pointsData: String? = null // Holds serialized Point3D elements
+    val pointsData: String? = null, // Holds serialized Point3D elements
+    val imagePath: String? = null // Local file path of screenshot/snapshot
 )

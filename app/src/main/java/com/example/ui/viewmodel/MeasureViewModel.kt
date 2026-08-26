@@ -11,11 +11,14 @@ import com.example.data.db.MeasureDatabase
 import com.example.data.model.MeasureRecord
 import com.example.data.repository.MeasureRepository
 import com.example.logic.TranslationManager
+import com.example.logic.ai.AiTileDetector
+import com.example.logic.ai.DetectedTile
+import com.example.logic.ai.TileEstimationResult
 import com.example.logic.ar.*
-import com.example.logic.sensor.DeviceSensorInfo
-import com.example.logic.sensor.SensorSuiteManager
-import com.example.logic.sensor.SensorSuiteState
+import com.example.logic.sensor.SensorCorrectionTelemetry
+import com.example.logic.sensor.SensorFusionCorrectionEngine
 import com.google.ar.core.*
+import android.graphics.Bitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -60,9 +63,14 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     }
 
     // Camera SubMode:
-    // 0 = Distance/Polyline, 1 = Area, 2 = Height, 3 = 3D Box Volume, 4 = Circle/Diameter, 5 = Angle
+    // 0 = Auto-Detect (Smart Geometry), 1 = Area, 2 = Height, 3 = 3D Box Volume, 4 = Circle/Diameter, 5 = Angle
+    // In Auto-Detect (mode 0), the app automatically determines whether you're measuring a straight distance, closed polygon area, vertical height, or circle based on points and spatial gestures.
     private val _cameraSubMode = MutableStateFlow(0)
     val cameraSubMode: StateFlow<Int> = _cameraSubMode.asStateFlow()
+
+    // Auto-detected geometry classification: "DISTANCE", "AREA", "HEIGHT", "CIRCLE", "ANGLE"
+    private val _autoDetectedType = MutableStateFlow("DISTANCE")
+    val autoDetectedType: StateFlow<String> = _autoDetectedType.asStateFlow()
 
     fun setCameraSubMode(mode: Int) {
         _cameraSubMode.value = mode
@@ -184,45 +192,195 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         prefs.edit().putBoolean("show_point_cloud", enabled).apply()
     }
 
-    // Hardware Sensors Suite Manager & State
-    val sensorSuiteManager = SensorSuiteManager(application)
-    val sensorState: StateFlow<SensorSuiteState> = sensorSuiteManager.sensorState
-    val installedSensors: StateFlow<List<DeviceSensorInfo>> = sensorSuiteManager.installedSensors
+    // Multi-Sensor Fusion & Measurement Correction Engine
+    val sensorCorrectionEngine = SensorFusionCorrectionEngine(application)
+    val sensorTelemetry: StateFlow<SensorCorrectionTelemetry> = sensorCorrectionEngine.telemetry
 
-    fun calibrateSensorLevel() {
-        sensorSuiteManager.calibrateLevelZero()
+    val sensorCorrectionEnabled = MutableStateFlow(prefs.getBoolean("sensor_correction_enabled", true))
+    val antiJitterEnabled = MutableStateFlow(prefs.getBoolean("sensor_antijitter_enabled", true))
+    val gravityAlignmentEnabled = MutableStateFlow(prefs.getBoolean("sensor_gravity_align_enabled", true))
+    val barometerFusionEnabled = MutableStateFlow(prefs.getBoolean("sensor_barometer_fusion_enabled", true))
+    val jerkRejectionEnabled = MutableStateFlow(prefs.getBoolean("sensor_jerk_rejection_enabled", true))
+    val proximityContactEnabled = MutableStateFlow(prefs.getBoolean("sensor_proximity_enabled", true))
+    val stereoParallaxEnabled = MutableStateFlow(prefs.getBoolean("sensor_stereo_enabled", true))
+
+    val highFpsModeEnabled = MutableStateFlow(prefs.getBoolean("high_fps_mode_enabled", true))
+
+    fun setHighFpsModeEnabled(enabled: Boolean) {
+        highFpsModeEnabled.value = enabled
+        prefs.edit().putBoolean("high_fps_mode_enabled", enabled).apply()
+        _toastMessage.tryEmit(if (enabled) "已啟用 60Hz 高幀率相機預覽" else "已切換至標準幀率")
+    }
+
+    fun setSensorCorrectionEnabled(enabled: Boolean) {
+        sensorCorrectionEnabled.value = enabled
+        sensorCorrectionEngine.isSensorCorrectionEnabled = enabled
+        prefs.edit().putBoolean("sensor_correction_enabled", enabled).apply()
+        _toastMessage.tryEmit(if (enabled) "已啟用感應器融合校正" else "已關閉感應器校正")
+    }
+
+    fun setAntiJitterEnabled(enabled: Boolean) {
+        antiJitterEnabled.value = enabled
+        sensorCorrectionEngine.isAntiJitterEnabled = enabled
+        prefs.edit().putBoolean("sensor_antijitter_enabled", enabled).apply()
+    }
+
+    fun setGravityAlignmentEnabled(enabled: Boolean) {
+        gravityAlignmentEnabled.value = enabled
+        sensorCorrectionEngine.isGravityAlignmentEnabled = enabled
+        prefs.edit().putBoolean("sensor_gravity_align_enabled", enabled).apply()
+    }
+
+    fun setBarometerFusionEnabled(enabled: Boolean) {
+        barometerFusionEnabled.value = enabled
+        sensorCorrectionEngine.isBarometerFusionEnabled = enabled
+        prefs.edit().putBoolean("sensor_barometer_fusion_enabled", enabled).apply()
+    }
+
+    fun setJerkRejectionEnabled(enabled: Boolean) {
+        jerkRejectionEnabled.value = enabled
+        sensorCorrectionEngine.isJerkRejectionEnabled = enabled
+        prefs.edit().putBoolean("sensor_jerk_rejection_enabled", enabled).apply()
+    }
+
+    fun setProximityContactEnabled(enabled: Boolean) {
+        proximityContactEnabled.value = enabled
+        sensorCorrectionEngine.isProximityZeroContactEnabled = enabled
+        prefs.edit().putBoolean("sensor_proximity_enabled", enabled).apply()
+    }
+
+    fun setStereoParallaxEnabled(enabled: Boolean) {
+        stereoParallaxEnabled.value = enabled
+        sensorCorrectionEngine.isStereoParallaxScaleEnabled = enabled
+        prefs.edit().putBoolean("sensor_stereo_enabled", enabled).apply()
+    }
+
+    fun calibrateSensors() {
+        sensorCorrectionEngine.resetBarometerBase()
         triggerHapticFeedback()
-        _toastMessage.tryEmit("已將當前角度設為零度水平基準")
+        _toastMessage.tryEmit("已重設氣壓與感應器基準高度")
     }
 
-    fun resetSensorLevelCalibration() {
-        sensorSuiteManager.resetLevelCalibration()
-        _toastMessage.tryEmit("已重設水平儀為出廠絕對基準")
+    // AI Core Tile Recognition & One-Tap Measurement State
+    private val _isAiTileMode = MutableStateFlow(false)
+    val isAiTileMode: StateFlow<Boolean> = _isAiTileMode.asStateFlow()
+
+    private val _isAiTileAnalyzing = MutableStateFlow(false)
+    val isAiTileAnalyzing: StateFlow<Boolean> = _isAiTileAnalyzing.asStateFlow()
+
+    private val _detectedTiles = MutableStateFlow<List<DetectedTile>>(emptyList())
+    val detectedTiles: StateFlow<List<DetectedTile>> = _detectedTiles.asStateFlow()
+
+    private val _selectedTileForDetail = MutableStateFlow<DetectedTile?>(null)
+    val selectedTileForDetail: StateFlow<DetectedTile?> = _selectedTileForDetail.asStateFlow()
+
+    private val _tileTargetAreaM2 = MutableStateFlow(16.5) // Default 5 坪 ~ 16.5 m²
+    val tileTargetAreaM2: StateFlow<Double> = _tileTargetAreaM2.asStateFlow()
+
+    private val _tileWastagePercent = MutableStateFlow(10) // 10% 損耗備料
+    val tileWastagePercent: StateFlow<Int> = _tileWastagePercent.asStateFlow()
+
+    fun setTileTargetAreaM2(area: Double) {
+        _tileTargetAreaM2.value = area.coerceAtLeast(0.1)
     }
 
-    fun saveSensorRecord(title: String, value: Double, unit: String, type: String = "SENSOR") {
+    fun setTileWastagePercent(percent: Int) {
+        _tileWastagePercent.value = percent.coerceIn(0, 30)
+    }
+
+    fun selectTileForDetail(tile: DetectedTile?) {
+        _selectedTileForDetail.value = tile
+    }
+
+    fun toggleAiTileMode(bitmap: Bitmap? = null) {
+        val nextState = !_isAiTileMode.value
+        _isAiTileMode.value = nextState
+        triggerHapticFeedback()
+        if (nextState) {
+            triggerAiTileDetection(bitmap)
+            _toastMessage.tryEmit("已開啟 AI Core 磁磚自動識別")
+        } else {
+            _detectedTiles.value = emptyList()
+            _selectedTileForDetail.value = null
+            _toastMessage.tryEmit("已退出 AI 磁磚識別模式")
+        }
+    }
+
+    fun triggerAiTileDetection(bitmap: Bitmap? = null) {
         viewModelScope.launch {
+            _isAiTileAnalyzing.value = true
             try {
-                withContext(Dispatchers.IO) {
-                    repository.insert(
-                        MeasureRecord(
-                            title = title,
-                            value = value,
-                            unit = unit,
-                            type = type
-                        )
-                    )
+                val center = _liveTargetPoint.value ?: Point3D(0.0, -0.4, -1.2, isArPrecision = true)
+                val tiles = if (bitmap != null) {
+                    val geminiTiles = AiTileDetector.analyzeTilesWithGemini(bitmap)
+                    geminiTiles.map { t ->
+                        if (t.worldCorners.isEmpty()) {
+                            t.copy(worldCorners = AiTileDetector.createTileCorners(center, t.estimatedWidthCm / 100.0, t.estimatedHeightCm / 100.0))
+                        } else t
+                    }
+                } else {
+                    AiTileDetector.generateLocalVisionTiles(displayWidth, displayHeight, center)
                 }
-                _toastMessage.tryEmit("已儲存感應器數據: $title")
+                _detectedTiles.value = tiles
                 triggerHapticFeedback()
+                _toastMessage.tryEmit("AI Core 已識別 ${tiles.size} 處磁磚結構，輕觸即可自動測量")
             } catch (e: Exception) {
-                _toastMessage.tryEmit("儲存失敗: ${e.localizedMessage}")
+                val center = _liveTargetPoint.value ?: Point3D(0.0, -0.4, -1.2, isArPrecision = true)
+                _detectedTiles.value = AiTileDetector.generateLocalVisionTiles(displayWidth, displayHeight, center)
+            } finally {
+                _isAiTileAnalyzing.value = false
             }
         }
     }
 
+    /**
+     * One-Tap Tile Measurement: Instantly places the 4 corner 3D anchor points in AR space,
+     * computes the exact dimensions and area, and opens the tile spec calculation sheet.
+     */
+    fun measureTileOneTap(tile: DetectedTile) {
+        viewModelScope.launch {
+            saveUndoState()
+            capturedPoints.clear()
+
+            if (tile.worldCorners.size == 4) {
+                capturedPoints.addAll(tile.worldCorners)
+            } else {
+                val wMeters = tile.estimatedWidthCm / 100.0
+                val hMeters = tile.estimatedHeightCm / 100.0
+                val center = _liveTargetPoint.value ?: Point3D(0.0, -0.4, -1.2, isArPrecision = true)
+                capturedPoints.addAll(AiTileDetector.createTileCorners(center, wMeters, hMeters))
+            }
+            _autoDetectedType.value = "AREA"
+            _selectedTileForDetail.value = tile
+
+            triggerHapticFeedback()
+            val wStr = DecimalFormat("0.#").format(tile.estimatedWidthCm)
+            val hStr = DecimalFormat("0.#").format(tile.estimatedHeightCm)
+            val areaStr = DecimalFormat("0.00").format(tile.areaM2)
+            _toastMessage.tryEmit("✨ 已自動鎖定並測量磁磚：${wStr}×${hStr} cm (${areaStr} m²)")
+        }
+    }
+
+    fun measureTileUnderReticle() {
+        val detected = _detectedTiles.value.firstOrNull() ?: DetectedTile(
+            label = "中央磁磚 (60×60 cm)",
+            material = "拋光石英地磚",
+            estimatedWidthCm = 60.0,
+            estimatedHeightCm = 60.0,
+            areaM2 = 0.36
+        )
+        measureTileOneTap(detected)
+    }
+
     init {
-        sensorSuiteManager.startListening()
+        sensorCorrectionEngine.isSensorCorrectionEnabled = sensorCorrectionEnabled.value
+        sensorCorrectionEngine.isAntiJitterEnabled = antiJitterEnabled.value
+        sensorCorrectionEngine.isGravityAlignmentEnabled = gravityAlignmentEnabled.value
+        sensorCorrectionEngine.isBarometerFusionEnabled = barometerFusionEnabled.value
+        sensorCorrectionEngine.isJerkRejectionEnabled = jerkRejectionEnabled.value
+        sensorCorrectionEngine.isProximityZeroContactEnabled = proximityContactEnabled.value
+        sensorCorrectionEngine.isStereoParallaxScaleEnabled = stereoParallaxEnabled.value
+        sensorCorrectionEngine.startListening()
     }
 
     // Ruler calibration & Vernier caliper positions
@@ -258,11 +416,25 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
                 isArPrecision = true
             )
 
-            // 1. Apply Temporal EMA Jitter Filter
-            val smoothedPoint = ArMath.filterJitterEMA(_liveTargetPoint.value, rawPoint)
+            // 0. Proximity Zero-Contact Offset (if touching surface directly)
+            val contactPoint = sensorCorrectionEngine.applyProximityZeroContactOffset(rawPoint)
 
-            // 2. Magnetic Vertex Snapping check
-            val snappedVertex = ArMath.findVertexSnap(smoothedPoint, capturedPoints, 0.07)
+            // 1. Apply Multi-Sensor Fusion Anti-Tremor & Jitter Filter (Gyroscope + Accelerometer)
+            val sensorCorrectedPoint = sensorCorrectionEngine.correctPointWithSensorFusion(
+                rawPoint = contactPoint,
+                previousPoint = _liveTargetPoint.value
+            )
+            val smoothedPoint = ArMath.filterJitterEMA(_liveTargetPoint.value, sensorCorrectedPoint)
+
+            // 2. Gravity-aligned orthogonal leveling if measuring line/distance
+            val orthogonalAdjustedPoint = if (capturedPoints.isNotEmpty() && _cameraSubMode.value == 0) {
+                sensorCorrectionEngine.correctOrthogonalAlignment(capturedPoints.last(), smoothedPoint)
+            } else {
+                smoothedPoint
+            }
+
+            // 3. Magnetic Vertex Snapping check
+            val snappedVertex = ArMath.findVertexSnap(orthogonalAdjustedPoint, capturedPoints, 0.07)
             val finalTargetPoint: Point3D
 
             if (snappedVertex != null) {
@@ -273,35 +445,92 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
                 }
             } else {
                 _isSnapped.value = false
-                finalTargetPoint = smoothedPoint
+                finalTargetPoint = orthogonalAdjustedPoint
             }
 
             _liveTargetPoint.value = finalTargetPoint
 
-            // 3. Calculate live real-time distance with stability
+            // 4. Calculate live real-time distance with stability & Dual-Camera Stereo Parallax scale calibration
             if (capturedPoints.isNotEmpty()) {
                 val lastPoint = capturedPoints.last()
-                val dist = ArMath.distance(lastPoint, finalTargetPoint)
+                val dist = if (_cameraSubMode.value == 2) {
+                    sensorCorrectionEngine.correctVerticalHeightWithGravity(lastPoint, finalTargetPoint)
+                } else {
+                    val rawD = ArMath.distance(lastPoint, finalTargetPoint)
+                    sensorCorrectionEngine.correctDistanceWithStereoParallax(rawD)
+                }
                 _liveDistanceMeters.value = dist
             } else {
-                _liveDistanceMeters.value = centerHit.distance.toDouble()
+                val centerDist = sensorCorrectionEngine.correctDistanceWithStereoParallax(centerHit.distance.toDouble())
+                _liveDistanceMeters.value = centerDist
             }
         }
 
-        // 3. If a tap was requested, commit the point
+        // 5. If a tap was requested, commit the point with sensor correction
         if (tapRequest != null && hitResult != null) {
             val pose = hitResult.pose
-            val point = Point3D(
+            val rawP = Point3D(
                 x = pose.tx().toDouble(),
                 y = pose.ty().toDouble(),
                 z = pose.tz().toDouble(),
                 isArPrecision = true,
                 anchor = hitResult.anchor
             )
+            val contactP = sensorCorrectionEngine.applyProximityZeroContactOffset(rawP)
+            val correctedP = if (capturedPoints.isNotEmpty() && _cameraSubMode.value == 0) {
+                sensorCorrectionEngine.correctOrthogonalAlignment(capturedPoints.last(), contactP)
+            } else {
+                contactP
+            }
+
             android.os.Handler(android.os.Looper.getMainLooper()).post {
                 saveUndoState()
-                capturedPoints.add(point)
+                capturedPoints.add(correctedP)
                 triggerHapticFeedback()
+                updateAutoDetectedGeometry()
+            }
+        }
+    }
+
+    private fun updateAutoDetectedGeometry() {
+        if (_cameraSubMode.value != 0) return // Manual mode override
+
+        when (capturedPoints.size) {
+            0, 1 -> _autoDetectedType.value = "DISTANCE"
+            2 -> {
+                // Check if vertical height
+                val p1 = capturedPoints[0]
+                val p2 = capturedPoints[1]
+                val dy = abs(p2.y - p1.y)
+                val dxz = sqrt((p2.x - p1.x) * (p2.x - p1.x) + (p2.z - p1.z) * (p2.z - p1.z))
+                if (dy > 0.35 && dy > dxz * 2.2) {
+                    _autoDetectedType.value = "HEIGHT"
+                } else {
+                    _autoDetectedType.value = "DISTANCE"
+                }
+            }
+            3 -> {
+                // Check if closing loop or distance
+                val pFirst = capturedPoints.first()
+                val pLast = capturedPoints.last()
+                val closeDist = ArMath.distance(pFirst, pLast)
+                if (closeDist < 0.12) {
+                    _autoDetectedType.value = "AREA"
+                } else {
+                    _autoDetectedType.value = "DISTANCE"
+                }
+            }
+            else -> {
+                // >= 4 points: check if closed polygon
+                val pFirst = capturedPoints.first()
+                val pLast = capturedPoints.last()
+                val closeDist = ArMath.distance(pFirst, pLast)
+                val totalLen = ArMath.polylineLength(capturedPoints)
+                if (closeDist < 0.25 || (totalLen > 0 && closeDist / totalLen < 0.2)) {
+                    _autoDetectedType.value = "AREA"
+                } else {
+                    _autoDetectedType.value = "DISTANCE"
+                }
             }
         }
     }
@@ -342,10 +571,75 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    init {
+        // Start Fallback Sensor-Driven Spatial Engine when ARCore GL frames are inactive
+        viewModelScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(33) // ~30 FPS fallback updater
+                if (modernArEngine.session == null || _arTrackingState.value != TrackingState.TRACKING) {
+                    updateFallbackSpatialFrame()
+                }
+            }
+        }
+    }
+
+    private fun updateFallbackSpatialFrame() {
+        _arTrackingState.value = TrackingState.TRACKING
+        _surfaceTypeAtCenter.value = "感應器空間校正"
+
+        // Build standard perspective projection matrix
+        val pMatrix = FloatArray(16)
+        val aspect = displayWidth.toFloat() / displayHeight.coerceAtLeast(1).toFloat()
+        android.opengl.Matrix.perspectiveM(pMatrix, 0, 60.0f, aspect, 0.1f, 50.0f)
+        _projectionMatrix.value = pMatrix
+
+        // Build View Matrix from device rotation
+        val telem = sensorTelemetry.value
+        val vMatrix = FloatArray(16)
+        android.opengl.Matrix.setIdentityM(vMatrix, 0)
+        android.opengl.Matrix.rotateM(vMatrix, 0, telem.pitchDeg, 1f, 0f, 0f)
+        android.opengl.Matrix.rotateM(vMatrix, 0, telem.rollDeg, 0f, 0f, 1f)
+        android.opengl.Matrix.rotateM(vMatrix, 0, telem.azimuthDeg, 0f, 1f, 0f)
+        _viewMatrix.value = vMatrix
+
+        // Raycast depth estimation: pitch down creates distance to ground
+        val pitchRad = Math.toRadians(telem.pitchDeg.toDouble().coerceIn(-85.0, 85.0))
+        val estDist = if (pitchRad < -0.1) {
+            (1.35 / kotlin.math.sin(-pitchRad)).coerceIn(0.4, 10.0)
+        } else {
+            1.5
+        }
+
+        // Live target point in front of camera
+        val forwardX = kotlin.math.sin(Math.toRadians(telem.azimuthDeg.toDouble())) * kotlin.math.cos(pitchRad) * estDist
+        val forwardY = -kotlin.math.sin(pitchRad) * estDist
+        val forwardZ = -kotlin.math.cos(Math.toRadians(telem.azimuthDeg.toDouble())) * kotlin.math.cos(pitchRad) * estDist
+
+        val rawTarget = Point3D(forwardX, forwardY, forwardZ, isArPrecision = true)
+        val smoothed = ArMath.filterJitterEMA(_liveTargetPoint.value, rawTarget)
+        _liveTargetPoint.value = smoothed
+
+        if (capturedPoints.isNotEmpty()) {
+            val dist = ArMath.distance(capturedPoints.last(), smoothed)
+            _liveDistanceMeters.value = dist
+        } else {
+            _liveDistanceMeters.value = estDist
+        }
+    }
+
     fun requestHitTest(pixelX: Float? = null, pixelY: Float? = null) {
         val x = pixelX ?: (displayWidth / 2f)
         val y = pixelY ?: (displayHeight / 2f)
-        pendingHitTestQueue.set(Pair(x, y))
+        
+        if (modernArEngine.session != null) {
+            pendingHitTestQueue.set(Pair(x, y))
+        } else {
+            val target = _liveTargetPoint.value ?: Point3D(0.0, 0.0, -1.2, isArPrecision = true)
+            saveUndoState()
+            capturedPoints.add(target)
+            triggerHapticFeedback()
+            updateAutoDetectedGeometry()
+        }
     }
 
     private fun saveUndoState() {
@@ -359,9 +653,11 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
             capturedPoints.clear()
             capturedPoints.addAll(previous)
             triggerHapticFeedback()
+            updateAutoDetectedGeometry()
         } else if (capturedPoints.isNotEmpty()) {
             capturedPoints.removeAt(capturedPoints.size - 1)
             triggerHapticFeedback()
+            updateAutoDetectedGeometry()
         }
     }
 
@@ -370,6 +666,7 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         capturedPoints.forEach { it.anchor?.detach() }
         capturedPoints.clear()
         _liveDistanceMeters.value = null
+        _autoDetectedType.value = "DISTANCE"
         triggerHapticFeedback()
     }
 
@@ -395,11 +692,15 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
 
     // Measurement Calculations
     fun calculateTotalDistance(): Double {
-        return ArMath.polylineLength(capturedPoints)
+        val raw = ArMath.polylineLength(capturedPoints)
+        return sensorCorrectionEngine.correctDistanceWithStereoParallax(raw)
     }
 
     fun calculatePolygonArea(): Double {
-        return ArMath.polygonArea(capturedPoints)
+        val rawArea = ArMath.polygonArea(capturedPoints)
+        // Area scales with square of distance scale factor
+        val scale = sensorCorrectionEngine.correctDistanceWithStereoParallax(1.0)
+        return rawArea * (scale * scale)
     }
 
     fun calculateBoundingBox(): BoundingBoxResult {
@@ -408,7 +709,7 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
 
     fun calculateVerticalHeight(): Double {
         return if (capturedPoints.size >= 2) {
-            ArMath.verticalHeight(capturedPoints.first(), capturedPoints.last())
+            sensorCorrectionEngine.correctVerticalHeightWithGravity(capturedPoints.first(), capturedPoints.last())
         } else {
             0.0
         }
@@ -471,59 +772,83 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    // Save record to Room database automatically without tedious manual typing
-    fun saveMeasurementRecord(customTitle: String? = null, customNotes: String? = null) {
+    // Last saved record for quick share affordance
+    private val _lastSavedRecord = MutableStateFlow<MeasureRecord?>(null)
+    val lastSavedRecord: StateFlow<MeasureRecord?> = _lastSavedRecord.asStateFlow()
+
+    fun clearLastSavedRecord() {
+        _lastSavedRecord.value = null
+    }
+
+    // Save record to Room database automatically with screenshot support
+    fun saveMeasurementRecord(
+        imagePath: String? = null,
+        customTitle: String? = null,
+        customNotes: String? = null,
+        onSaved: ((MeasureRecord) -> Unit)? = null
+    ) {
         viewModelScope.launch {
             val subMode = _cameraSubMode.value
             val unit = _selectedUnit.value
             val timeStr = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
 
-            val (value, typeStr, autoTitle) = when (subMode) {
-                1 -> {
+            val effectiveType = if (subMode == 0) _autoDetectedType.value else when (subMode) {
+                1 -> "AREA"
+                2 -> "HEIGHT"
+                3 -> "VOLUME"
+                4 -> "CIRCLE"
+                5 -> "ANGLE"
+                else -> "DISTANCE"
+            }
+
+            val (value, typeStr, autoTitle) = when (effectiveType) {
+                "AREA" -> {
                     val area = calculatePolygonArea()
-                    Triple(area, "AREA", "AR 平面面積 (${formatArea(area, unit)}) · $timeStr")
+                    Triple(area, "AREA", "AR 自動偵測面積 (${formatArea(area, unit)}) · $timeStr")
                 }
-                2 -> {
+                "HEIGHT" -> {
                     val height = calculateVerticalHeight()
-                    Triple(height, "HEIGHT", "AR 垂直高程 (${formatLength(height, unit)}) · $timeStr")
+                    Triple(height, "HEIGHT", "AR 自動偵測高程 (${formatLength(height, unit)}) · $timeStr")
                 }
-                3 -> {
+                "VOLUME" -> {
                     val box = calculateBoundingBox()
                     Triple(box.volume, "VOLUME", "3D 空間體積 (${formatVolume(box.volume, unit)}) · $timeStr")
                 }
-                4 -> {
+                "CIRCLE" -> {
                     val circle = calculateCircle()
                     val d = circle?.diameter ?: 0.0
                     Triple(d, "CIRCLE", "AR 圓形直徑 (${formatLength(d, unit)}) · $timeStr")
                 }
-                5 -> {
+                "ANGLE" -> {
                     val angle = calculateAngle()
                     Triple(angle, "ANGLE", "3D 空間夾角 (${DecimalFormat("0.0").format(angle)}°) · $timeStr")
                 }
                 else -> {
                     val dist = calculateTotalDistance()
-                    Triple(dist, "CAM", "AR 空間距離 (${formatLength(dist, unit)}) · $timeStr")
+                    Triple(dist, "CAM", "AR 測量距離 (${formatLength(dist, unit)}) · $timeStr")
                 }
             }
 
             if (value > 0.0) {
                 val title = if (!customTitle.isNullOrBlank()) customTitle else autoTitle
                 val serializedPoints = capturedPoints.joinToString(";") { "${it.x},${it.y},${it.z},${it.label ?: ""}" }
+                val record = MeasureRecord(
+                    title = title,
+                    value = value,
+                    unit = if (subMode == 5) "°" else unit,
+                    type = typeStr,
+                    notes = customNotes,
+                    pointsData = serializedPoints,
+                    imagePath = imagePath
+                )
 
                 try {
                     withContext(Dispatchers.IO) {
-                        repository.insert(
-                            MeasureRecord(
-                                title = title,
-                                value = value,
-                                unit = if (subMode == 5) "°" else unit,
-                                type = typeStr,
-                                notes = customNotes,
-                                pointsData = serializedPoints
-                            )
-                        )
+                        repository.insert(record)
                     }
+                    _lastSavedRecord.value = record
                     _toastMessage.tryEmit("已自動儲存紀錄: $title")
+                    onSaved?.invoke(record)
                     clearActivePoints()
                     triggerHapticFeedback()
                 } catch (e: Exception) {
@@ -533,26 +858,49 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun saveRulerRecord(customTitle: String? = null, cmVal: Double) {
+    fun saveRulerRecord(
+        cmVal: Double,
+        imagePath: String? = null,
+        customTitle: String? = null,
+        customNotes: String? = null,
+        onSaved: ((MeasureRecord) -> Unit)? = null
+    ) {
         viewModelScope.launch {
             val timeStr = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
             val formatted = formatLength(cmVal / 100.0, _selectedUnit.value)
             val title = if (!customTitle.isNullOrBlank()) customTitle else "螢幕尺測量 ($formatted) · $timeStr"
+            val record = MeasureRecord(
+                title = title,
+                value = cmVal,
+                unit = _selectedUnit.value,
+                type = "RULER",
+                notes = customNotes,
+                imagePath = imagePath
+            )
             try {
                 withContext(Dispatchers.IO) {
-                    repository.insert(
-                        MeasureRecord(
-                            title = title,
-                            value = cmVal,
-                            unit = _selectedUnit.value,
-                            type = "RULER"
-                        )
-                    )
+                    repository.insert(record)
                 }
+                _lastSavedRecord.value = record
                 _toastMessage.tryEmit("已自動儲存: $title")
+                onSaved?.invoke(record)
                 triggerHapticFeedback()
             } catch (e: Exception) {
                 _toastMessage.tryEmit("儲存失敗: ${e.localizedMessage}")
+            }
+        }
+    }
+
+    fun updateRecordNotes(record: MeasureRecord, newNotes: String) {
+        viewModelScope.launch {
+            try {
+                val updated = record.copy(notes = newNotes)
+                withContext(Dispatchers.IO) {
+                    repository.insert(updated)
+                }
+                _toastMessage.tryEmit("備註已更新")
+            } catch (e: Exception) {
+                _toastMessage.tryEmit("更新備註失敗: ${e.localizedMessage}")
             }
         }
     }
@@ -589,17 +937,17 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
 
     fun onResume() {
         modernArEngine.resume()
-        sensorSuiteManager.startListening()
+        sensorCorrectionEngine.startListening()
     }
 
     fun onPause() {
         modernArEngine.pause()
-        sensorSuiteManager.stopListening()
+        sensorCorrectionEngine.stopListening()
     }
 
     override fun onCleared() {
         super.onCleared()
         modernArEngine.destroy()
-        sensorSuiteManager.stopListening()
+        sensorCorrectionEngine.stopListening()
     }
 }

@@ -64,22 +64,46 @@ class ModernArEngine(private val context: Context) {
     var isSupported: Boolean = false
         private set
 
+    var is60FpsActive: Boolean = false
+        private set
+
     /**
-     * Check device compatibility and create configured ARCore Session.
+     * Check device compatibility and create configured ARCore Session safely.
      */
     fun createSession(): Session? {
         if (session != null) return session
 
         try {
-            val availability = ArCoreApk.getInstance().checkAvailability(context)
+            // Check availability without throwing
+            val availability = try {
+                ArCoreApk.getInstance().checkAvailability(context)
+            } catch (t: Throwable) {
+                Log.w("ModernArEngine", "ARCore checkAvailability unavailable: ${t.message}")
+                ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE
+            }
+
+            if (availability == ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE ||
+                availability == ArCoreApk.Availability.UNKNOWN_ERROR ||
+                availability == ArCoreApk.Availability.UNKNOWN_TIMED_OUT) {
+                Log.w("ModernArEngine", "ARCore is not supported on this device ($availability). Activating CameraX Precision Fallback.")
+                isSupported = false
+                return null
+            }
+
             if (!availability.isSupported) {
-                Log.w("ModernArEngine", "ARCore is not supported on this device.")
+                Log.w("ModernArEngine", "ARCore APK not installed or not supported ($availability). Activating CameraX Fallback.")
                 isSupported = false
                 return null
             }
 
             isSupported = true
-            val sessionInstance = Session(context)
+            val sessionInstance = try {
+                Session(context)
+            } catch (t: Throwable) {
+                Log.w("ModernArEngine", "ARCore Session instantiation failed: ${t.message}. Falling back to CameraX.")
+                isSupported = false
+                return null
+            }
             session = sessionInstance
 
             // Configure 60 FPS Target Camera if supported
@@ -89,9 +113,14 @@ class ModernArEngine(private val context: Context) {
                 val cameraConfigs = sessionInstance.getSupportedCameraConfigs(filter)
                 if (cameraConfigs.isNotEmpty()) {
                     sessionInstance.setCameraConfig(cameraConfigs[0])
-                    Log.i("ModernArEngine", "ARCore configured for 60 FPS target.")
+                    is60FpsActive = true
+                    Log.i("ModernArEngine", "ARCore configured for 60 FPS high-refresh mode.")
+                } else {
+                    is60FpsActive = false
+                    Log.i("ModernArEngine", "ARCore 60 FPS not supported on this device sensor, using default FPS config.")
                 }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
+                is60FpsActive = false
                 Log.w("ModernArEngine", "60 FPS config filter unavailable, using default camera config: ${e.message}")
             }
 
@@ -106,14 +135,18 @@ class ModernArEngine(private val context: Context) {
                 try {
                     instantPlacementMode = Config.InstantPlacementMode.LOCAL_Y_UP
                     Log.i("ModernArEngine", "Instant Placement Mode enabled.")
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     Log.w("ModernArEngine", "Instant Placement not supported: ${e.message}")
                 }
 
                 // Enable Depth API if device hardware supports it
-                if (sessionInstance.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
-                    depthMode = Config.DepthMode.AUTOMATIC
-                    Log.i("ModernArEngine", "Automatic Depth Mode enabled.")
+                try {
+                    if (sessionInstance.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
+                        depthMode = Config.DepthMode.AUTOMATIC
+                        Log.i("ModernArEngine", "Automatic Depth Mode enabled.")
+                    }
+                } catch (e: Throwable) {
+                    Log.w("ModernArEngine", "Depth mode check unavailable: ${e.message}")
                 }
             }
 
@@ -122,8 +155,9 @@ class ModernArEngine(private val context: Context) {
             sessionInstance.resume()
 
             return sessionInstance
-        } catch (e: Exception) {
-            Log.e("ModernArEngine", "Failed to create ARCore session", e)
+        } catch (t: Throwable) {
+            Log.w("ModernArEngine", "Fallback to CameraX Sensor Engine: ${t.message}")
+            isSupported = false
             return null
         }
     }

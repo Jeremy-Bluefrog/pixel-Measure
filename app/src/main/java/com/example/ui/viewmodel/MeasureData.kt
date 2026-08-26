@@ -1,10 +1,13 @@
 package com.example.ui.viewmodel
 
 import com.google.ar.core.Anchor
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 /**
  * Modern 3D Point model representing spatial coordinates in meters with optional AR anchor.
  */
+@Serializable
 data class Point3D(
     val x: Double = 0.0,
     val y: Double = 0.0,

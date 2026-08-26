@@ -22,12 +22,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.data.model.MeasureRecord
+import com.example.logic.ShareUtility
 import com.example.logic.TranslationManager
 import com.example.ui.components.ModernArCameraView
 import com.example.ui.components.RulerComponent
-import com.example.ui.components.SensorSuiteComponent
 import com.example.ui.viewmodel.MeasureViewModel
+import java.io.File
 import java.text.DecimalFormat
 import java.text.SimpleDateFormat
 import java.util.*
@@ -43,6 +45,9 @@ fun MainScreen(viewModel: MeasureViewModel) {
     var showHistorySheet by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showUnitMenu by remember { mutableStateOf(false) }
+    var selectedRecordForDetail by remember { mutableStateOf<MeasureRecord?>(null) }
+    val lastSavedRecord by viewModel.lastSavedRecord.collectAsState()
+    val context = LocalContext.current
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -141,35 +146,6 @@ fun MainScreen(viewModel: MeasureViewModel) {
                         containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
                     )
                 )
-            } else if (currentMode == 2) {
-                CenterAlignedTopAppBar(
-                    title = {
-                        Text(
-                            text = "感應器儀表箱",
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                    },
-                    actions = {
-                        IconButton(onClick = { showHistorySheet = true }) {
-                            Icon(
-                                Icons.Rounded.History,
-                                contentDescription = "歷史記錄",
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                        IconButton(onClick = { showSettingsDialog = true }) {
-                            Icon(
-                                Icons.Rounded.Settings,
-                                contentDescription = "設定",
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    },
-                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
-                    )
-                )
             }
         },
         bottomBar = {
@@ -188,12 +164,6 @@ fun MainScreen(viewModel: MeasureViewModel) {
                     onClick = { viewModel.setMode(1) },
                     icon = { Icon(Icons.Rounded.Straighten, contentDescription = "螢幕尺") },
                     label = { Text("螢幕尺", fontWeight = if (currentMode == 1) FontWeight.Bold else FontWeight.Normal) }
-                )
-                NavigationBarItem(
-                    selected = currentMode == 2,
-                    onClick = { viewModel.setMode(2) },
-                    icon = { Icon(Icons.Rounded.Sensors, contentDescription = "感應器") },
-                    label = { Text("感應器", fontWeight = if (currentMode == 2) FontWeight.Bold else FontWeight.Normal) }
                 )
             }
         }
@@ -216,14 +186,91 @@ fun MainScreen(viewModel: MeasureViewModel) {
                         onShowHistoryClick = { showHistorySheet = true },
                         onShowSettingsClick = { showSettingsDialog = true }
                     )
-                    1 -> RulerComponent(
+                    else -> RulerComponent(
                         viewModel = viewModel,
                         onShowHistoryClick = { showHistorySheet = true }
                     )
-                    else -> SensorSuiteComponent(
-                        viewModel = viewModel,
-                        onShowHistoryClick = { showHistorySheet = true }
-                    )
+                }
+            }
+
+            // Quick Floating Share Banner when a record is newly saved
+            AnimatedVisibility(
+                visible = lastSavedRecord != null,
+                enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 85.dp, start = 16.dp, end = 16.dp)
+            ) {
+                lastSavedRecord?.let { saved ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        shape = RoundedCornerShape(20.dp),
+                        shadowElevation = 8.dp,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(
+                                    Icons.Rounded.CheckCircle,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Column {
+                                    Text(
+                                        text = "已儲存測量截圖與紀錄",
+                                        fontWeight = FontWeight.Bold,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Text(
+                                        text = saved.title,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Button(
+                                    onClick = {
+                                        ShareUtility.shareRecord(context, saved)
+                                        viewModel.clearLastSavedRecord()
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.primary,
+                                        contentColor = MaterialTheme.colorScheme.onPrimary
+                                    ),
+                                    shape = RoundedCornerShape(12.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(Icons.Rounded.Share, null, Modifier.size(16.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("分享", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                }
+
+                                IconButton(
+                                    onClick = { viewModel.clearLastSavedRecord() },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(Icons.Rounded.Close, contentDescription = "關閉", modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -238,9 +285,21 @@ fun MainScreen(viewModel: MeasureViewModel) {
             HistorySheetContent(
                 records = savedRecords,
                 viewModel = viewModel,
+                onSelectRecord = { record ->
+                    selectedRecordForDetail = record
+                },
                 onClose = { showHistorySheet = false }
             )
         }
+    }
+
+    // Record Detail & Sharing Dialog
+    selectedRecordForDetail?.let { record ->
+        RecordDetailDialog(
+            record = record,
+            viewModel = viewModel,
+            onDismiss = { selectedRecordForDetail = null }
+        )
     }
 
     // Settings Dialog
@@ -256,10 +315,12 @@ fun MainScreen(viewModel: MeasureViewModel) {
 fun HistorySheetContent(
     records: List<MeasureRecord>,
     viewModel: MeasureViewModel,
+    onSelectRecord: (MeasureRecord) -> Unit,
     onClose: () -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var showClearConfirm by remember { mutableStateOf(false) }
+    val context = LocalContext.current
 
     val filteredRecords = remember(records, searchQuery) {
         if (searchQuery.isBlank()) records
@@ -274,7 +335,7 @@ fun HistorySheetContent(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 8.dp)
+            .padding(horizontal = 20.dp, vertical = 8.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -299,19 +360,19 @@ fun HistorySheetContent(
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
         OutlinedTextField(
             value = searchQuery,
             onValueChange = { searchQuery = it },
-            placeholder = { Text("搜尋測量紀錄...") },
+            placeholder = { Text("搜尋測量紀錄與備註...") },
             leadingIcon = { Icon(Icons.Rounded.Search, null) },
             singleLine = true,
             shape = RoundedCornerShape(16.dp),
             modifier = Modifier.fillMaxWidth()
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
         if (filteredRecords.isEmpty()) {
             Box(
@@ -329,26 +390,66 @@ fun HistorySheetContent(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 420.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                    .heightIn(max = 440.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(filteredRecords, key = { it.id }) { record ->
                     Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                        shape = RoundedCornerShape(18.dp),
+                        onClick = { onSelectRecord(record) },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(16.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                                .padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
+                            // Thumbnail / Screenshot Image Box
+                            Box(
+                                modifier = Modifier
+                                    .size(72.dp)
+                                    .background(
+                                        MaterialTheme.colorScheme.surfaceVariant,
+                                        RoundedCornerShape(12.dp)
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                val hasImage = !record.imagePath.isNullOrBlank() && File(record.imagePath).exists()
+                                if (hasImage) {
+                                    AsyncImage(
+                                        model = File(record.imagePath!!),
+                                        contentDescription = "測量截圖",
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(Color.Black, RoundedCornerShape(12.dp)),
+                                        contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = when (record.type) {
+                                            "AREA" -> Icons.Rounded.SquareFoot
+                                            "HEIGHT" -> Icons.Rounded.Height
+                                            "VOLUME" -> Icons.Rounded.ViewInAr
+                                            "CIRCLE" -> Icons.Rounded.Adjust
+                                            "ANGLE" -> Icons.Rounded.Architecture
+                                            "RULER" -> Icons.Rounded.Straighten
+                                            else -> Icons.Rounded.LinearScale
+                                        },
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(32.dp)
+                                    )
+                                }
+                            }
+
+                            // Middle Info Column
                             Column(modifier = Modifier.weight(1f)) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
                                     Surface(
                                         color = MaterialTheme.colorScheme.primaryContainer,
@@ -362,12 +463,7 @@ fun HistorySheetContent(
                                                 "CIRCLE" -> "圓形直徑"
                                                 "ANGLE" -> "空間夾角"
                                                 "RULER" -> "螢幕尺"
-                                                "LEVEL" -> "水平儀"
-                                                "COMPASS" -> "羅盤"
-                                                "BAROMETER" -> "氣壓"
-                                                "LIGHT" -> "照度"
-                                                "ACCEL" -> "加速度"
-                                                else -> "長度"
+                                                else -> "距離"
                                             },
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
@@ -377,36 +473,35 @@ fun HistorySheetContent(
                                     }
                                     Text(
                                         text = record.title,
-                                        style = MaterialTheme.typography.titleMedium,
+                                        style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.Bold,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
                                 }
 
-                                Spacer(modifier = Modifier.height(4.dp))
+                                Spacer(modifier = Modifier.height(2.dp))
 
                                 val formattedVal = when (record.type) {
                                     "AREA" -> viewModel.formatArea(record.value, record.unit)
                                     "VOLUME" -> viewModel.formatVolume(record.value, record.unit)
-                                    "ANGLE", "LEVEL", "COMPASS" -> "${DecimalFormat("0.0").format(record.value)}${record.unit}"
-                                    "BAROMETER" -> "${DecimalFormat("#,##0.0").format(record.value)} ${record.unit}"
-                                    "LIGHT" -> "${DecimalFormat("#,##0").format(record.value)} ${record.unit}"
-                                    "ACCEL" -> "${DecimalFormat("0.00").format(record.value)} ${record.unit}"
+                                    "ANGLE" -> "${DecimalFormat("0.0").format(record.value)}°"
                                     else -> viewModel.formatLength(record.value, record.unit)
                                 }
                                 Text(
                                     text = formattedVal,
-                                    style = MaterialTheme.typography.headlineSmall,
+                                    style = MaterialTheme.typography.titleLarge,
                                     fontWeight = FontWeight.Black,
                                     color = MaterialTheme.colorScheme.primary
                                 )
 
                                 if (!record.notes.isNullOrBlank()) {
                                     Text(
-                                        text = record.notes,
+                                        text = "📝 ${record.notes}",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
 
@@ -417,21 +512,41 @@ fun HistorySheetContent(
                                 )
                             }
 
-                            IconButton(
-                                onClick = { viewModel.deleteRecord(record) }
+                            // Right Action: Quick Share & Delete
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
-                                Icon(
-                                    Icons.Rounded.DeleteOutline,
-                                    contentDescription = "刪除",
-                                    tint = MaterialTheme.colorScheme.error
-                                )
+                                IconButton(
+                                    onClick = { ShareUtility.shareRecord(context, record) },
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.Share,
+                                        contentDescription = "分享",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = { viewModel.deleteRecord(record) },
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.DeleteOutline,
+                                        contentDescription = "刪除",
+                                        tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
         }
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(20.dp))
     }
 
     if (showClearConfirm) {
@@ -457,6 +572,251 @@ fun HistorySheetContent(
             }
         )
     }
+}
+
+@Composable
+fun RecordDetailDialog(
+    record: MeasureRecord,
+    viewModel: MeasureViewModel,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    var notesText by remember(record) { mutableStateOf(record.notes ?: "") }
+    var isEditingNotes by remember { mutableStateOf(false) }
+    val dateFormat = remember { SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.getDefault()) }
+    val hasImage = !record.imagePath.isNullOrBlank() && File(record.imagePath).exists()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        Icons.Rounded.Analytics,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "測量詳情與分享",
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+                IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Rounded.Close, contentDescription = "關閉")
+                }
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                // Screenshot Preview
+                if (hasImage) {
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        shadowElevation = 4.dp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp)
+                    ) {
+                        AsyncImage(
+                            model = File(record.imagePath!!),
+                            contentDescription = "測量現場截圖",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                        )
+                    }
+                }
+
+                // Measurement Title & Value Banner
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = record.title,
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium
+                        )
+
+                        val formattedVal = when (record.type) {
+                            "AREA" -> viewModel.formatArea(record.value, record.unit)
+                            "VOLUME" -> viewModel.formatVolume(record.value, record.unit)
+                            "ANGLE" -> "${DecimalFormat("0.0").format(record.value)}°"
+                            else -> viewModel.formatLength(record.value, record.unit)
+                        }
+                        Text(
+                            text = formattedVal,
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Black,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+
+                        Text(
+                            text = "⏱️ 時間: ${dateFormat.format(Date(record.timestamp))}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                // Notes Section (Editable)
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "📝 備註資訊",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        if (!isEditingNotes) {
+                            TextButton(
+                                onClick = { isEditingNotes = true },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text("編輯")
+                            }
+                        }
+                    }
+
+                    if (isEditingNotes) {
+                        OutlinedTextField(
+                            value = notesText,
+                            onValueChange = { notesText = it },
+                            placeholder = { Text("新增備註 (如：客廳沙發、餐桌長度)...") },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(onClick = { isEditingNotes = false }) {
+                                Text("取消")
+                            }
+                            Button(
+                                onClick = {
+                                    viewModel.updateRecordNotes(record, notesText)
+                                    isEditingNotes = false
+                                },
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text("儲存備註")
+                            }
+                        }
+                    } else {
+                        Text(
+                            text = if (notesText.isNotBlank()) notesText else "無備註內容",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (notesText.isNotBlank()) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    }
+                }
+
+                HorizontalDivider()
+
+                // Share Buttons Section
+                Text(
+                    text = "📤 分享與匯出",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold
+                )
+
+                // Primary Share: Messaging apps (LINE, WhatsApp, Telegram, etc.)
+                Button(
+                    onClick = { ShareUtility.shareRecord(context, record) },
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Rounded.Share, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("分享至即時通訊 / 社群 (LINE, WhatsApp...)", fontWeight = FontWeight.Bold)
+                }
+
+                // Secondary Row: Email & PDF Report
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilledTonalButton(
+                        onClick = { ShareUtility.shareViaEmail(context, record) },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Rounded.Mail, null, Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("電子郵件", fontSize = 13.sp)
+                    }
+
+                    FilledTonalButton(
+                        onClick = { ShareUtility.sharePdfReport(context, record) },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Rounded.PictureAsPdf, null, Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("PDF 報告", fontSize = 13.sp)
+                    }
+                }
+
+                // Tertiary Row: Copy text & Delete
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { ShareUtility.copyToClipboard(context, record) },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Rounded.ContentCopy, null, Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("複製文字", fontSize = 13.sp)
+                    }
+
+                    OutlinedButton(
+                        onClick = {
+                            viewModel.deleteRecord(record)
+                            onDismiss()
+                        },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Rounded.Delete, null, Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("刪除紀錄", fontSize = 13.sp)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("完成")
+            }
+        }
+    )
 }
 
 @Composable
@@ -548,6 +908,124 @@ fun SettingsDialog(
                         checked = showPointCloud,
                         onCheckedChange = { viewModel.setShowPointCloud(it) }
                     )
+                }
+
+                // Multi-Sensor Fusion Settings Group
+                val sensorCorrectionEnabled by viewModel.sensorCorrectionEnabled.collectAsState()
+                val antiJitterEnabled by viewModel.antiJitterEnabled.collectAsState()
+                val gravityAlignmentEnabled by viewModel.gravityAlignmentEnabled.collectAsState()
+                val barometerFusionEnabled by viewModel.barometerFusionEnabled.collectAsState()
+                val jerkRejectionEnabled by viewModel.jerkRejectionEnabled.collectAsState()
+                val proximityContactEnabled by viewModel.proximityContactEnabled.collectAsState()
+                val stereoParallaxEnabled by viewModel.stereoParallaxEnabled.collectAsState()
+
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Rounded.Sensors, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("多感應器融合校正", fontWeight = FontWeight.Bold)
+                            }
+                            Text(
+                                "運用重力、陀螺儀、氣壓計、近接感應器與雙鏡頭視差即時校準",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = sensorCorrectionEnabled,
+                            onCheckedChange = { viewModel.setSensorCorrectionEnabled(it) }
+                        )
+                    }
+
+                    if (sensorCorrectionEnabled) {
+                        Spacer(Modifier.height(10.dp))
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("陀螺儀防手震濾波", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                Switch(
+                                    checked = antiJitterEnabled,
+                                    onCheckedChange = { viewModel.setAntiJitterEnabled(it) },
+                                    modifier = Modifier.height(24.dp)
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("重力向量垂直/水平校準", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                Switch(
+                                    checked = gravityAlignmentEnabled,
+                                    onCheckedChange = { viewModel.setGravityAlignmentEnabled(it) },
+                                    modifier = Modifier.height(24.dp)
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("氣壓計高度融合", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                Switch(
+                                    checked = barometerFusionEnabled,
+                                    onCheckedChange = { viewModel.setBarometerFusionEnabled(it) },
+                                    modifier = Modifier.height(24.dp)
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("近接感應器貼面零點校準", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                Switch(
+                                    checked = proximityContactEnabled,
+                                    onCheckedChange = { viewModel.setProximityContactEnabled(it) },
+                                    modifier = Modifier.height(24.dp)
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("雙鏡頭同步視差尺度校正", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                Switch(
+                                    checked = stereoParallaxEnabled,
+                                    onCheckedChange = { viewModel.setStereoParallaxEnabled(it) },
+                                    modifier = Modifier.height(24.dp)
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("突發加速度防誤觸", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                Switch(
+                                    checked = jerkRejectionEnabled,
+                                    onCheckedChange = { viewModel.setJerkRejectionEnabled(it) },
+                                    modifier = Modifier.height(24.dp)
+                                )
+                            }
+                        }
+                    }
                 }
 
                 HorizontalDivider()

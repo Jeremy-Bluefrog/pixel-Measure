@@ -24,9 +24,11 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.logic.ShareUtility
 import com.example.ui.viewmodel.MeasureViewModel
 import kotlin.math.abs
 
@@ -40,6 +42,7 @@ fun RulerComponent(
     onShowHistoryClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val localView = LocalView.current
     val haptic = LocalHapticFeedback.current
     val displayMetrics = context.resources.displayMetrics
     val selectedUnit by viewModel.selectedUnit.collectAsState()
@@ -193,7 +196,9 @@ fun RulerComponent(
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     FilledTonalButton(
                         onClick = {
-                            viewModel.saveRulerRecord(cmVal = measuredCm.toDouble())
+                            ShareUtility.captureViewSnapshot(localView) { path ->
+                                viewModel.saveRulerRecord(cmVal = measuredCm.toDouble(), imagePath = path)
+                            }
                         },
                         shape = RoundedCornerShape(12.dp)
                     ) {

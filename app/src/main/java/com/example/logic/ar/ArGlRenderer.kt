@@ -274,8 +274,8 @@ class ModernArGlView(
                         GLES20.glUseProgram(pointProgram)
 
                         GLES20.glUniformMatrix4fv(pointModelViewProjUniform, 1, false, modelViewProjectionMatrix, 0)
-                        // Google Yellow / Warm Gold soft glowing particles (#FBBC04)
-                        GLES20.glUniform4f(pointColorUniform, 0.984f, 0.737f, 0.016f, 0.85f)
+                        // Dynamic Laser Cyan glowing feature particles (#00E5FF / #38BDF8)
+                        GLES20.glUniform4f(pointColorUniform, 0.0f, 0.898f, 1.0f, 0.85f)
                         GLES20.glUniform1f(pointPointSizeUniform, 9.0f)
 
                         GLES20.glEnableVertexAttribArray(pointPosAttrib)

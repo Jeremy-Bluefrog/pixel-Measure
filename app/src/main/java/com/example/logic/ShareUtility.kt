@@ -1,7 +1,11 @@
 package com.example.logic
 
+import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.graphics.*
 import android.graphics.pdf.PdfDocument
@@ -26,6 +30,202 @@ import java.util.*
 import kotlin.math.*
 
 object ShareUtility {
+
+    private fun findActivity(context: Context): Activity? {
+        var ctx = context
+        while (ctx is ContextWrapper) {
+            if (ctx is Activity) return ctx
+            ctx = ctx.baseContext
+        }
+        return null
+    }
+
+    /**
+     * Captures a screenshot of the specified view and saves it to local app internal storage.
+     * Works seamlessly for both AR Camera views and 2D Ruler views.
+     */
+    fun captureViewSnapshot(view: View, onComplete: (String?) -> Unit) {
+        val activity = findActivity(view.context)
+        val window = activity?.window
+
+        if (view.width <= 0 || view.height <= 0) {
+            onComplete(null)
+            return
+        }
+
+        val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+
+        if (window != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val locationOfViewInWindow = IntArray(2)
+            view.getLocationInWindow(locationOfViewInWindow)
+
+            try {
+                PixelCopy.request(
+                    window,
+                    Rect(
+                        locationOfViewInWindow[0],
+                        locationOfViewInWindow[1],
+                        locationOfViewInWindow[0] + view.width,
+                        locationOfViewInWindow[1] + view.height
+                    ),
+                    bitmap,
+                    { copyResult ->
+                        if (copyResult == PixelCopy.SUCCESS) {
+                            val savedPath = saveBitmapToInternalStorage(view.context, bitmap)
+                            onComplete(savedPath)
+                        } else {
+                            // Fallback to view drawing
+                            val canvas = Canvas(bitmap)
+                            view.draw(canvas)
+                            val savedPath = saveBitmapToInternalStorage(view.context, bitmap)
+                            onComplete(savedPath)
+                        }
+                    },
+                    Handler(Looper.getMainLooper())
+                )
+                return
+            } catch (e: Exception) {
+                // Fallback below
+            }
+        }
+
+        // Standard View Draw fallback
+        try {
+            val canvas = Canvas(bitmap)
+            view.draw(canvas)
+            val savedPath = saveBitmapToInternalStorage(view.context, bitmap)
+            onComplete(savedPath)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            onComplete(null)
+        }
+    }
+
+    private fun saveBitmapToInternalStorage(context: Context, bitmap: Bitmap): String? {
+        return try {
+            val screenshotsDir = File(context.filesDir, "screenshots")
+            if (!screenshotsDir.exists()) screenshotsDir.mkdirs()
+
+            val file = File(screenshotsDir, "measure_snap_${System.currentTimeMillis()}.jpg")
+            FileOutputStream(file).use { out ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)
+                out.flush()
+            }
+            file.absolutePath
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
+    /**
+     * Primary Sharing Handler: Shares the measurement record with formatted text and screenshot attachment
+     * via Android System Share Sheet to Email, Instant Messaging apps (LINE, WhatsApp, Telegram, Messenger), etc.
+     */
+    fun shareRecord(context: Context, record: MeasureRecord) {
+        try {
+            val textReport = formatTextReport(record)
+            val subject = "【AR 測量紀錄】${record.title}"
+
+            var imageUri: Uri? = null
+            if (!record.imagePath.isNullOrBlank()) {
+                val file = File(record.imagePath)
+                if (file.exists()) {
+                    imageUri = FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.fileprovider",
+                        file
+                    )
+                }
+            }
+
+            // If no screenshot exists, generate a sleek blueprint card bitmap
+            if (imageUri == null) {
+                try {
+                    val bitmap = generateMeasurementBitmap(record)
+                    val cacheFile = File(context.cacheDir, "measure_share_${record.id}.jpg")
+                    FileOutputStream(cacheFile).use { out ->
+                        bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                        out.flush()
+                    }
+                    imageUri = FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.fileprovider",
+                        cacheFile
+                    )
+                } catch (e: Exception) {
+                    // Fall back to text only
+                }
+            }
+
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                putExtra(Intent.EXTRA_SUBJECT, subject)
+                putExtra(Intent.EXTRA_TEXT, textReport)
+                if (imageUri != null) {
+                    type = "image/jpeg"
+                    putExtra(Intent.EXTRA_STREAM, imageUri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                } else {
+                    type = "text/plain"
+                }
+            }
+
+            val chooser = Intent.createChooser(intent, "分享測量紀錄至...")
+            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(chooser)
+        } catch (e: Exception) {
+            Toast.makeText(context, "分享失敗: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            e.printStackTrace()
+        }
+    }
+
+    /**
+     * Dedicated Email Share Handler: Pre-fills subject, message body, and screenshot attachment.
+     */
+    fun shareViaEmail(context: Context, record: MeasureRecord) {
+        try {
+            val textReport = formatTextReport(record)
+            val subject = "【AR 測量報告】${record.title}"
+
+            var imageUri: Uri? = null
+            if (!record.imagePath.isNullOrBlank()) {
+                val file = File(record.imagePath)
+                if (file.exists()) {
+                    imageUri = FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.fileprovider",
+                        file
+                    )
+                }
+            }
+
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "message/rfc822"
+                putExtra(Intent.EXTRA_SUBJECT, subject)
+                putExtra(Intent.EXTRA_TEXT, textReport)
+                if (imageUri != null) {
+                    putExtra(Intent.EXTRA_STREAM, imageUri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+            }
+
+            val chooser = Intent.createChooser(intent, "透過電子郵件發送報告")
+            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(chooser)
+        } catch (e: Exception) {
+            shareRecord(context, record)
+        }
+    }
+
+    /**
+     * Copies measurement text report directly to system clipboard.
+     */
+    fun copyToClipboard(context: Context, record: MeasureRecord) {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = ClipData.newPlainText("AR 測量紀錄", formatTextReport(record))
+        clipboard.setPrimaryClip(clip)
+        Toast.makeText(context, "測量紀錄已複製到剪貼簿", Toast.LENGTH_SHORT).show()
+    }
 
     /**
      * Captures a screenshot of the specified view (including SurfaceView like Camera Preview)

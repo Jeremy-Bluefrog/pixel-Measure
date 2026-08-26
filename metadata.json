@@ -1,6 +1,6 @@
 {
   "name": "相機 AR 測量儀",
-  "description": "多功能即時相機測量、螢幕尺子與水平儀工具，採用 Material 3 設計",
+  "description": "多功能即時相機測量與螢幕尺規工具，採用 Material 3 設計",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
