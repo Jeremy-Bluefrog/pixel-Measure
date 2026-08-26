@@ -310,7 +310,11 @@ fun ModernArCameraView(
                                 val preview = previewBuilder.build().also {
                                     it.setSurfaceProvider(previewView.surfaceProvider)
                                 }
-                                val cameraSelector = androidx.camera.core.CameraSelector.DEFAULT_BACK_CAMERA
+                                val cameraSelector = if (cameraProvider.hasCamera(androidx.camera.core.CameraSelector.DEFAULT_BACK_CAMERA)) {
+                                    androidx.camera.core.CameraSelector.DEFAULT_BACK_CAMERA
+                                } else {
+                                    androidx.camera.core.CameraSelector.DEFAULT_FRONT_CAMERA
+                                }
                                 cameraProvider.unbindAll()
                                 cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview)
                             } catch (e: Exception) {

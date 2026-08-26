@@ -74,11 +74,22 @@ class ModernArEngine(private val context: Context) {
         if (session != null) return session
 
         try {
-            // Check availability without throwing
-            val availability = try {
-                ArCoreApk.getInstance().checkAvailability(context)
-            } catch (t: Throwable) {
-                Log.w("ModernArEngine", "ARCore checkAvailability unavailable: ${t.message}")
+            // Check if Play Store is installed to avoid ARCore internal Error Log on devices without Play Store
+            val hasPlayStore = try {
+                context.packageManager.getPackageInfo("com.android.vending", 0)
+                true
+            } catch (e: Exception) {
+                false
+            }
+
+            val availability = if (hasPlayStore) {
+                try {
+                    ArCoreApk.getInstance().checkAvailability(context)
+                } catch (t: Throwable) {
+                    ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE
+                }
+            } else {
+                Log.w("ModernArEngine", "Play Store not found, skipping ARCore availability check.")
                 ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE
             }
 
@@ -90,8 +101,8 @@ class ModernArEngine(private val context: Context) {
                 return null
             }
 
-            if (!availability.isSupported) {
-                Log.w("ModernArEngine", "ARCore APK not installed or not supported ($availability). Activating CameraX Fallback.")
+            if (availability != ArCoreApk.Availability.SUPPORTED_INSTALLED) {
+                Log.w("ModernArEngine", "ARCore APK not installed or not fully supported ($availability). Activating CameraX Fallback.")
                 isSupported = false
                 return null
             }
