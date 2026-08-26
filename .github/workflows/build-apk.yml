@@ -41,10 +41,15 @@ jobs:
 
     - name: 執行 Gradle 編譯 APK
       run: |
-        sed -i 's/-Xmx4g/-Xmx2g/g' gradle.properties || true
-        echo "org.gradle.workers.max=2" >> gradle.properties
-        echo "kotlin.compiler.execution.strategy=in-process" >> gradle.properties
-        gradle :app:assembleDebug --stacktrace --info --no-daemon
+        echo "org.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8" > gradle.properties
+        echo "org.gradle.parallel=false" >> gradle.properties
+        echo "org.gradle.workers.max=1" >> gradle.properties
+        echo "kotlin.daemon.jvmargs=-Xmx1g" >> gradle.properties
+        echo "android.useAndroidX=true" >> gradle.properties
+        echo "android.enableJetifier=true" >> gradle.properties
+        echo "kotlin.code.style=official" >> gradle.properties
+        echo "android.nonTransitiveRClass=true" >> gradle.properties
+        gradle :app:assembleDebug --stacktrace
 
     - name: 更新 APK 至 build-outputs
       continue-on-error: true
