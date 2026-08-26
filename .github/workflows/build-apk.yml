@@ -21,21 +21,29 @@ jobs:
       with:
         java-version: '17'
         distribution: 'temurin'
+        cache: 'gradle'
 
-    - name: 安裝並設定 Gradle
-      uses: gradle/actions/setup-gradle@v4
-
-    - name: 準備環境與金鑰 (Keystore & Env Setup)
+    - name: 準備 Keystore 簽名與環境檔 (.env)
       run: |
         touch .env
+        echo "GEMINI_API_KEY=" >> .env
         if [ -f debug.keystore.base64 ]; then
-          base64 -d debug.keystore.base64 > debug.keystore
+          base64 -d debug.keystore.base64 > debug.keystore || true
+        fi
+        if [ ! -f debug.keystore ]; then
+          keytool -genkey -v -keystore debug.keystore -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
         fi
 
-    - name: 使用 Gradle 自動編譯 APK
+    - name: 設定 Gradle 8.9 (相容 AGP 8.6.1)
+      uses: gradle/actions/setup-gradle@v3
+      with:
+        gradle-version: '8.9'
+
+    - name: 執行 Gradle 編譯 APK
       run: gradle :app:assembleDebug --stacktrace --no-daemon
 
-    - name: 將編譯好的 APK 自動發布並更新到 build-outputs
+    - name: 更新 APK 至 build-outputs
+      continue-on-error: true
       run: |
         git config --global user.name "github-actions[bot]"
         git config --global user.email "github-actions[bot]@users.noreply.github.com"
