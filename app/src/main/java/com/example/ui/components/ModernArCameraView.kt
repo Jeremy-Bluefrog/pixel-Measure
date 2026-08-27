@@ -95,6 +95,7 @@ fun ModernArCameraView(
     val isAiTileAnalyzing by viewModel.isAiTileAnalyzing.collectAsState()
     val detectedTiles by viewModel.detectedTiles.collectAsState()
     val selectedTileForDetail by viewModel.selectedTileForDetail.collectAsState()
+    val activeTilePreset by viewModel.activeTilePreset.collectAsState()
 
     // Touch ripple visual pings
     val pings = remember { mutableStateListOf<Pair<Offset, Animatable<Float, AnimationVector1D>>>() }
@@ -1299,6 +1300,29 @@ fun ModernArCameraView(
                     .padding(horizontal = 24.dp, vertical = 20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                // AI Tile Interactive Floating Deck
+                if (isAiTileMode) {
+                    TileFloatingControlDeck(
+                        viewModel = viewModel,
+                        detectedTiles = detectedTiles,
+                        isAiTileMode = isAiTileMode,
+                        isAiTileAnalyzing = isAiTileAnalyzing,
+                        activePreset = activeTilePreset,
+                        onOpenDetailSheet = {
+                            val targetTile = detectedTiles.firstOrNull() ?: DetectedTile(
+                                label = activeTilePreset.name,
+                                material = activeTilePreset.defaultMaterial,
+                                estimatedWidthCm = activeTilePreset.widthCm,
+                                estimatedHeightCm = activeTilePreset.heightCm,
+                                areaM2 = activeTilePreset.singleTileAreaM2,
+                                groutWidthMm = activeTilePreset.defaultGroutMm
+                            )
+                            viewModel.selectTileForDetail(targetTile)
+                        },
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                }
+
                 // Live Auto-Detected Dimension / Result Pill
                 if (capturedPoints.isNotEmpty()) {
                     val totalLen = viewModel.calculateTotalDistance()

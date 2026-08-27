@@ -1,13 +1,11 @@
 package com.example.ui.components
 
-import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
@@ -15,15 +13,14 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.logic.ShareUtility
-import com.example.logic.ai.AiTileDetector
 import com.example.logic.ai.DetectedTile
 import com.example.ui.viewmodel.MeasureViewModel
 import java.text.DecimalFormat
@@ -36,25 +33,15 @@ fun TileDetailBottomSheet(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    val targetAreaM2 by viewModel.tileTargetAreaM2.collectAsState()
-    val wastagePercent by viewModel.tileWastagePercent.collectAsState()
-    val selectedUnit by viewModel.selectedUnit.collectAsState()
+    val activePreset by viewModel.activeTilePreset.collectAsState()
 
-    var isPingUnit by remember { mutableStateOf(false) } // 坪 vs m²
-    var areaInputText by remember(targetAreaM2, isPingUnit) {
-        val displayVal = if (isPingUnit) targetAreaM2 / 3.30578 else targetAreaM2
-        mutableStateOf("${Math.round(displayVal)}")
-    }
+    val widthCm = if (tile.estimatedWidthCm > 0) tile.estimatedWidthCm else activePreset.widthCm
+    val heightCm = if (tile.estimatedHeightCm > 0) tile.estimatedHeightCm else activePreset.heightCm
+    val areaCm2 = widthCm * heightCm
+    val areaM2 = areaCm2 / 10000.0
+    val perimeterCm = (widthCm + heightCm) * 2.0
 
-    val estimation = remember(tile, targetAreaM2, wastagePercent) {
-        AiTileDetector.estimateTileRequirement(
-            tileWidthCm = tile.estimatedWidthCm,
-            tileHeightCm = tile.estimatedHeightCm,
-            roomAreaM2 = targetAreaM2,
-            wastagePercent = wastagePercent
-        )
-    }
-
+    val df = remember { DecimalFormat("#,##0.#") }
     val colorPrimary = MaterialTheme.colorScheme.primary
     val colorOnPrimary = MaterialTheme.colorScheme.onPrimary
 
@@ -66,11 +53,11 @@ fun TileDetailBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 24.dp, vertical = 8.dp)
+                .padding(horizontal = 20.dp, vertical = 8.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Header: Title & Close Button
+            // Header
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -78,52 +65,69 @@ fun TileDetailBottomSheet(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Surface(
-                        color = colorPrimary.copy(alpha = 0.12f),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.size(44.dp)
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(
+                                Brush.sweepGradient(
+                                    colors = listOf(
+                                        Color(0xFFFFB74D),
+                                        Color(0xFFFF4081),
+                                        Color(0xFF7C4DFF),
+                                        Color(0xFF00E5FF),
+                                        Color(0xFFFFB74D)
+                                    )
+                                )
+                            ),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                Icons.Rounded.AutoAwesome,
-                                contentDescription = null,
-                                tint = colorPrimary,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
+                        Icon(
+                            Icons.Rounded.SquareFoot,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
                     }
 
                     Column {
                         Text(
-                            text = "AI Core 磁磚識別與規格報告",
+                            text = "磁磚測量結果",
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.ExtraBold
                         )
                         Text(
-                            text = "${tile.label} · ${tile.material}",
+                            text = "公分與面積測量數據",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
 
-                IconButton(onClick = onDismiss, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Rounded.Close, contentDescription = "關閉")
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f), CircleShape)
+                ) {
+                    Icon(Icons.Rounded.Close, contentDescription = "關閉", modifier = Modifier.size(18.dp))
                 }
             }
 
-            // Tile Dimension Specification Card
+            // Primary Measurement Result Cards
             Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
                 shape = RoundedCornerShape(20.dp),
+                border = BorderStroke(1.dp, colorPrimary.copy(alpha = 0.3f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
+                    // Dimension (Width x Height)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -131,253 +135,131 @@ fun TileDetailBottomSheet(
                     ) {
                         Column {
                             Text(
-                                text = "單片磁磚尺寸 (寬 × 長)",
+                                text = "磁磚尺寸 (寬 × 長)",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Text(
-                                text = "${Math.round(tile.estimatedWidthCm)} cm × ${Math.round(tile.estimatedHeightCm)} cm",
-                                style = MaterialTheme.typography.headlineSmall,
+                                text = "${df.format(widthCm)} × ${df.format(heightCm)} cm",
+                                style = MaterialTheme.typography.headlineMedium,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = colorPrimary
                             )
                         }
 
                         Surface(
-                            color = colorPrimary.copy(alpha = 0.15f),
-                            shape = RoundedCornerShape(10.dp)
+                            color = colorPrimary,
+                            shape = RoundedCornerShape(12.dp)
                         ) {
                             Text(
-                                text = "單片面積 ${Math.round(tile.areaM2 * 10000)} cm²",
-                                color = colorPrimary,
-                                fontSize = 13.sp,
+                                text = "公分",
+                                color = colorOnPrimary,
+                                fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                             )
                         }
                     }
 
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
-                    // Secondary Specs: Perimeter, Material, Grout width
+                    // Area & Perimeter
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Column {
-                            Text("單片周長", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("${Math.round((tile.estimatedWidthCm + tile.estimatedHeightCm) * 2)} cm", fontWeight = FontWeight.Bold)
-                        }
-                        Column {
-                            Text("填縫寬度", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("約 ${Math.round(tile.groutWidthMm)} mm", fontWeight = FontWeight.Bold)
-                        }
-                        Column {
-                            Text("識別信心度", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("${(tile.confidence * 100).toInt()}%", fontWeight = FontWeight.Bold, color = colorPrimary)
-                        }
-                    }
-                }
-            }
-
-            // Construction Quantity & Material Estimator Section
-            Surface(
-                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Icon(Icons.Rounded.Calculate, null, tint = colorPrimary, modifier = Modifier.size(20.dp))
-                            Text(
-                                text = "鋪設用量與施工備料估算",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-
-                        // Unit switch: 坪 vs m²
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.surface,
-                            modifier = Modifier.shadow(2.dp, RoundedCornerShape(12.dp))
-                        ) {
-                            Row(modifier = Modifier.padding(2.dp)) {
-                                Surface(
-                                    color = if (!isPingUnit) colorPrimary else Color.Transparent,
-                                    shape = RoundedCornerShape(10.dp),
-                                    modifier = Modifier.clickable {
-                                        isPingUnit = false
-                                    }
-                                ) {
-                                    Text(
-                                        text = "m²",
-                                        color = if (!isPingUnit) colorOnPrimary else MaterialTheme.colorScheme.onSurface,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                                    )
-                                }
-
-                                Surface(
-                                    color = if (isPingUnit) colorPrimary else Color.Transparent,
-                                    shape = RoundedCornerShape(10.dp),
-                                    modifier = Modifier.clickable {
-                                        isPingUnit = true
-                                    }
-                                ) {
-                                    Text(
-                                        text = "坪",
-                                        color = if (isPingUnit) colorOnPrimary else MaterialTheme.colorScheme.onSurface,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // Input Target Area
-                    OutlinedTextField(
-                        value = areaInputText,
-                        onValueChange = { input ->
-                            areaInputText = input
-                            val num = input.toDoubleOrNull()
-                            if (num != null && num > 0) {
-                                val m2 = if (isPingUnit) num * 3.30578 else num
-                                viewModel.setTileTargetAreaM2(m2)
-                            }
-                        },
-                        label = { Text(if (isPingUnit) "輸入目標施工坪數 (坪)" else "輸入目標施工面積 (m²)") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        singleLine = true,
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    // Wastage buffer selection chips (5%, 10%, 15%)
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            text = "裁切損耗備料率 (${wastagePercent}%)",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf(5 to "5% (標準)", 10 to "10% (建議)", 15 to "15% (異形/斜角)").forEach { (pct, label) ->
-                                FilterChip(
-                                    selected = wastagePercent == pct,
-                                    onClick = { viewModel.setTileWastagePercent(pct) },
-                                    label = { Text(label, fontSize = 12.sp, fontWeight = if (wastagePercent == pct) FontWeight.Bold else FontWeight.Normal) }
-                                )
-                            }
-                        }
-                    }
-
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-
-                    // Calculation Result Highlight Grid
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
+                        // Area Card
                         Surface(
                             color = MaterialTheme.colorScheme.surface,
                             shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .shadow(2.dp, RoundedCornerShape(14.dp))
+                            modifier = Modifier.weight(1f)
                         ) {
                             Column(
                                 modifier = Modifier.padding(12.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                Text("基礎淨需求", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Spacer(Modifier.height(2.dp))
                                 Text(
-                                    text = "${estimation.baseTileCount} 片",
+                                    text = "磁磚面積",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = "${df.format(areaCm2)} cm²",
                                     fontSize = 18.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
+                                Text(
+                                    text = "(${String.format("%.4f", areaM2)} m²)",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                         }
 
+                        // Perimeter Card
                         Surface(
-                            color = colorPrimary,
+                            color = MaterialTheme.colorScheme.surface,
                             shape = RoundedCornerShape(14.dp),
-                            modifier = Modifier
-                                .weight(1.3f)
-                                .shadow(4.dp, RoundedCornerShape(14.dp))
+                            modifier = Modifier.weight(1f)
                         ) {
                             Column(
                                 modifier = Modifier.padding(12.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                Text("建議採購片數 (含損耗)", style = MaterialTheme.typography.labelSmall, color = colorOnPrimary.copy(alpha = 0.85f))
-                                Spacer(Modifier.height(2.dp))
                                 Text(
-                                    text = "${estimation.totalRecommendedTileCount} 片",
-                                    fontSize = 22.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = colorOnPrimary
+                                    text = "磁磚周長",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = "${df.format(perimeterCm)} cm",
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "(${String.format("%.2f", perimeterCm / 100.0)} m)",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
                     }
-
-                    Text(
-                        text = "💡 填縫劑預估總長度：約 ${Math.round(estimation.estimatedGroutLengthMeters)} 公尺",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 }
             }
 
-            // Action Buttons: Save Record & Share
+            // Action Buttons: Save & Share
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 16.dp),
+                    .padding(bottom = 20.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 OutlinedButton(
                     onClick = {
                         val shareText = """
-                            📐 【AI Core 磁磚規格與用量預算報告】
-                            • 磁磚尺寸：${Math.round(tile.estimatedWidthCm)} × ${Math.round(tile.estimatedHeightCm)} cm
-                            • 材質類型：${tile.material}
-                            • 單片面積：${Math.round(tile.areaM2 * 10000)} cm²
-                            • 目標施工面積：${Math.round(targetAreaM2)} m² (${Math.round(targetAreaM2 / 3.30578)} 坪)
-                            • 基礎需求片數：${estimation.baseTileCount} 片
-                            • 建議採購片數：${estimation.totalRecommendedTileCount} 片 (含 ${wastagePercent}% 備料損耗)
-                            • 填縫線總長預估：${Math.round(estimation.estimatedGroutLengthMeters)} m
+                            📐 【磁磚測量結果】
+                            • 尺寸：${df.format(widthCm)} × ${df.format(heightCm)} cm
+                            • 面積：${df.format(areaCm2)} cm² (${String.format("%.4f", areaM2)} m²)
+                            • 周長：${df.format(perimeterCm)} cm
                         """.trimIndent()
-                        ShareUtility.shareText(context, shareText, "分享磁磚測量報告")
+                        ShareUtility.shareText(context, shareText, "分享磁磚測量結果")
                     },
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.weight(1f)
                 ) {
                     Icon(Icons.Rounded.Share, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("分享報告")
+                    Text("分享結果")
                 }
 
                 Button(
                     onClick = {
-                        val title = "磁磚規格 (${Math.round(tile.estimatedWidthCm)}×${Math.round(tile.estimatedHeightCm)} cm)"
-                        val notes = "材質：${tile.material} | 單片面積：${Math.round(tile.areaM2 * 10000)} cm² | 施工面積：${Math.round(targetAreaM2)} m² (建議採購 ${estimation.totalRecommendedTileCount} 片)"
+                        val title = "磁磚測量 (${df.format(widthCm)}×${df.format(heightCm)} cm)"
+                        val notes = "寬度：${df.format(widthCm)} cm | 長度：${df.format(heightCm)} cm | 面積：${df.format(areaCm2)} cm² (${String.format("%.4f", areaM2)} m²) | 周長：${df.format(perimeterCm)} cm"
                         viewModel.saveMeasurementRecord(
                             customTitle = title,
                             customNotes = notes
@@ -386,11 +268,11 @@ fun TileDetailBottomSheet(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = colorPrimary, contentColor = colorOnPrimary),
                     shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.weight(1.3f)
+                    modifier = Modifier.weight(1.2f)
                 ) {
                     Icon(Icons.Rounded.BookmarkAdd, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("儲存測量紀錄", fontWeight = FontWeight.Bold)
+                    Text("儲存紀錄", fontWeight = FontWeight.Bold)
                 }
             }
         }

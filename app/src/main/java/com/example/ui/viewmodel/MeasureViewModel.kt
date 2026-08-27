@@ -12,8 +12,10 @@ import com.example.data.model.MeasureRecord
 import com.example.data.repository.MeasureRepository
 import com.example.logic.TranslationManager
 import com.example.logic.ai.AiTileDetector
+import com.example.logic.ai.AiTilePreset
 import com.example.logic.ai.DetectedTile
 import com.example.logic.ai.TileEstimationResult
+import com.example.logic.ai.TilePatternType
 import com.example.logic.ar.*
 import com.example.logic.sensor.SensorCorrectionTelemetry
 import com.example.logic.sensor.SensorFusionCorrectionEngine
@@ -280,6 +282,24 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     private val _tileWastagePercent = MutableStateFlow(10) // 10% 損耗備料
     val tileWastagePercent: StateFlow<Int> = _tileWastagePercent.asStateFlow()
 
+    private val _activeTilePreset = MutableStateFlow(AiTilePreset.PRESET_60X60)
+    val activeTilePreset: StateFlow<AiTilePreset> = _activeTilePreset.asStateFlow()
+
+    private val _activeTilePattern = MutableStateFlow(TilePatternType.GRID)
+    val activeTilePattern: StateFlow<TilePatternType> = _activeTilePattern.asStateFlow()
+
+    fun setTilePreset(preset: AiTilePreset) {
+        _activeTilePreset.value = preset
+        triggerHapticFeedback()
+        _toastMessage.tryEmit("已切換磁磚規格：${preset.name} (${preset.widthCm.toInt()}×${preset.heightCm.toInt()} cm)")
+    }
+
+    fun setTilePatternType(pattern: TilePatternType) {
+        _activeTilePattern.value = pattern
+        triggerHapticFeedback()
+        _toastMessage.tryEmit("已切換鋪設工法：${pattern.label}")
+    }
+
     fun setTileTargetAreaM2(area: Double) {
         _tileTargetAreaM2.value = area.coerceAtLeast(0.1)
     }
@@ -361,12 +381,14 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun measureTileUnderReticle() {
+        val preset = _activeTilePreset.value
         val detected = _detectedTiles.value.firstOrNull() ?: DetectedTile(
-            label = "中央磁磚 (60×60 cm)",
-            material = "拋光石英地磚",
-            estimatedWidthCm = 60.0,
-            estimatedHeightCm = 60.0,
-            areaM2 = 0.36
+            label = "鎖定磁磚 (${preset.widthCm.toInt()}×${preset.heightCm.toInt()} cm)",
+            material = preset.defaultMaterial,
+            estimatedWidthCm = preset.widthCm,
+            estimatedHeightCm = preset.heightCm,
+            areaM2 = preset.singleTileAreaM2,
+            groutWidthMm = preset.defaultGroutMm
         )
         measureTileOneTap(detected)
     }
