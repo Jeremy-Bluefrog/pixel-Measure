@@ -74,6 +74,15 @@ class ModernArEngine(private val context: Context) {
         if (session != null) return session
 
         try {
+            val isEmulator = android.os.Build.FINGERPRINT.startsWith("generic") ||
+                    android.os.Build.FINGERPRINT.startsWith("unknown") ||
+                    android.os.Build.MODEL.contains("google_sdk") ||
+                    android.os.Build.MODEL.contains("Emulator") ||
+                    android.os.Build.MODEL.contains("Android SDK built for x86") ||
+                    android.os.Build.MANUFACTURER.contains("Genymotion") ||
+                    (android.os.Build.BRAND.startsWith("generic") && android.os.Build.DEVICE.startsWith("generic")) ||
+                    "google_sdk" == android.os.Build.PRODUCT
+
             // Check if Play Store is installed to avoid ARCore internal Error Log on devices without Play Store
             val hasPlayStore = try {
                 context.packageManager.getPackageInfo("com.android.vending", 0)
@@ -82,15 +91,18 @@ class ModernArEngine(private val context: Context) {
                 false
             }
 
-            val availability = if (hasPlayStore) {
+            val availability = if (isEmulator) {
+                android.util.Log.w("ModernArEngine", "Running on Emulator, skipping ARCore availability check.")
+                com.google.ar.core.ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE
+            } else if (hasPlayStore) {
                 try {
-                    ArCoreApk.getInstance().checkAvailability(context)
+                    com.google.ar.core.ArCoreApk.getInstance().checkAvailability(context)
                 } catch (t: Throwable) {
-                    ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE
+                    com.google.ar.core.ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE
                 }
             } else {
-                Log.w("ModernArEngine", "Play Store not found, skipping ARCore availability check.")
-                ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE
+                android.util.Log.w("ModernArEngine", "Play Store not found, skipping ARCore availability check.")
+                com.google.ar.core.ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE
             }
 
             if (availability == ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE ||

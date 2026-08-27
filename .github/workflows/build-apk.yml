@@ -49,7 +49,18 @@ jobs:
         echo "android.enableJetifier=true" >> gradle.properties
         echo "kotlin.code.style=official" >> gradle.properties
         echo "android.nonTransitiveRClass=true" >> gradle.properties
-        gradle :app:assembleDebug --stacktrace
+        echo "org.gradle.caching=false" >> gradle.properties
+        gradle :app:assembleDebug --stacktrace --no-build-cache > build_log.txt 2>&1 || (echo "Build failed!" && cat build_log.txt && exit 1)
+
+    - name: 上傳失敗日誌至 Github Branch
+      if: failure()
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git checkout -B build-failure-log
+        git add build_log.txt || true
+        git commit -m "Upload build failure log [skip ci]" || true
+        git push -f origin build-failure-log || true
 
     - name: 更新 APK 至 build-outputs
       continue-on-error: true
