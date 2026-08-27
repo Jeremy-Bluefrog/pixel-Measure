@@ -24,8 +24,11 @@ jobs:
 
     - name: 準備 Keystore 簽名與環境檔 (.env)
       run: |
-        touch .env
-        echo "GEMINI_API_KEY=" >> .env
+        if [ -f .env.example ]; then
+          cp .env.example .env
+        else
+          echo 'GEMINI_API_KEY="MY_GEMINI_API_KEY"' > .env
+        fi
         if [ -f debug.keystore.base64 ]; then
           base64 -d debug.keystore.base64 > debug.keystore || true
         fi
@@ -33,6 +36,7 @@ jobs:
           keytool -genkey -v -keystore debug.keystore -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
         fi
         cp debug.keystore app/debug.keystore || true
+        chmod +x gradlew || true
 
     - name: 設定 Gradle 8.9 (相容 AGP 8.6.1)
       uses: gradle/actions/setup-gradle@v3
@@ -50,7 +54,7 @@ jobs:
         echo "kotlin.code.style=official" >> gradle.properties
         echo "android.nonTransitiveRClass=true" >> gradle.properties
         echo "org.gradle.caching=false" >> gradle.properties
-        gradle :app:assembleDebug --stacktrace --no-build-cache > build_log.txt 2>&1 || (echo "Build failed!" && cat build_log.txt && exit 1)
+        ./gradlew :app:assembleDebug --stacktrace --no-build-cache
 
     - name: 上傳失敗日誌至 Github Branch
       if: failure()
