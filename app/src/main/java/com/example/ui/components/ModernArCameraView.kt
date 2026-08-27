@@ -178,7 +178,6 @@ fun ModernArCameraView(
     val colorOnSurface = MaterialTheme.colorScheme.onSurface
     val colorSurfaceVariant = MaterialTheme.colorScheme.surfaceVariant
     val colorOnSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
-    val guideWhite = Color(0xEEFFFFFF)
 
     if (!cameraPermissionState.status.isGranted) {
         // Permission Request UI
@@ -361,44 +360,6 @@ fun ModernArCameraView(
                 // Project 3D points to 2D screen positions
                 val projectedPoints = capturedPoints.map { pt ->
                     ArMath.projectWorldToScreen(pt, viewMatrix, projectionMatrix, screenW, screenH)
-                }
-
-                // 2A. If measuring in progress (>= 1 point), draw the extended collinear dashed alignment guide line
-                if (projectedPoints.isNotEmpty()) {
-                    val lastProj = projectedPoints.last()
-                    if (lastProj != null) {
-                        val pStart = Offset(lastProj.first, lastProj.second)
-                        val pEnd = screenCenter
-                        val dx = pEnd.x - pStart.x
-                        val dy = pEnd.y - pStart.y
-                        val dist = sqrt(dx * dx + dy * dy)
-
-                        if (dist > 15f) {
-                            val ux = dx / dist
-                            val uy = dy / dist
-
-                            // Extend line across the entire screen
-                            val extStart = Offset(pStart.x - ux * 2500f, pStart.y - uy * 2500f)
-                            val extEnd = Offset(pEnd.x + ux * 2500f, pEnd.y + uy * 2500f)
-
-                            // Subtle dark drop shadow for white dashed guide
-                            drawLine(
-                                color = Color.Black.copy(alpha = 0.3f),
-                                start = Offset(extStart.x + 1f, extStart.y + 1f),
-                                end = Offset(extEnd.x + 1f, extEnd.y + 1f),
-                                strokeWidth = 2.dp.toPx(),
-                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 12f), 0f)
-                            )
-                            // White dashed reference line (Collinear precision alignment)
-                            drawLine(
-                                color = guideWhite,
-                                start = extStart,
-                                end = extEnd,
-                                strokeWidth = 2.dp.toPx(),
-                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 12f), 0f)
-                            )
-                        }
-                    }
                 }
 
                 // 2B. Draw confirmed connecting 3D virtual lines
@@ -1102,86 +1063,117 @@ fun ModernArCameraView(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Left: "清除" button when measuring, or minimal tracking status dot when idle
-                if (capturedPoints.isNotEmpty()) {
-                    Surface(
-                        color = Color.Black.copy(alpha = 0.55f),
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier
-                            .clickable {
-                                viewModel.clearActivePoints()
-                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                            }
-                            .shadow(4.dp, RoundedCornerShape(20.dp))
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                // Left: Status badge or clear button
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (capturedPoints.isNotEmpty()) {
+                        // "測量中" active indicator badge
+                        Surface(
+                            color = colorPrimary.copy(alpha = 0.9f),
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier.shadow(4.dp, RoundedCornerShape(20.dp))
                         ) {
-                            Icon(
-                                Icons.Rounded.DeleteOutline,
-                                contentDescription = "Clear",
-                                tint = Color.White,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "清除",
-                                color = Color.White,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-                } else {
-                    Surface(
-                        color = Color.Black.copy(alpha = 0.45f),
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier.shadow(2.dp, RoundedCornerShape(20.dp))
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            if (trackingState == TrackingState.TRACKING) {
-                                Surface(
-                                    color = colorPrimary,
-                                    shape = CircleShape,
-                                    modifier = Modifier.size(8.dp)
-                                ) {}
-                                Text(
-                                    text = "已就緒",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = Color.White
-                                )
-                                if (highFpsModeEnabled) {
-                                    Surface(
-                                        color = colorPrimary.copy(alpha = 0.25f),
-                                        shape = RoundedCornerShape(6.dp),
-                                        border = BorderStroke(1.dp, colorPrimary.copy(alpha = 0.6f))
-                                    ) {
-                                        Text(
-                                            text = "60Hz",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            color = colorPrimary,
-                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                        )
-                                    }
-                                }
-                            } else {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(10.dp),
                                     strokeWidth = 2.dp,
-                                    color = colorPrimary
+                                    color = colorOnPrimary
                                 )
                                 Text(
-                                    text = "尋找表面...",
+                                    text = "測量中...",
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = Color.White.copy(alpha = 0.85f)
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorOnPrimary
                                 )
+                            }
+                        }
+
+                        // "清除" button
+                        Surface(
+                            color = Color.Black.copy(alpha = 0.55f),
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier
+                                .clickable {
+                                    viewModel.clearActivePoints()
+                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                }
+                                .shadow(4.dp, RoundedCornerShape(20.dp))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Rounded.DeleteOutline,
+                                    contentDescription = "Clear",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "清除",
+                                    color = Color.White,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    } else {
+                        Surface(
+                            color = Color.Black.copy(alpha = 0.45f),
+                            shape = RoundedCornerShape(20.dp),
+                            modifier = Modifier.shadow(2.dp, RoundedCornerShape(20.dp))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                if (trackingState == TrackingState.TRACKING) {
+                                    Surface(
+                                        color = colorPrimary,
+                                        shape = CircleShape,
+                                        modifier = Modifier.size(8.dp)
+                                    ) {}
+                                    Text(
+                                        text = "已就緒",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color.White
+                                    )
+                                    if (highFpsModeEnabled) {
+                                        Surface(
+                                            color = colorPrimary.copy(alpha = 0.25f),
+                                            shape = RoundedCornerShape(6.dp),
+                                            border = BorderStroke(1.dp, colorPrimary.copy(alpha = 0.6f))
+                                        ) {
+                                            Text(
+                                                text = "60Hz",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = colorPrimary,
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(10.dp),
+                                        strokeWidth = 2.dp,
+                                        color = colorPrimary
+                                    )
+                                    Text(
+                                        text = "尋找表面...",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = Color.White.copy(alpha = 0.85f)
+                                    )
+                                }
                             }
                         }
                     }
@@ -1327,11 +1319,11 @@ fun ModernArCameraView(
                         ) {
                             val (badgeText, badgeIcon) = when {
                                 autoDetectedType == "AREA" && capturedPoints.size >= 3 ->
-                                    "面積: ${viewModel.formatArea(area, selectedUnit)}" to Icons.Rounded.SquareFoot
+                                    "測量中 (面積): ${viewModel.formatArea(area, selectedUnit)}" to Icons.Rounded.SquareFoot
                                 autoDetectedType == "HEIGHT" && capturedPoints.size >= 2 ->
-                                    "高度: ${viewModel.formatLength(height, selectedUnit)}" to Icons.Rounded.Height
+                                    "測量中 (高度): ${viewModel.formatLength(height, selectedUnit)}" to Icons.Rounded.Height
                                 else ->
-                                    "總長: ${viewModel.formatLength(totalLen, selectedUnit)}" to Icons.Rounded.Straighten
+                                    "測量中 (長度): ${viewModel.formatLength(totalLen, selectedUnit)}" to Icons.Rounded.Straighten
                             }
 
                             Icon(
@@ -1466,8 +1458,8 @@ fun ModernArCameraView(
         val gravityAlign by viewModel.gravityAlignmentEnabled.collectAsState()
         val barometerFusion by viewModel.barometerFusionEnabled.collectAsState()
         val jerkRejection by viewModel.jerkRejectionEnabled.collectAsState()
-        val df1 = remember { DecimalFormat("0.0") }
-        val df2 = remember { DecimalFormat("0.00") }
+        val df1 = remember { DecimalFormat("#,##0") }
+        val df2 = remember { DecimalFormat("#,##0") }
 
         AlertDialog(
             onDismissRequest = { showSensorStatusDialog = false },
@@ -1583,7 +1575,7 @@ fun ModernArCameraView(
                                     Text("近接貼面零點校準", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                                 }
                                 Text(
-                                    if (sensorTelemetry.isProximityNear) "📐 貼面觸碰 (0.0 cm 零點補償)" else "遠離表面 (${df1.format(sensorTelemetry.proximityDistanceCm)} cm)",
+                                    if (sensorTelemetry.isProximityNear) "📐 貼面觸碰 (0 cm 零點補償)" else "遠離表面 (${df1.format(sensorTelemetry.proximityDistanceCm)} cm)",
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface

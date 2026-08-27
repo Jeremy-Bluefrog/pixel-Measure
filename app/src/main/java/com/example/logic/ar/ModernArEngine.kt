@@ -67,6 +67,12 @@ class ModernArEngine(private val context: Context) {
     var is60FpsActive: Boolean = false
         private set
 
+    var isDepthModeActive: Boolean = false
+        private set
+
+    private var frameCounter = 0
+    private var cachedPlanes: List<DetectedPlaneInfo> = emptyList()
+
     /**
      * Check device compatibility and create configured ARCore Session safely.
      */
@@ -166,9 +172,13 @@ class ModernArEngine(private val context: Context) {
                 try {
                     if (sessionInstance.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
                         depthMode = Config.DepthMode.AUTOMATIC
+                        isDepthModeActive = true
                         Log.i("ModernArEngine", "Automatic Depth Mode enabled.")
+                    } else {
+                        isDepthModeActive = false
                     }
                 } catch (e: Throwable) {
+                    isDepthModeActive = false
                     Log.w("ModernArEngine", "Depth mode check unavailable: ${e.message}")
                 }
             }
@@ -218,8 +228,11 @@ class ModernArEngine(private val context: Context) {
      * 3. Depth point hit
      * 4. Instant placement point hit
      * 5. Point cloud feature point hit
+     *
+     * Note: createAnchor is set to true ONLY when committing a point on user tap.
+     * During real-time aiming, creating anchors on every frame causes ARCore memory/graph stalls.
      */
-    fun performHitTest(frame: Frame, x: Float, y: Float): HitTestResult? {
+    fun performHitTest(frame: Frame, x: Float, y: Float, createAnchor: Boolean = false): HitTestResult? {
         try {
             val hits = frame.hitTest(x, y)
             if (hits.isEmpty()) return null
@@ -235,7 +248,9 @@ class ModernArEngine(private val context: Context) {
             }
             if (planePolygonHit != null) {
                 val plane = planePolygonHit.trackable as Plane
-                val anchor = try { planePolygonHit.createAnchor() } catch (e: Exception) { null }
+                val anchor = if (createAnchor) {
+                    try { planePolygonHit.createAnchor() } catch (e: Exception) { null }
+                } else null
                 return HitTestResult(
                     pose = planePolygonHit.hitPose,
                     anchor = anchor,
@@ -252,7 +267,9 @@ class ModernArEngine(private val context: Context) {
             }
             if (planeHit != null) {
                 val plane = planeHit.trackable as Plane
-                val anchor = try { planeHit.createAnchor() } catch (e: Exception) { null }
+                val anchor = if (createAnchor) {
+                    try { planeHit.createAnchor() } catch (e: Exception) { null }
+                } else null
                 return HitTestResult(
                     pose = planeHit.hitPose,
                     anchor = anchor,
@@ -268,7 +285,9 @@ class ModernArEngine(private val context: Context) {
                 trackable is com.google.ar.core.Point && trackable.orientationMode == com.google.ar.core.Point.OrientationMode.ESTIMATED_SURFACE_NORMAL
             }
             if (depthHit != null) {
-                val anchor = try { depthHit.createAnchor() } catch (e: Exception) { null }
+                val anchor = if (createAnchor) {
+                    try { depthHit.createAnchor() } catch (e: Exception) { null }
+                } else null
                 return HitTestResult(
                     pose = depthHit.hitPose,
                     anchor = anchor,
@@ -281,7 +300,9 @@ class ModernArEngine(private val context: Context) {
             // Tier 4: Instant Placement Point
             val instantHit = validHits.firstOrNull { it.trackable is InstantPlacementPoint }
             if (instantHit != null) {
-                val anchor = try { instantHit.createAnchor() } catch (e: Exception) { null }
+                val anchor = if (createAnchor) {
+                    try { instantHit.createAnchor() } catch (e: Exception) { null }
+                } else null
                 return HitTestResult(
                     pose = instantHit.hitPose,
                     anchor = anchor,
@@ -294,7 +315,9 @@ class ModernArEngine(private val context: Context) {
             // Tier 5: PointCloud feature point
             val featurePointHit = validHits.firstOrNull { it.trackable is com.google.ar.core.Point }
             if (featurePointHit != null) {
-                val anchor = try { featurePointHit.createAnchor() } catch (e: Exception) { null }
+                val anchor = if (createAnchor) {
+                    try { featurePointHit.createAnchor() } catch (e: Exception) { null }
+                } else null
                 return HitTestResult(
                     pose = featurePointHit.hitPose,
                     anchor = anchor,
@@ -311,43 +334,40 @@ class ModernArEngine(private val context: Context) {
     }
 
     /**
-     * Extract frame data matrices and state safely on GL thread.
+     * Extract frame data matrices and state safely on GL thread with zero allocations.
      */
-    fun extractFrameData(frame: Frame): ModernArFrame {
+    fun extractFrameData(frame: Frame, centerHitResult: HitTestResult? = null): ModernArFrame {
         val camera = frame.camera
         val vMatrix = FloatArray(16)
         val pMatrix = FloatArray(16)
         camera.getViewMatrix(vMatrix, 0)
         camera.getProjectionMatrix(pMatrix, 0, 0.05f, 50.0f)
 
-        var points: FloatArray? = null
-        try {
-            val pointCloud = frame.acquirePointCloud()
-            points = FloatArray(pointCloud.points.remaining())
-            pointCloud.points.get(points)
-            pointCloud.release()
-        } catch (e: Exception) {}
+        frameCounter++
 
-        // Extract detected planes with polygon 2D vertices
-        val planeInfos = mutableListOf<DetectedPlaneInfo>()
-        val allPlanes = session?.getAllTrackables(Plane::class.java)
-        allPlanes?.forEach { plane ->
-            if (plane.subsumedBy == null) {
-                val poly2d = plane.polygon
-                val polyArray = FloatArray(poly2d.remaining())
-                poly2d.get(polyArray)
-                planeInfos.add(
-                    DetectedPlaneInfo(
-                        id = plane.hashCode().toString(),
-                        type = plane.type,
-                        centerPose = plane.centerPose,
-                        extentX = plane.extentX,
-                        extentZ = plane.extentZ,
-                        polygonVertices = polyArray,
-                        isTracking = plane.trackingState == TrackingState.TRACKING
+        // Extract detected planes with polygon 2D vertices (throttled every 6 frames to prevent GC hiccups)
+        if (frameCounter % 6 == 0 || cachedPlanes.isEmpty()) {
+            val planeInfos = mutableListOf<DetectedPlaneInfo>()
+            val allPlanes = session?.getAllTrackables(Plane::class.java)
+            allPlanes?.forEach { plane ->
+                if (plane.subsumedBy == null) {
+                    val poly2d = plane.polygon
+                    val polyArray = FloatArray(poly2d.remaining())
+                    poly2d.get(polyArray)
+                    planeInfos.add(
+                        DetectedPlaneInfo(
+                            id = plane.hashCode().toString(),
+                            type = plane.type,
+                            centerPose = plane.centerPose,
+                            extentX = plane.extentX,
+                            extentZ = plane.extentZ,
+                            polygonVertices = polyArray,
+                            isTracking = plane.trackingState == TrackingState.TRACKING
+                        )
                     )
-                )
+                }
             }
+            cachedPlanes = planeInfos
         }
 
         val pose = camera.pose
@@ -372,27 +392,12 @@ class ModernArEngine(private val context: Context) {
             1.0f
         }
 
-        val hasDepth = try {
-            frame.acquireDepthImage16Bits()?.let { image ->
-                image.close()
-                true
-            } ?: false
-        } catch (e: Exception) {
-            false
-        }
-
-        // Check surface classification at frame center
-        val centerHits = try {
-            frame.hitTest(frame.camera.imageIntrinsics.imageDimensions[0] / 2f, frame.camera.imageIntrinsics.imageDimensions[1] / 2f)
-        } catch (e: Exception) {
-            emptyList()
-        }
-        val surfaceLabel = when {
-            centerHits.any { it.trackable is Plane && (it.trackable as Plane).type == Plane.Type.HORIZONTAL_UPWARD_FACING } -> "水平地面/桌面"
-            centerHits.any { it.trackable is Plane && (it.trackable as Plane).type == Plane.Type.VERTICAL } -> "垂直牆面"
-            centerHits.any { it.trackable is Plane && (it.trackable as Plane).type == Plane.Type.HORIZONTAL_DOWNWARD_FACING } -> "天花板表面"
-            hasDepth -> "深度表面"
-            else -> "空間特徵點"
+        // Fast surface label inference from center hit test result
+        val surfaceLabel = when (centerHitResult?.planeType) {
+            Plane.Type.HORIZONTAL_UPWARD_FACING -> "水平地面/桌面"
+            Plane.Type.VERTICAL -> "垂直牆面"
+            Plane.Type.HORIZONTAL_DOWNWARD_FACING -> "天花板表面"
+            else -> if (isDepthModeActive) "深度表面" else "空間特徵點"
         }
 
         return ModernArFrame(
@@ -400,14 +405,14 @@ class ModernArEngine(private val context: Context) {
             trackingFailureReason = camera.trackingFailureReason,
             viewMatrix = vMatrix,
             projectionMatrix = pMatrix,
-            pointCloud = points,
-            planes = planeInfos,
+            pointCloud = null,
+            planes = cachedPlanes,
             cameraPoseX = pose.tx(),
             cameraPoseY = pose.ty(),
             cameraPoseZ = pose.tz(),
             cameraPitch = pitchDeg,
             cameraYaw = yawDeg,
-            isDepthAvailable = hasDepth,
+            isDepthAvailable = isDepthModeActive,
             lightIntensity = lightVal,
             surfaceTypeAtCenter = surfaceLabel
         )

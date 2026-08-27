@@ -43,7 +43,7 @@ fun TileDetailBottomSheet(
     var isPingUnit by remember { mutableStateOf(false) } // 坪 vs m²
     var areaInputText by remember(targetAreaM2, isPingUnit) {
         val displayVal = if (isPingUnit) targetAreaM2 / 3.30578 else targetAreaM2
-        mutableStateOf(DecimalFormat("0.#").format(displayVal))
+        mutableStateOf("${Math.round(displayVal)}")
     }
 
     val estimation = remember(tile, targetAreaM2, wastagePercent) {
@@ -136,7 +136,7 @@ fun TileDetailBottomSheet(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Text(
-                                text = "${DecimalFormat("0.#").format(tile.estimatedWidthCm)} cm × ${DecimalFormat("0.#").format(tile.estimatedHeightCm)} cm",
+                                text = "${Math.round(tile.estimatedWidthCm)} cm × ${Math.round(tile.estimatedHeightCm)} cm",
                                 style = MaterialTheme.typography.headlineSmall,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = colorPrimary
@@ -148,7 +148,7 @@ fun TileDetailBottomSheet(
                             shape = RoundedCornerShape(10.dp)
                         ) {
                             Text(
-                                text = "單片面積 ${DecimalFormat("0.00").format(tile.areaM2)} m²",
+                                text = "單片面積 ${Math.round(tile.areaM2 * 10000)} cm²",
                                 color = colorPrimary,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold,
@@ -166,11 +166,11 @@ fun TileDetailBottomSheet(
                     ) {
                         Column {
                             Text("單片周長", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("${DecimalFormat("0.#").format((tile.estimatedWidthCm + tile.estimatedHeightCm) * 2)} cm", fontWeight = FontWeight.Bold)
+                            Text("${Math.round((tile.estimatedWidthCm + tile.estimatedHeightCm) * 2)} cm", fontWeight = FontWeight.Bold)
                         }
                         Column {
                             Text("填縫寬度", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("約 ${tile.groutWidthMm} mm", fontWeight = FontWeight.Bold)
+                            Text("約 ${Math.round(tile.groutWidthMm)} mm", fontWeight = FontWeight.Bold)
                         }
                         Column {
                             Text("識別信心度", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -338,7 +338,7 @@ fun TileDetailBottomSheet(
                     }
 
                     Text(
-                        text = "💡 填縫劑預估總長度：約 ${DecimalFormat("0.#").format(estimation.estimatedGroutLengthMeters)} 公尺",
+                        text = "💡 填縫劑預估總長度：約 ${Math.round(estimation.estimatedGroutLengthMeters)} 公尺",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -356,13 +356,13 @@ fun TileDetailBottomSheet(
                     onClick = {
                         val shareText = """
                             📐 【AI Core 磁磚規格與用量預算報告】
-                            • 磁磚尺寸：${DecimalFormat("0.#").format(tile.estimatedWidthCm)} × ${DecimalFormat("0.#").format(tile.estimatedHeightCm)} cm
+                            • 磁磚尺寸：${Math.round(tile.estimatedWidthCm)} × ${Math.round(tile.estimatedHeightCm)} cm
                             • 材質類型：${tile.material}
-                            • 單片面積：${DecimalFormat("0.00").format(tile.areaM2)} m²
-                            • 目標施工面積：${DecimalFormat("0.1").format(targetAreaM2)} m² (${DecimalFormat("0.1").format(targetAreaM2 / 3.30578)} 坪)
+                            • 單片面積：${Math.round(tile.areaM2 * 10000)} cm²
+                            • 目標施工面積：${Math.round(targetAreaM2)} m² (${Math.round(targetAreaM2 / 3.30578)} 坪)
                             • 基礎需求片數：${estimation.baseTileCount} 片
                             • 建議採購片數：${estimation.totalRecommendedTileCount} 片 (含 ${wastagePercent}% 備料損耗)
-                            • 填縫線總長預估：${DecimalFormat("0.#").format(estimation.estimatedGroutLengthMeters)} m
+                            • 填縫線總長預估：${Math.round(estimation.estimatedGroutLengthMeters)} m
                         """.trimIndent()
                         ShareUtility.shareText(context, shareText, "分享磁磚測量報告")
                     },
@@ -376,8 +376,8 @@ fun TileDetailBottomSheet(
 
                 Button(
                     onClick = {
-                        val title = "磁磚規格 (${DecimalFormat("0.#").format(tile.estimatedWidthCm)}×${DecimalFormat("0.#").format(tile.estimatedHeightCm)} cm)"
-                        val notes = "材質：${tile.material} | 單片面積：${DecimalFormat("0.00").format(tile.areaM2)} m² | 施工面積：${DecimalFormat("0.1").format(targetAreaM2)} m² (建議採購 ${estimation.totalRecommendedTileCount} 片)"
+                        val title = "磁磚規格 (${Math.round(tile.estimatedWidthCm)}×${Math.round(tile.estimatedHeightCm)} cm)"
+                        val notes = "材質：${tile.material} | 單片面積：${Math.round(tile.areaM2 * 10000)} cm² | 施工面積：${Math.round(targetAreaM2)} m² (建議採購 ${estimation.totalRecommendedTileCount} 片)"
                         viewModel.saveMeasurementRecord(
                             customTitle = title,
                             customNotes = notes

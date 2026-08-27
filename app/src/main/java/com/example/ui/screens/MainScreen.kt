@@ -485,7 +485,7 @@ fun HistorySheetContent(
                                 val formattedVal = when (record.type) {
                                     "AREA" -> viewModel.formatArea(record.value, record.unit)
                                     "VOLUME" -> viewModel.formatVolume(record.value, record.unit)
-                                    "ANGLE" -> "${DecimalFormat("0.0").format(record.value)}°"
+                                    "ANGLE" -> "${Math.round(record.value)}°"
                                     else -> viewModel.formatLength(record.value, record.unit)
                                 }
                                 Text(
@@ -659,7 +659,7 @@ fun RecordDetailDialog(
                         val formattedVal = when (record.type) {
                             "AREA" -> viewModel.formatArea(record.value, record.unit)
                             "VOLUME" -> viewModel.formatVolume(record.value, record.unit)
-                            "ANGLE" -> "${DecimalFormat("0.0").format(record.value)}°"
+                            "ANGLE" -> "${Math.round(record.value)}°"
                             else -> viewModel.formatLength(record.value, record.unit)
                         }
                         Text(

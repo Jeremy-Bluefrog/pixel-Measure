@@ -146,6 +146,9 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
     private val STEADY_THRESHOLD_RADS = 0.045f
     private val JERK_THRESHOLD_MPS2 = 2.5f
 
+    // Telemetry update rate limiter (max ~30Hz to prevent Compose recomposition churn)
+    private var lastTelemetryEmitTimeMs = 0L
+
     /**
      * Inspect Camera2 device characteristics to determine multi-camera physical stereo baseline.
      */
@@ -258,6 +261,12 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
     }
 
     private fun updateTelemetryState() {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - lastTelemetryEmitTimeMs < 33L) {
+            return // Throttle to ~30Hz to eliminate UI lag
+        }
+        lastTelemetryEmitTimeMs = now
+
         val azimuth = Math.toDegrees(orientationAngles[0].toDouble()).toFloat()
         val pitch = Math.toDegrees(orientationAngles[1].toDouble()).toFloat()
         val roll = Math.toDegrees(orientationAngles[2].toDouble()).toFloat()
@@ -330,13 +339,19 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
         val stability = _telemetry.value.stabilityScore
         val isSteady = _telemetry.value.isHandSteady
 
+        // Deadband: small vibrations under 5mm are completely locked
+        if (distanceMoved < 0.005) {
+            return previousPoint.copy(anchor = rawPoint.anchor ?: previousPoint.anchor)
+        }
+
         val alpha = when {
             // Sudden jerk rejection: if phone was bumped, hold previous point to avoid bad tap
-            isJerkRejectionEnabled && lastLinearAccel > JERK_THRESHOLD_MPS2 -> 0.05
-            // High stability: almost complete lock (filter out hand tremors)
-            isSteady && distanceMoved < 0.035 -> 0.08
-            distanceMoved < snapThresholdMeters -> (0.15 + (1.0 - stability) * 0.35).coerceIn(0.12, 0.55)
-            distanceMoved < snapThresholdMeters * 2 -> (0.45 + (1.0 - stability) * 0.4).coerceIn(0.40, 0.85)
+            isJerkRejectionEnabled && lastLinearAccel > JERK_THRESHOLD_MPS2 -> 0.03
+            // Hand is steady: very strong lock to eliminate hand wobble
+            isSteady && distanceMoved < 0.02 -> 0.03
+            isSteady && distanceMoved < 0.05 -> 0.06
+            distanceMoved < snapThresholdMeters -> (0.08 + (1.0 - stability) * 0.25).coerceIn(0.06, 0.40)
+            distanceMoved < snapThresholdMeters * 2 -> (0.35 + (1.0 - stability) * 0.35).coerceIn(0.30, 0.75)
             else -> 1.0 // Fast user motion: instantaneous response
         }
 

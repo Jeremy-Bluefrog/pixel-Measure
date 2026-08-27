@@ -210,9 +210,12 @@ object ArMath {
     }
 
     /**
-     * Temporal Exponential Moving Average (EMA) filter to eliminate jitter on 3D spatial points.
-     * When movement is small (< snapDistanceThreshold), strong smoothing is applied.
-     * When camera moves quickly, it switches dynamically to fast tracking to prevent lag.
+     * Temporal Exponential Moving Average (EMA) filter with deadband damping
+     * to completely eliminate hand tremor jitter on 3D spatial points.
+     * - Micro movements (< 8mm): Deadband locking to prevent reticle shivering.
+     * - Fine movements (8mm to 6cm): Heavy low-pass damping (alpha 0.06 ~ 0.15).
+     * - Moderate movements (6cm to 25cm): Smooth responsive interpolation (alpha 0.25 ~ 0.65).
+     * - Fast camera movement (> 25cm): Instantaneous tracking to prevent lag.
      */
     fun filterJitterEMA(previous: Point3D?, current: Point3D, snapDistanceThreshold: Double = 0.15): Point3D {
         if (previous == null) return current
@@ -221,12 +224,18 @@ object ArMath {
         val d = distance(previous, current)
         if (d.isNaN() || d.isInfinite()) return current
 
-        // Adaptive alpha: strong smoothing (0.22) for hand tremor, immediate (1.0) for rapid camera panning
+        // Deadband: if movement is under 6mm, retain previous point completely to eliminate shivering
+        if (d < 0.006) {
+            return previous.copy(anchor = current.anchor ?: previous.anchor)
+        }
+
+        // Adaptive alpha: strong dampening for hand tremor, immediate for intentional panning
         val alpha = when {
-            d < 0.02 -> 0.12 // Almost stationary: lock in place
-            d < snapDistanceThreshold -> 0.25 // Minor tremor: smooth out noise
-            d < snapDistanceThreshold * 2 -> 0.65 // Moderate move
-            else -> 1.0 // Fast camera movement: instantaneous response
+            d < 0.015 -> 0.04 // Micro tremor (6mm - 15mm): rock solid stabilization
+            d < 0.05 -> 0.09  // Small tremor (15mm - 50mm): smooth dampening
+            d < snapDistanceThreshold -> 0.22 // Intentional slow move
+            d < snapDistanceThreshold * 2 -> 0.55 // Moderate move
+            else -> 1.0 // Rapid camera movement: instantaneous response
         }
 
         val smoothedX = previous.x * (1.0 - alpha) + current.x * alpha

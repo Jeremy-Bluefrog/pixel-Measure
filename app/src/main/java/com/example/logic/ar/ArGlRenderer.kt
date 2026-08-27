@@ -85,6 +85,9 @@ class ModernArGlView(
     private val modelMatrix = FloatArray(16)
     private val modelViewMatrix = FloatArray(16)
     private val modelViewProjectionMatrix = FloatArray(16)
+    private val viewMat = FloatArray(16)
+    private val projMat = FloatArray(16)
+    private val isFrameUpdatePending = java.util.concurrent.atomic.AtomicBoolean(false)
 
     init {
         setEGLContextClientVersion(2)
@@ -253,11 +256,9 @@ class ModernArGlView(
             GLES20.glDisableVertexAttribArray(bgTexCoordAttrib)
 
             // Process hit-tests on GL frame
-            viewModel.processGlFrame(frame, modernArEngine)
+            val centerHit = viewModel.processGlFrame(frame, modernArEngine)
 
-            // View & Projection matrices for 3D elements
-            val viewMat = FloatArray(16)
-            val projMat = FloatArray(16)
+            // View & Projection matrices for 3D elements (reusing cached FloatArrays)
             camera.getViewMatrix(viewMat, 0)
             camera.getProjectionMatrix(projMat, 0, 0.1f, 100.0f)
             Matrix.multiplyMM(modelViewProjectionMatrix, 0, projMat, 0, viewMat, 0)
@@ -295,10 +296,15 @@ class ModernArGlView(
                 }
             }
 
-            // Extract Frame Data for UI
-            val frameData = modernArEngine.extractFrameData(frame)
-            post {
-                viewModel.onArFrameUpdated(frameData)
+            // Extract Frame Data for UI without duplicate hit-testing
+            val frameData = modernArEngine.extractFrameData(frame, centerHit)
+
+            // Throttled non-blocking post to UI main thread (prevents message pileup stutter)
+            if (isFrameUpdatePending.compareAndSet(false, true)) {
+                post {
+                    isFrameUpdatePending.set(false)
+                    viewModel.onArFrameUpdated(frameData)
+                }
             }
 
         } catch (e: com.google.ar.core.exceptions.SessionPausedException) {

@@ -311,7 +311,7 @@ object ShareUtility {
         sb.append("✍️ 測量名稱 : ${record.title}\n")
         sb.append("⏱️ 測量時間 : $dateStr\n")
         sb.append("🔧 測量模式 : $modeStr\n")
-        sb.append("📐 測量數值 : ${String.format("%.2f %s", record.value, record.unit)}\n")
+        sb.append("📐 測量數值 : ${Math.round(record.value)} ${record.unit}\n")
         
         if (!record.notes.isNullOrBlank()) {
             sb.append("📝 備註事項 : ${record.notes}\n")
@@ -323,7 +323,7 @@ object ShareUtility {
                 sb.append("\n📍 [AR 空間標註點紀錄] :\n")
                 points.forEachIndexed { index, p ->
                     val lbl = if (!p.label.isNullOrBlank()) " - \"${p.label}\"" else ""
-                    sb.append("   - 標註點 #${index + 1}: ${String.format("(X:%.2f, Y:%.2f, Z:%.2f)", p.x, p.y, p.z)}$lbl\n")
+                    sb.append("   - 標註點 #${index + 1}: (X:${Math.round(p.x)}, Y:${Math.round(p.y)}, Z:${Math.round(p.z)})$lbl\n")
                 }
                 
                 if (points.size >= 2) {
@@ -344,7 +344,7 @@ object ShareUtility {
                         
                         val lbl1 = if (!p1.label.isNullOrBlank()) p1.label else "#${i + 1}"
                         val lbl2 = if (!p2.label.isNullOrBlank()) p2.label else "#${i + 2}"
-                        sb.append("   👉 [$lbl1] ↗ [$lbl2] : ${String.format("%.2f %s", displayDist, record.unit)}\n")
+                        sb.append("   👉 [$lbl1] ↗ [$lbl2] : ${Math.round(displayDist)} ${record.unit}\n")
                     }
                 }
             }
@@ -420,7 +420,7 @@ object ShareUtility {
             typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
             isAntiAlias = true
         }
-        val formattedVal = String.format("%.2f %s", record.value, record.unit)
+        val formattedVal = "${Math.round(record.value)} ${record.unit}"
         canvas.drawText(formattedVal, 80f, 175f, valPaint)
         
         // Meta Tag (Mode Label)
@@ -551,7 +551,7 @@ object ShareUtility {
                         "ft" -> cmValue / 30.48
                         else -> cmValue
                     }
-                    val segmentText = String.format("%.1f %s", displayDist, record.unit)
+                    val segmentText = "${Math.round(displayDist)} ${record.unit}"
                     
                     // Box placard in segment center
                     val mx = (p1.x + p2.x) / 2f

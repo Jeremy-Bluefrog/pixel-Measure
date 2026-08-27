@@ -354,10 +354,9 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
             _selectedTileForDetail.value = tile
 
             triggerHapticFeedback()
-            val wStr = DecimalFormat("0.#").format(tile.estimatedWidthCm)
-            val hStr = DecimalFormat("0.#").format(tile.estimatedHeightCm)
-            val areaStr = DecimalFormat("0.00").format(tile.areaM2)
-            _toastMessage.tryEmit("✨ 已自動鎖定並測量磁磚：${wStr}×${hStr} cm (${areaStr} m²)")
+            val wStr = "${Math.round(tile.estimatedWidthCm)}"
+            val hStr = "${Math.round(tile.estimatedHeightCm)}"
+            _toastMessage.tryEmit("✨ 已自動鎖定並測量磁磚：${wStr}×${hStr} cm")
         }
     }
 
@@ -396,16 +395,17 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     private val pendingHitTestQueue = AtomicReference<Pair<Float, Float>?>()
 
     // AR Frame Processing on GL Thread
-    fun processGlFrame(frame: Frame, engine: ModernArEngine) {
-        // 1. Process any pending tap hit-test
+    fun processGlFrame(frame: Frame, engine: ModernArEngine): HitTestResult? {
+        // 1. Process any pending tap hit-test (creates persistent anchor only on tap)
         val tapRequest = pendingHitTestQueue.getAndSet(null)
+        val isTap = tapRequest != null
         val hitX = tapRequest?.first ?: (displayWidth / 2f)
         val hitY = tapRequest?.second ?: (displayHeight / 2f)
 
-        val hitResult = engine.performHitTest(frame, hitX, hitY)
+        val hitResult = engine.performHitTest(frame, hitX, hitY, createAnchor = isTap)
 
-        // 2. Real-time live targeting preview at screen center
-        val centerHit = if (tapRequest == null) hitResult else engine.performHitTest(frame, displayWidth / 2f, displayHeight / 2f)
+        // 2. Real-time live targeting preview at screen center (no anchor creation to avoid GC pauses)
+        val centerHit = if (!isTap) hitResult else engine.performHitTest(frame, displayWidth / 2f, displayHeight / 2f, createAnchor = false)
 
         if (centerHit != null) {
             val pose = centerHit.pose
@@ -459,10 +459,10 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
                     val rawD = ArMath.distance(lastPoint, finalTargetPoint)
                     sensorCorrectionEngine.correctDistanceWithStereoParallax(rawD)
                 }
-                _liveDistanceMeters.value = dist
+                _liveDistanceMeters.value = smoothLiveDistance(dist)
             } else {
                 val centerDist = sensorCorrectionEngine.correctDistanceWithStereoParallax(centerHit.distance.toDouble())
-                _liveDistanceMeters.value = centerDist
+                _liveDistanceMeters.value = smoothLiveDistance(centerDist)
             }
         }
 
@@ -477,10 +477,16 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
                 anchor = hitResult.anchor
             )
             val contactP = sensorCorrectionEngine.applyProximityZeroContactOffset(rawP)
-            val correctedP = if (capturedPoints.isNotEmpty() && _cameraSubMode.value == 0) {
-                sensorCorrectionEngine.correctOrthogonalAlignment(capturedPoints.last(), contactP)
+            val livePt = _liveTargetPoint.value
+            val baseP = if (livePt != null && ArMath.distance(livePt, contactP) < 0.08) {
+                livePt.copy(anchor = hitResult.anchor ?: livePt.anchor)
             } else {
                 contactP
+            }
+            val correctedP = if (capturedPoints.isNotEmpty() && _cameraSubMode.value == 0) {
+                sensorCorrectionEngine.correctOrthogonalAlignment(capturedPoints.last(), baseP)
+            } else {
+                baseP
             }
 
             android.os.Handler(android.os.Looper.getMainLooper()).post {
@@ -490,6 +496,21 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
                 updateAutoDetectedGeometry()
             }
         }
+        return centerHit
+    }
+
+    private fun smoothLiveDistance(targetDist: Double): Double {
+        val prev = _liveDistanceMeters.value ?: return targetDist
+        val diff = abs(targetDist - prev)
+        // Deadband: within 4mm, completely hold previous distance to prevent digit flickering
+        if (diff < 0.004) return prev
+        val alpha = when {
+            diff < 0.02 -> 0.08 // Micro flutter: strong dampening
+            diff < 0.08 -> 0.20 // Minor change: smooth ease
+            diff < 0.30 -> 0.50 // Moderate shift
+            else -> 1.0         // Big move: immediate
+        }
+        return prev * (1.0 - alpha) + targetDist * alpha
     }
 
     private fun updateAutoDetectedGeometry() {
@@ -536,14 +557,16 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun onArFrameUpdated(data: ModernArFrame) {
-        _arTrackingState.value = data.trackingState
-        _trackingFailureReason.value = data.trackingFailureReason
+        if (_arTrackingState.value != data.trackingState) _arTrackingState.value = data.trackingState
+        if (_trackingFailureReason.value != data.trackingFailureReason) _trackingFailureReason.value = data.trackingFailureReason
         _viewMatrix.value = data.viewMatrix
         _projectionMatrix.value = data.projectionMatrix
-        _isDepthAvailable.value = data.isDepthAvailable
-        _detectedPlanes.value = data.planes
-        _arPlanesCount.value = data.planes.count { it.isTracking }
-        _surfaceTypeAtCenter.value = data.surfaceTypeAtCenter
+        if (_isDepthAvailable.value != data.isDepthAvailable) _isDepthAvailable.value = data.isDepthAvailable
+        if (_detectedPlanes.value !== data.planes) {
+            _detectedPlanes.value = data.planes
+            _arPlanesCount.value = data.planes.count { it.isTracking }
+        }
+        if (_surfaceTypeAtCenter.value != data.surfaceTypeAtCenter) _surfaceTypeAtCenter.value = data.surfaceTypeAtCenter
         _lightIntensity.value = data.lightIntensity
 
         // Update active anchor positions to eliminate world drift
@@ -621,9 +644,9 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
 
         if (capturedPoints.isNotEmpty()) {
             val dist = ArMath.distance(capturedPoints.last(), smoothed)
-            _liveDistanceMeters.value = dist
+            _liveDistanceMeters.value = smoothLiveDistance(dist)
         } else {
-            _liveDistanceMeters.value = estDist
+            _liveDistanceMeters.value = smoothLiveDistance(estDist)
         }
     }
 
@@ -731,43 +754,43 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    // Formatting utilities
+    // Formatting utilities (整數顯示，無小數點)
     fun formatLength(meters: Double, unit: String = _selectedUnit.value): String {
-        val df = DecimalFormat("#,##0.00")
+        val df = DecimalFormat("#,##0")
         return when (unit.lowercase()) {
-            "m" -> "${df.format(meters)} m"
-            "in" -> "${df.format(meters * 39.3701)} in"
-            "ft" -> "${df.format(meters * 3.28084)} ft"
-            "yd" -> "${df.format(meters * 1.09361)} yd"
+            "m" -> "${df.format(Math.round(meters))} m"
+            "in" -> "${df.format(Math.round(meters * 39.3701))} in"
+            "ft" -> "${df.format(Math.round(meters * 3.28084))} ft"
+            "yd" -> "${df.format(Math.round(meters * 1.09361))} yd"
             else -> {
                 val cm = meters * 100.0
-                "${df.format(cm)} cm"
+                "${df.format(Math.round(cm))} cm"
             }
         }
     }
 
     fun formatArea(sqMeters: Double, unit: String = _selectedUnit.value): String {
-        val df = DecimalFormat("#,##0.00")
+        val df = DecimalFormat("#,##0")
         return when (unit.lowercase()) {
-            "m" -> "${df.format(sqMeters)} m²"
-            "in" -> "${df.format(sqMeters * 1550.0)} in²"
-            "ft" -> "${df.format(sqMeters * 10.7639)} sq ft"
-            "yd" -> "${df.format(sqMeters * 1.19599)} sq yd"
+            "m" -> "${df.format(Math.round(sqMeters))} m²"
+            "in" -> "${df.format(Math.round(sqMeters * 1550.0))} in²"
+            "ft" -> "${df.format(Math.round(sqMeters * 10.7639))} sq ft"
+            "yd" -> "${df.format(Math.round(sqMeters * 1.19599))} sq yd"
             else -> {
                 val sqCm = sqMeters * 10000.0
-                if (sqCm >= 10000.0) "${df.format(sqMeters)} m²" else "${df.format(sqCm)} cm²"
+                if (sqCm >= 10000.0) "${df.format(Math.round(sqMeters))} m²" else "${df.format(Math.round(sqCm))} cm²"
             }
         }
     }
 
     fun formatVolume(cuMeters: Double, unit: String = _selectedUnit.value): String {
-        val df = DecimalFormat("#,##0.00")
+        val df = DecimalFormat("#,##0")
         return when (unit.lowercase()) {
-            "m" -> "${df.format(cuMeters)} m³"
-            "ft" -> "${df.format(cuMeters * 35.3147)} cu ft"
+            "m" -> "${df.format(Math.round(cuMeters))} m³"
+            "ft" -> "${df.format(Math.round(cuMeters * 35.3147))} cu ft"
             else -> {
                 val liters = cuMeters * 1000.0
-                "${df.format(liters)} L (${df.format(cuMeters)} m³)"
+                "${df.format(Math.round(liters))} L"
             }
         }
     }
@@ -821,7 +844,7 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
                 }
                 "ANGLE" -> {
                     val angle = calculateAngle()
-                    Triple(angle, "ANGLE", "3D 空間夾角 (${DecimalFormat("0.0").format(angle)}°) · $timeStr")
+                    Triple(angle, "ANGLE", "3D 空間夾角 (${Math.round(angle)}°) · $timeStr")
                 }
                 else -> {
                     val dist = calculateTotalDistance()
