@@ -82,45 +82,53 @@ class ModernArEngine(private val context: Context) {
         try {
             val isEmulator = android.os.Build.FINGERPRINT.startsWith("generic") ||
                     android.os.Build.FINGERPRINT.startsWith("unknown") ||
+                    android.os.Build.FINGERPRINT.contains("vbox") ||
                     android.os.Build.MODEL.contains("google_sdk") ||
                     android.os.Build.MODEL.contains("Emulator") ||
                     android.os.Build.MODEL.contains("Android SDK built for x86") ||
+                    android.os.Build.MODEL.contains("Cuttlefish") ||
+                    android.os.Build.HARDWARE.contains("goldfish") ||
+                    android.os.Build.HARDWARE.contains("ranchu") ||
+                    android.os.Build.HARDWARE.contains("cutf") ||
+                    android.os.Build.BOARD.contains("cutf") ||
+                    android.os.Build.PRODUCT.contains("sdk") ||
+                    android.os.Build.PRODUCT.contains("cf_x86") ||
+                    android.os.Build.PRODUCT.contains("vbox") ||
+                    android.os.Build.PRODUCT.contains("emulator") ||
+                    android.os.Build.PRODUCT.contains("simulator") ||
                     android.os.Build.MANUFACTURER.contains("Genymotion") ||
                     (android.os.Build.BRAND.startsWith("generic") && android.os.Build.DEVICE.startsWith("generic")) ||
                     "google_sdk" == android.os.Build.PRODUCT
 
-            // Check if Play Store is installed to avoid ARCore internal Error Log on devices without Play Store
-            val hasPlayStore = try {
-                context.packageManager.getPackageInfo("com.android.vending", 0)
-                true
-            } catch (e: Exception) {
-                false
-            }
-
-            val availability = if (isEmulator) {
-                android.util.Log.w("ModernArEngine", "Running on Emulator, skipping ARCore availability check.")
-                com.google.ar.core.ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE
-            } else if (hasPlayStore) {
-                try {
-                    com.google.ar.core.ArCoreApk.getInstance().checkAvailability(context)
-                } catch (t: Throwable) {
-                    com.google.ar.core.ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE
-                }
-            } else {
-                android.util.Log.w("ModernArEngine", "Play Store not found, skipping ARCore availability check.")
-                com.google.ar.core.ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE
-            }
-
-            if (availability == ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE ||
-                availability == ArCoreApk.Availability.UNKNOWN_ERROR ||
-                availability == ArCoreApk.Availability.UNKNOWN_TIMED_OUT) {
-                Log.w("ModernArEngine", "ARCore is not supported on this device ($availability). Activating CameraX Precision Fallback.")
+            if (isEmulator) {
+                Log.i("ModernArEngine", "Running on Emulator. Activating CameraX Precision Fallback.")
                 isSupported = false
                 return null
             }
 
+            // Check if Google Play Services for AR (com.google.ar.core) is already installed locally.
+            // If ARCore is not installed, calling checkAvailability() triggers ARCore's internal InstallService
+            // to bind to Play Store, which fails on devices/emulators without Play Store install daemon.
+            val isArCorePackageInstalled = try {
+                context.packageManager.getPackageInfo("com.google.ar.core", 0) != null
+            } catch (e: Throwable) {
+                false
+            }
+
+            if (!isArCorePackageInstalled) {
+                Log.i("ModernArEngine", "Google Play Services for AR (com.google.ar.core) not installed. Activating CameraX Fallback.")
+                isSupported = false
+                return null
+            }
+
+            val availability = try {
+                com.google.ar.core.ArCoreApk.getInstance().checkAvailability(context)
+            } catch (t: Throwable) {
+                com.google.ar.core.ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE
+            }
+
             if (availability != ArCoreApk.Availability.SUPPORTED_INSTALLED) {
-                Log.w("ModernArEngine", "ARCore APK not installed or not fully supported ($availability). Activating CameraX Fallback.")
+                Log.i("ModernArEngine", "ARCore status ($availability). Activating CameraX Fallback.")
                 isSupported = false
                 return null
             }

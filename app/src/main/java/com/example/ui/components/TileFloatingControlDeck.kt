@@ -38,11 +38,10 @@ fun TileFloatingControlDeck(
     val colorPrimary = MaterialTheme.colorScheme.primary
     val colorOnPrimary = MaterialTheme.colorScheme.onPrimary
     val currentTile = detectedTiles.firstOrNull()
-    val widthCm = currentTile?.estimatedWidthCm ?: activePreset.widthCm
-    val heightCm = currentTile?.estimatedHeightCm ?: activePreset.heightCm
-    val areaCm2 = widthCm * heightCm
-    val areaM2 = areaCm2 / 10000.0
-    val df = remember { DecimalFormat("#,##0.#") }
+    val widthCm = Math.round(currentTile?.estimatedWidthCm ?: activePreset.widthCm).toInt()
+    val heightCm = Math.round(currentTile?.estimatedHeightCm ?: activePreset.heightCm).toInt()
+    val areaCm2 = (widthCm.toLong() * heightCm.toLong())
+    val df = remember { DecimalFormat("#,##0") }
 
     Column(
         modifier = modifier
@@ -129,19 +128,19 @@ fun TileFloatingControlDeck(
                         border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.35f))
                     ) {
                         Column(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                             horizontalAlignment = Alignment.End
                         ) {
                             Text(
-                                text = "${df.format(areaCm2)} cm²",
-                                color = Color(0xFF80D8FF),
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.ExtraBold
+                                text = "磁磚面積",
+                                color = Color.White.copy(alpha = 0.7f),
+                                fontSize = 10.sp
                             )
                             Text(
-                                text = "${String.format("%.3f", areaM2)} m²",
-                                color = Color.White.copy(alpha = 0.75f),
-                                fontSize = 10.sp
+                                text = "${df.format(areaCm2)} cm²",
+                                color = Color(0xFF80D8FF),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.ExtraBold
                             )
                         }
                     }

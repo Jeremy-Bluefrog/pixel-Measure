@@ -18,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -26,6 +27,8 @@ import coil.compose.AsyncImage
 import com.example.data.model.MeasureRecord
 import com.example.logic.ShareUtility
 import com.example.logic.TranslationManager
+import com.example.ui.components.GradientBlurBottomBar
+import com.example.ui.components.GradientBlurTopBar
 import com.example.ui.components.ModernArCameraView
 import com.example.ui.components.RulerComponent
 import com.example.ui.viewmodel.MeasureViewModel
@@ -78,100 +81,157 @@ fun MainScreen(viewModel: MeasureViewModel) {
         },
         topBar = {
             if (currentMode == 1) {
-                CenterAlignedTopAppBar(
-                    title = {
-                        Text(
-                            text = "螢幕高精直尺",
-                            fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                    },
-                    actions = {
-                        // Unit selector button
-                        Box {
-                            TextButton(
-                                onClick = { showUnitMenu = true },
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Text(
-                                    text = selectedUnit.uppercase(),
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = colorPrimary
-                                )
-                                Icon(
-                                    Icons.Rounded.ArrowDropDown,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-
-                            DropdownMenu(
-                                expanded = showUnitMenu,
-                                onDismissRequest = { showUnitMenu = false }
-                            ) {
-                                listOf("cm" to "公分 (cm)", "m" to "公尺 (m)", "in" to "英吋 (in)", "ft" to "英呎 (ft)", "yd" to "碼 (yd)").forEach { (unitCode, label) ->
-                                    DropdownMenuItem(
-                                        text = { Text(label, fontWeight = if (selectedUnit == unitCode) FontWeight.Bold else FontWeight.Normal) },
-                                        onClick = {
-                                            viewModel.setSelectedUnit(unitCode)
-                                            showUnitMenu = false
-                                        },
-                                        leadingIcon = if (selectedUnit == unitCode) {
-                                            { Icon(Icons.Rounded.Check, null, tint = colorPrimary) }
-                                        } else null
+                GradientBlurTopBar(
+                    baseColor = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier.testTag("top_gradient_blur_bar")
+                ) {
+                    CenterAlignedTopAppBar(
+                        title = {
+                            Text(
+                                text = "螢幕高精直尺",
+                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                        },
+                        actions = {
+                            // Unit selector button
+                            Box {
+                                TextButton(
+                                    onClick = { showUnitMenu = true },
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text(
+                                        text = selectedUnit.uppercase(),
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = colorPrimary
+                                    )
+                                    Icon(
+                                        Icons.Rounded.ArrowDropDown,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
                                     )
                                 }
+
+                                DropdownMenu(
+                                    expanded = showUnitMenu,
+                                    onDismissRequest = { showUnitMenu = false }
+                                ) {
+                                    listOf("cm" to "公分 (cm)", "m" to "公尺 (m)", "in" to "英吋 (in)", "ft" to "英呎 (ft)", "yd" to "碼 (yd)").forEach { (unitCode, label) ->
+                                        DropdownMenuItem(
+                                            text = { Text(label, fontWeight = if (selectedUnit == unitCode) FontWeight.Bold else FontWeight.Normal) },
+                                            onClick = {
+                                                viewModel.setSelectedUnit(unitCode)
+                                                showUnitMenu = false
+                                            },
+                                            leadingIcon = if (selectedUnit == unitCode) {
+                                                { Icon(Icons.Rounded.Check, null, tint = colorPrimary) }
+                                            } else null
+                                        )
+                                    }
+                                }
                             }
-                        }
 
-                        // History sheet button
-                        IconButton(onClick = { showHistorySheet = true }) {
-                            Icon(
-                                Icons.Rounded.History,
-                                contentDescription = "歷史記錄",
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
+                            // History sheet button
+                            IconButton(onClick = { showHistorySheet = true }) {
+                                Icon(
+                                    Icons.Rounded.History,
+                                    contentDescription = "歷史記錄",
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
 
-                        // Settings dialog button
-                        IconButton(onClick = { showSettingsDialog = true }) {
-                            Icon(
-                                Icons.Rounded.Settings,
-                                contentDescription = "設定",
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    },
-                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)
+                            // Settings dialog button
+                            IconButton(onClick = { showSettingsDialog = true }) {
+                                Icon(
+                                    Icons.Rounded.Settings,
+                                    contentDescription = "設定",
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        },
+                        colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                            containerColor = Color.Transparent
+                        )
                     )
-                )
+                }
             }
         },
         bottomBar = {
-            NavigationBar(
-                containerColor = MaterialTheme.colorScheme.surface,
-                tonalElevation = 8.dp
+            val isCameraMode = currentMode == 0
+            GradientBlurBottomBar(
+                baseColor = if (isCameraMode) Color.Black else MaterialTheme.colorScheme.surface,
+                modifier = Modifier.testTag("bottom_segmented_bar")
             ) {
-                NavigationBarItem(
-                    selected = currentMode == 0,
-                    onClick = { viewModel.setMode(0) },
-                    icon = { Icon(Icons.Rounded.CameraAlt, contentDescription = "相機 AR") },
-                    label = { Text("相機 AR", fontWeight = if (currentMode == 0) FontWeight.Bold else FontWeight.Normal) }
-                )
-                NavigationBarItem(
-                    selected = currentMode == 1,
-                    onClick = { viewModel.setMode(1) },
-                    icon = { Icon(Icons.Rounded.Straighten, contentDescription = "螢幕尺") },
-                    label = { Text("螢幕尺", fontWeight = if (currentMode == 1) FontWeight.Bold else FontWeight.Normal) }
-                )
+                SingleChoiceSegmentedButtonRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .widthIn(max = 440.dp)
+                        .testTag("mode_segmented_button_row")
+                ) {
+                    SegmentedButton(
+                        selected = currentMode == 0,
+                        onClick = { viewModel.setMode(0) },
+                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                        icon = {
+                            SegmentedButtonDefaults.Icon(active = currentMode == 0) {
+                                Icon(
+                                    Icons.Rounded.CameraAlt,
+                                    contentDescription = "相機 AR",
+                                    modifier = Modifier.size(SegmentedButtonDefaults.IconSize)
+                                )
+                            }
+                        },
+                        label = {
+                            Text(
+                                text = viewModel.getString("nav_camera").ifEmpty { "相機 AR" },
+                                fontWeight = if (currentMode == 0) FontWeight.Bold else FontWeight.Normal,
+                                fontSize = 14.sp
+                            )
+                        },
+                        colors = SegmentedButtonDefaults.colors(
+                            activeContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            activeContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            inactiveContainerColor = if (isCameraMode) Color.Black.copy(alpha = 0.55f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                            inactiveContentColor = if (isCameraMode) Color.White.copy(alpha = 0.9f) else MaterialTheme.colorScheme.onSurfaceVariant
+                        ),
+                        modifier = Modifier.testTag("segmented_button_camera")
+                    )
+                    SegmentedButton(
+                        selected = currentMode == 1,
+                        onClick = { viewModel.setMode(1) },
+                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                        icon = {
+                            SegmentedButtonDefaults.Icon(active = currentMode == 1) {
+                                Icon(
+                                    Icons.Rounded.Straighten,
+                                    contentDescription = "螢幕尺",
+                                    modifier = Modifier.size(SegmentedButtonDefaults.IconSize)
+                                )
+                            }
+                        },
+                        label = {
+                            Text(
+                                text = viewModel.getString("nav_ruler").ifEmpty { "螢幕尺" },
+                                fontWeight = if (currentMode == 1) FontWeight.Bold else FontWeight.Normal,
+                                fontSize = 14.sp
+                            )
+                        },
+                        colors = SegmentedButtonDefaults.colors(
+                            activeContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            activeContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            inactiveContainerColor = if (isCameraMode) Color.Black.copy(alpha = 0.55f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                            inactiveContentColor = if (isCameraMode) Color.White.copy(alpha = 0.9f) else MaterialTheme.colorScheme.onSurfaceVariant
+                        ),
+                        modifier = Modifier.testTag("segmented_button_ruler")
+                    )
+                }
             }
         }
     ) { innerPadding ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(if (currentMode == 0) PaddingValues(bottom = innerPadding.calculateBottomPadding()) else innerPadding)
+                .padding(if (currentMode == 0) PaddingValues(bottom = 0.dp) else innerPadding)
         ) {
             AnimatedContent(
                 targetState = currentMode,
@@ -184,7 +244,8 @@ fun MainScreen(viewModel: MeasureViewModel) {
                     0 -> ModernArCameraView(
                         viewModel = viewModel,
                         onShowHistoryClick = { showHistorySheet = true },
-                        onShowSettingsClick = { showSettingsDialog = true }
+                        onShowSettingsClick = { showSettingsDialog = true },
+                        bottomPadding = innerPadding.calculateBottomPadding()
                     )
                     else -> RulerComponent(
                         viewModel = viewModel,
@@ -200,7 +261,7 @@ fun MainScreen(viewModel: MeasureViewModel) {
                 exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 85.dp, start = 16.dp, end = 16.dp)
+                    .padding(bottom = innerPadding.calculateBottomPadding() + 16.dp, start = 16.dp, end = 16.dp)
             ) {
                 lastSavedRecord?.let { saved ->
                     Surface(

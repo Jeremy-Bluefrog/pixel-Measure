@@ -59,7 +59,8 @@ import kotlin.math.*
 fun ModernArCameraView(
     viewModel: MeasureViewModel,
     onShowHistoryClick: () -> Unit,
-    onShowSettingsClick: () -> Unit
+    onShowSettingsClick: () -> Unit,
+    bottomPadding: androidx.compose.ui.unit.Dp = 0.dp
 ) {
     val context = LocalContext.current
     val localView = LocalView.current
@@ -1055,15 +1056,29 @@ fun ModernArCameraView(
                 }
             }
 
-            // 5. Clean Minimal Top Bar (Clear / Status indicator, Torch, History, Settings)
-            Row(
+            // 5. Clean Minimal Top Bar with Gradient Blur (Clear / Status indicator, Torch, History, Settings)
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .statusBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .align(Alignment.TopCenter)
             ) {
+                // Top Gradient Blur Scrim
+                GradientBlurScrim(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(130.dp),
+                    isTop = true,
+                    baseColor = Color.Black
+                )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                 // Left: Status badge or clear button
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -1280,6 +1295,7 @@ fun ModernArCameraView(
                     }
                 }
             }
+        }
 
             // 6. Bottom Dynamic Control Deck (+ / ✓ Button & Camera Shutter)
             var isShutterFlash by remember { mutableStateOf(false) }
@@ -1293,11 +1309,22 @@ fun ModernArCameraView(
                 )
             }
 
+            // Bottom Gradient Blur Scrim for camera control deck
+            GradientBlurScrim(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(230.dp)
+                    .align(Alignment.BottomCenter),
+                isTop = false,
+                baseColor = Color.Black
+            )
+
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
+                    .padding(bottom = bottomPadding)
                     .navigationBarsPadding()
-                    .padding(horizontal = 24.dp, vertical = 20.dp),
+                    .padding(horizontal = 24.dp, vertical = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 // AI Tile Interactive Floating Deck
@@ -1343,11 +1370,11 @@ fun ModernArCameraView(
                         ) {
                             val (badgeText, badgeIcon) = when {
                                 autoDetectedType == "AREA" && capturedPoints.size >= 3 ->
-                                    "測量中 (面積): ${viewModel.formatArea(area, selectedUnit)}" to Icons.Rounded.SquareFoot
+                                    "面積: ${viewModel.formatArea(area, selectedUnit)}" to Icons.Rounded.SquareFoot
                                 autoDetectedType == "HEIGHT" && capturedPoints.size >= 2 ->
-                                    "測量中 (高度): ${viewModel.formatLength(height, selectedUnit)}" to Icons.Rounded.Height
+                                    "高度: ${viewModel.formatLength(height, selectedUnit)}" to Icons.Rounded.Height
                                 else ->
-                                    "測量中 (長度): ${viewModel.formatLength(totalLen, selectedUnit)}" to Icons.Rounded.Straighten
+                                    "總長: ${viewModel.formatLength(totalLen, selectedUnit)}" to Icons.Rounded.Straighten
                             }
 
                             Icon(

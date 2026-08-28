@@ -779,40 +779,86 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     // Formatting utilities (整數顯示，無小數點)
     fun formatLength(meters: Double, unit: String = _selectedUnit.value): String {
         val df = DecimalFormat("#,##0")
-        return when (unit.lowercase()) {
-            "m" -> "${df.format(Math.round(meters))} m"
-            "in" -> "${df.format(Math.round(meters * 39.3701))} in"
-            "ft" -> "${df.format(Math.round(meters * 3.28084))} ft"
-            "yd" -> "${df.format(Math.round(meters * 1.09361))} yd"
+        return when (unit.lowercase().trim()) {
+            "m" -> {
+                val m = Math.round(meters)
+                val displayM = if (meters > 0.001 && m == 0L) 1L else m
+                "${df.format(displayM)} m"
+            }
+            "in" -> {
+                val inches = Math.round(meters * 39.3701)
+                val displayIn = if (meters > 0.001 && inches == 0L) 1L else inches
+                "${df.format(displayIn)} in"
+            }
+            "ft" -> {
+                val ft = Math.round(meters * 3.28084)
+                val displayFt = if (meters > 0.001 && ft == 0L) 1L else ft
+                "${df.format(displayFt)} ft"
+            }
+            "yd" -> {
+                val yd = Math.round(meters * 1.09361)
+                val displayYd = if (meters > 0.001 && yd == 0L) 1L else yd
+                "${df.format(displayYd)} yd"
+            }
             else -> {
                 val cm = meters * 100.0
-                "${df.format(Math.round(cm))} cm"
+                val roundedCm = Math.round(cm)
+                val displayCm = if (meters > 0.001 && roundedCm == 0L) 1L else roundedCm
+                "${df.format(displayCm)} cm"
             }
         }
     }
 
     fun formatArea(sqMeters: Double, unit: String = _selectedUnit.value): String {
         val df = DecimalFormat("#,##0")
-        return when (unit.lowercase()) {
-            "m" -> "${df.format(Math.round(sqMeters))} m²"
-            "in" -> "${df.format(Math.round(sqMeters * 1550.0))} in²"
-            "ft" -> "${df.format(Math.round(sqMeters * 10.7639))} sq ft"
-            "yd" -> "${df.format(Math.round(sqMeters * 1.19599))} sq yd"
+        return when (unit.lowercase().trim()) {
+            "m" -> {
+                val m2 = Math.round(sqMeters)
+                val displayM2 = if (sqMeters > 0.0001 && m2 == 0L) 1L else m2
+                "${df.format(displayM2)} m²"
+            }
+            "in" -> {
+                val in2 = Math.round(sqMeters * 1550.0)
+                val displayIn2 = if (sqMeters > 0.0001 && in2 == 0L) 1L else in2
+                "${df.format(displayIn2)} in²"
+            }
+            "ft" -> {
+                val ft2 = Math.round(sqMeters * 10.7639)
+                val displayFt2 = if (sqMeters > 0.0001 && ft2 == 0L) 1L else ft2
+                "${df.format(displayFt2)} sq ft"
+            }
+            "yd" -> {
+                val yd2 = Math.round(sqMeters * 1.19599)
+                val displayYd2 = if (sqMeters > 0.0001 && yd2 == 0L) 1L else yd2
+                "${df.format(displayYd2)} sq yd"
+            }
             else -> {
                 val sqCm = sqMeters * 10000.0
-                if (sqCm >= 10000.0) "${df.format(Math.round(sqMeters))} m²" else "${df.format(Math.round(sqCm))} cm²"
+                val roundedSqCm = Math.round(sqCm)
+                val displaySqCm = if (sqMeters > 0.0001 && roundedSqCm == 0L) 1L else roundedSqCm
+                "${df.format(displaySqCm)} cm²"
             }
         }
     }
 
     fun formatVolume(cuMeters: Double, unit: String = _selectedUnit.value): String {
         val df = DecimalFormat("#,##0")
-        return when (unit.lowercase()) {
-            "m" -> "${df.format(Math.round(cuMeters))} m³"
-            "ft" -> "${df.format(Math.round(cuMeters * 35.3147))} cu ft"
+        return when (unit.lowercase().trim()) {
+            "m" -> {
+                val m3 = Math.round(cuMeters)
+                val displayM3 = if (cuMeters > 0.0001 && m3 == 0L) 1L else m3
+                "${df.format(displayM3)} m³"
+            }
+            "ft" -> {
+                val ft3 = Math.round(cuMeters * 35.3147)
+                val displayFt3 = if (cuMeters > 0.0001 && ft3 == 0L) 1L else ft3
+                "${df.format(displayFt3)} cu ft"
+            }
             else -> {
                 val liters = cuMeters * 1000.0
-                "${df.format(Math.round(liters))} L"
+                val roundedL = Math.round(liters)
+                val displayL = if (cuMeters > 0.0001 && roundedL == 0L) 1L else roundedL
+                "${df.format(displayL)} L"
             }
         }
     }

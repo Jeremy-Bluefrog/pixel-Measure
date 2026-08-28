@@ -35,13 +35,12 @@ fun TileDetailBottomSheet(
     val context = LocalContext.current
     val activePreset by viewModel.activeTilePreset.collectAsState()
 
-    val widthCm = if (tile.estimatedWidthCm > 0) tile.estimatedWidthCm else activePreset.widthCm
-    val heightCm = if (tile.estimatedHeightCm > 0) tile.estimatedHeightCm else activePreset.heightCm
-    val areaCm2 = widthCm * heightCm
-    val areaM2 = areaCm2 / 10000.0
-    val perimeterCm = (widthCm + heightCm) * 2.0
+    val widthCm = Math.round(if (tile.estimatedWidthCm > 0) tile.estimatedWidthCm else activePreset.widthCm).toInt()
+    val heightCm = Math.round(if (tile.estimatedHeightCm > 0) tile.estimatedHeightCm else activePreset.heightCm).toInt()
+    val areaCm2 = (widthCm.toLong() * heightCm.toLong())
+    val perimeterCm = ((widthCm + heightCm) * 2).toLong()
 
-    val df = remember { DecimalFormat("#,##0.#") }
+    val df = remember { DecimalFormat("#,##0") }
     val colorPrimary = MaterialTheme.colorScheme.primary
     val colorOnPrimary = MaterialTheme.colorScheme.onPrimary
 
@@ -190,11 +189,6 @@ fun TileDetailBottomSheet(
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
-                                Text(
-                                    text = "(${String.format("%.4f", areaM2)} m²)",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
                             }
                         }
 
@@ -220,11 +214,6 @@ fun TileDetailBottomSheet(
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
-                                Text(
-                                    text = "(${String.format("%.2f", perimeterCm / 100.0)} m)",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
                             }
                         }
                     }
@@ -243,7 +232,7 @@ fun TileDetailBottomSheet(
                         val shareText = """
                             📐 【磁磚測量結果】
                             • 尺寸：${df.format(widthCm)} × ${df.format(heightCm)} cm
-                            • 面積：${df.format(areaCm2)} cm² (${String.format("%.4f", areaM2)} m²)
+                            • 面積：${df.format(areaCm2)} cm²
                             • 周長：${df.format(perimeterCm)} cm
                         """.trimIndent()
                         ShareUtility.shareText(context, shareText, "分享磁磚測量結果")
@@ -259,7 +248,7 @@ fun TileDetailBottomSheet(
                 Button(
                     onClick = {
                         val title = "磁磚測量 (${df.format(widthCm)}×${df.format(heightCm)} cm)"
-                        val notes = "寬度：${df.format(widthCm)} cm | 長度：${df.format(heightCm)} cm | 面積：${df.format(areaCm2)} cm² (${String.format("%.4f", areaM2)} m²) | 周長：${df.format(perimeterCm)} cm"
+                        val notes = "寬度：${df.format(widthCm)} cm | 長度：${df.format(heightCm)} cm | 面積：${df.format(areaCm2)} cm² | 周長：${df.format(perimeterCm)} cm"
                         viewModel.saveMeasurementRecord(
                             customTitle = title,
                             customNotes = notes
