@@ -166,25 +166,43 @@ fun RulerComponent(
 
             // Span highlight band
             drawRect(
-                color = colorPrimary.copy(alpha = 0.12f),
+                color = colorPrimary.copy(alpha = 0.14f),
                 topLeft = Offset(0f, minCaliperY),
                 size = androidx.compose.ui.geometry.Size(w, maxCaliperY - minCaliperY)
             )
 
-            // Top Caliper Line
+            // Top Caliper Line & Active Laser Glow
+            val isTopActive = draggedCaliper == 0
+            if (isTopActive) {
+                drawLine(
+                    color = colorPrimary.copy(alpha = 0.35f),
+                    start = Offset(0f, caliperTopY),
+                    end = Offset(w, caliperTopY),
+                    strokeWidth = 10.dp.toPx()
+                )
+            }
             drawLine(
-                color = colorPrimary,
+                color = if (isTopActive) Color(0xFF00E5FF) else colorPrimary,
                 start = Offset(0f, caliperTopY),
                 end = Offset(w, caliperTopY),
-                strokeWidth = 3.dp.toPx()
+                strokeWidth = if (isTopActive) 4.dp.toPx() else 3.dp.toPx()
             )
 
-            // Bottom Caliper Line
+            // Bottom Caliper Line & Active Laser Glow
+            val isBottomActive = draggedCaliper == 1
+            if (isBottomActive) {
+                drawLine(
+                    color = colorPrimary.copy(alpha = 0.35f),
+                    start = Offset(0f, caliperBottomY),
+                    end = Offset(w, caliperBottomY),
+                    strokeWidth = 10.dp.toPx()
+                )
+            }
             drawLine(
-                color = colorPrimary,
+                color = if (isBottomActive) Color(0xFF00E5FF) else colorPrimary,
                 start = Offset(0f, caliperBottomY),
                 end = Offset(w, caliperBottomY),
-                strokeWidth = 3.dp.toPx()
+                strokeWidth = if (isBottomActive) 4.dp.toPx() else 3.dp.toPx()
             )
         }
 
@@ -195,7 +213,7 @@ fun RulerComponent(
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = 16.dp, bottom = 80.dp)
+                .padding(start = 16.dp, bottom = 16.dp)
                 .shadow(6.dp, RoundedCornerShape(20.dp))
         ) {
             Column(
@@ -219,12 +237,23 @@ fun RulerComponent(
                     )
                 }
 
-                Text(
-                    text = viewModel.formatLength(measuredCm / 100.0, selectedUnit),
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Black,
-                    color = colorPrimary
-                )
+                val formattedText = viewModel.formatLength(measuredCm / 100.0, selectedUnit)
+                AnimatedContent(
+                    targetState = formattedText,
+                    transitionSpec = {
+                        (fadeIn(tween(180)) + slideInVertically { it / 4 }).togetherWith(
+                            fadeOut(tween(140)) + slideOutVertically { -it / 4 }
+                        )
+                    },
+                    label = "rulerReadoutAnim"
+                ) { targetVal ->
+                    Text(
+                        text = targetVal,
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Black,
+                        color = colorPrimary
+                    )
+                }
 
                 // Quick Fine-Tuning Controls (-1mm / +1mm / Reset)
                 Row(

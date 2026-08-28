@@ -34,6 +34,7 @@ import com.example.ui.components.GradientBlurBottomBar
 import com.example.ui.components.GradientBlurTopBar
 import com.example.ui.components.ModernArCameraView
 import com.example.ui.components.RulerComponent
+import com.example.ui.components.SettingsSheet
 import com.example.ui.viewmodel.MeasureViewModel
 import java.io.File
 import java.text.DecimalFormat
@@ -175,7 +176,7 @@ fun MainScreen(viewModel: MeasureViewModel) {
                     FloatingPillNavItem(
                         id = 1,
                         label = rulerLabel,
-                        icon = Icons.Outlined.Description,
+                        icon = Icons.Rounded.Straighten,
                         testTag = "segmented_button_ruler"
                     ),
                     FloatingPillNavItem(
@@ -360,11 +361,11 @@ fun MainScreen(viewModel: MeasureViewModel) {
         )
     }
 
-    // Settings Dialog
+    // Redesigned Settings Sheet
     if (showSettingsDialog) {
-        SettingsDialog(
+        SettingsSheet(
             viewModel = viewModel,
-            onDismiss = { showSettingsDialog = false }
+            onDismissRequest = { showSettingsDialog = false }
         )
     }
 }
@@ -865,249 +866,6 @@ fun RecordDetailDialog(
                         Icon(Icons.Rounded.Delete, null, Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
                         Text("刪除紀錄", fontSize = 13.sp)
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("完成")
-            }
-        }
-    )
-}
-
-@Composable
-fun SettingsDialog(
-    viewModel: MeasureViewModel,
-    onDismiss: () -> Unit
-) {
-    val currentLang by viewModel.currentLanguage.collectAsState()
-    val vibrateOnAlign by viewModel.vibrateOnAlignment.collectAsState()
-    val dynamicColorEnabled by viewModel.dynamicColorEnabled.collectAsState()
-    val isDynamicColorSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.Tune, null, tint = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.width(8.dp))
-                Text("偏好設定", fontWeight = FontWeight.Bold)
-            }
-        },
-        text = {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                // Dynamic Color (Material You)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("動態色彩 (Material You)", fontWeight = FontWeight.Bold)
-                        }
-                        Text(
-                            if (isDynamicColorSupported) "依據系統桌布主題自動調整應用程式色彩" else "需要 Android 12 以上版本支援系統桌布配色",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Switch(
-                        checked = dynamicColorEnabled,
-                        onCheckedChange = { viewModel.setDynamicColorEnabled(it) }
-                    )
-                }
-
-                HorizontalDivider()
-
-                // Vibration toggle
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("對齊震動回饋", fontWeight = FontWeight.Bold)
-                        Text(
-                            "錨點吸附與測量操作時產生觸覺震動回饋",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Switch(
-                        checked = vibrateOnAlign,
-                        onCheckedChange = { viewModel.setVibrateOnAlignment(it) }
-                    )
-                }
-
-                HorizontalDivider()
-
-                // Scanning Feature Point Cloud Toggle (掃描時的點點)
-                val showPointCloud by viewModel.showPointCloud.collectAsState()
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("顯示掃描點 (特徵點雲)", fontWeight = FontWeight.Bold)
-                        Text(
-                            "在空間中顯示表面識別點，掌握 AR 追蹤與表面偵測狀態",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Switch(
-                        checked = showPointCloud,
-                        onCheckedChange = { viewModel.setShowPointCloud(it) }
-                    )
-                }
-
-                // Multi-Sensor Fusion Settings Group
-                val sensorCorrectionEnabled by viewModel.sensorCorrectionEnabled.collectAsState()
-                val antiJitterEnabled by viewModel.antiJitterEnabled.collectAsState()
-                val gravityAlignmentEnabled by viewModel.gravityAlignmentEnabled.collectAsState()
-                val barometerFusionEnabled by viewModel.barometerFusionEnabled.collectAsState()
-                val jerkRejectionEnabled by viewModel.jerkRejectionEnabled.collectAsState()
-                val proximityContactEnabled by viewModel.proximityContactEnabled.collectAsState()
-                val stereoParallaxEnabled by viewModel.stereoParallaxEnabled.collectAsState()
-
-                Column {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Rounded.Sensors, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text("多感應器融合校正", fontWeight = FontWeight.Bold)
-                            }
-                            Text(
-                                "運用重力、陀螺儀、氣壓計、近接感應器與雙鏡頭視差即時校準",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Switch(
-                            checked = sensorCorrectionEnabled,
-                            onCheckedChange = { viewModel.setSensorCorrectionEnabled(it) }
-                        )
-                    }
-
-                    if (sensorCorrectionEnabled) {
-                        Spacer(Modifier.height(10.dp))
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
-                                .padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("陀螺儀防手震濾波", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                                Switch(
-                                    checked = antiJitterEnabled,
-                                    onCheckedChange = { viewModel.setAntiJitterEnabled(it) },
-                                    modifier = Modifier.height(24.dp)
-                                )
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("重力向量垂直/水平校準", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                                Switch(
-                                    checked = gravityAlignmentEnabled,
-                                    onCheckedChange = { viewModel.setGravityAlignmentEnabled(it) },
-                                    modifier = Modifier.height(24.dp)
-                                )
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("氣壓計高度融合", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                                Switch(
-                                    checked = barometerFusionEnabled,
-                                    onCheckedChange = { viewModel.setBarometerFusionEnabled(it) },
-                                    modifier = Modifier.height(24.dp)
-                                )
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("近接感應器貼面零點校準", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                                Switch(
-                                    checked = proximityContactEnabled,
-                                    onCheckedChange = { viewModel.setProximityContactEnabled(it) },
-                                    modifier = Modifier.height(24.dp)
-                                )
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("雙鏡頭同步視差尺度校正", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                                Switch(
-                                    checked = stereoParallaxEnabled,
-                                    onCheckedChange = { viewModel.setStereoParallaxEnabled(it) },
-                                    modifier = Modifier.height(24.dp)
-                                )
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("突發加速度防誤觸", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                                Switch(
-                                    checked = jerkRejectionEnabled,
-                                    onCheckedChange = { viewModel.setJerkRejectionEnabled(it) },
-                                    modifier = Modifier.height(24.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-
-                HorizontalDivider()
-
-                // Language selector
-                Column {
-                    Text("應用程式語言", fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        listOf(
-                            "zh-TW" to "繁體中文",
-                            "zh-CN" to "简体中文",
-                            "en" to "English",
-                            "ja" to "日本語"
-                        ).forEach { (code, name) ->
-                            FilterChip(
-                                selected = currentLang == code,
-                                onClick = { viewModel.setLanguage(code) },
-                                label = { Text(name, fontSize = 12.sp) }
-                            )
-                        }
                     }
                 }
             }

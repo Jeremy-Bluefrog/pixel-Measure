@@ -1,3 +1,5 @@
+@file:androidx.annotation.OptIn(androidx.camera.camera2.interop.ExperimentalCamera2Interop::class)
+
 package com.example.ui.components
 
 import android.Manifest
@@ -54,7 +56,11 @@ import kotlinx.coroutines.launch
 import java.text.DecimalFormat
 import kotlin.math.*
 
-@OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterial3Api::class)
+@OptIn(
+    ExperimentalPermissionsApi::class,
+    ExperimentalMaterial3Api::class
+)
+@androidx.annotation.OptIn(androidx.camera.camera2.interop.ExperimentalCamera2Interop::class)
 @Composable
 fun ModernArCameraView(
     viewModel: MeasureViewModel,
@@ -83,6 +89,7 @@ fun ModernArCameraView(
     val autoDetectedType by viewModel.autoDetectedType.collectAsState()
     val selectedUnit by viewModel.selectedUnit.collectAsState()
     val liveDistanceMeters by viewModel.liveDistanceMeters.collectAsState()
+    val liveTargetPoint by viewModel.liveTargetPoint.collectAsState()
     val isSnapped by viewModel.isSnapped.collectAsState()
     val isTorchOn by viewModel.isTorchOn.collectAsState()
     val showPointCloud by viewModel.showPointCloud.collectAsState()
@@ -123,10 +130,10 @@ fun ModernArCameraView(
     // Reticle & HUD pulse animation
     val infiniteTransition = rememberInfiniteTransition(label = "ReticlePulse")
     val reticlePulseScale by infiniteTransition.animateFloat(
-        initialValue = 0.92f,
-        targetValue = 1.08f,
+        initialValue = 0.94f,
+        targetValue = 1.06f,
         animationSpec = infiniteRepeatable(
-            animation = tween(1200, easing = FastOutSlowInEasing),
+            animation = tween(1100, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "reticlePulse"
@@ -135,7 +142,7 @@ fun ModernArCameraView(
         initialValue = 0f,
         targetValue = 40f,
         animationSpec = infiniteRepeatable(
-            animation = tween(1000, easing = LinearEasing),
+            animation = tween(900, easing = LinearEasing),
             repeatMode = RepeatMode.Restart
         ),
         label = "dashPhase"
@@ -150,22 +157,51 @@ fun ModernArCameraView(
         label = "geminiGlowRotation"
     )
     val geminiFloatBob by infiniteTransition.animateFloat(
-        initialValue = -3.5f,
-        targetValue = 3.5f,
+        initialValue = -4.0f,
+        targetValue = 4.0f,
         animationSpec = infiniteRepeatable(
-            animation = tween(1400, easing = FastOutSlowInEasing),
+            animation = tween(1300, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "geminiFloatBob"
     )
     val geminiLassoPulse by infiniteTransition.animateFloat(
         initialValue = 0.85f,
-        targetValue = 1.0f,
+        targetValue = 1.05f,
         animationSpec = infiniteRepeatable(
-            animation = tween(900, easing = FastOutSlowInEasing),
+            animation = tween(850, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "geminiLassoPulse"
+    )
+    val reticleRotationDeg by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(10000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "reticleRotationDeg"
+    )
+
+    // Redesigned Reactive Spring Animations for Target Snapping & Lock
+    val snapScaleAnimated by animateFloatAsState(
+        targetValue = if (isSnapped) 1.28f else 1.0f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow
+        ),
+        label = "snapScaleAnimated"
+    )
+    val snapGlowAlphaAnimated by animateFloatAsState(
+        targetValue = if (isSnapped) 0.85f else 0.2f,
+        animationSpec = tween(280, easing = FastOutSlowInEasing),
+        label = "snapGlowAlphaAnimated"
+    )
+    val reticleColorAnimated by animateColorAsState(
+        targetValue = if (isSnapped) Color(0xFF00E5FF) else MaterialTheme.colorScheme.primary,
+        animationSpec = tween(250),
+        label = "reticleColorAnimated"
     )
 
     // Dynamic Material 3 Color Tokens
@@ -290,7 +326,6 @@ fun ModernArCameraView(
                                 val previewBuilder = androidx.camera.core.Preview.Builder()
 
                                 try {
-                                    @androidx.camera.camera2.interop.ExperimentalCamera2Interop
                                     val camera2Extender = androidx.camera.camera2.interop.Camera2Interop.Extender(previewBuilder)
                                     camera2Extender.setCaptureRequestOption(
                                         android.hardware.camera2.CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
@@ -317,7 +352,16 @@ fun ModernArCameraView(
                                     androidx.camera.core.CameraSelector.DEFAULT_FRONT_CAMERA
                                 }
                                 cameraProvider.unbindAll()
-                                cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview)
+                                try {
+                                    cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview)
+                                } catch (bindEx: Exception) {
+                                    android.util.Log.w("CameraXFallback", "High FPS binding fallback to standard: ${bindEx.message}")
+                                    val standardPreview = androidx.camera.core.Preview.Builder().build().also {
+                                        it.setSurfaceProvider(previewView.surfaceProvider)
+                                    }
+                                    cameraProvider.unbindAll()
+                                    cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, standardPreview)
+                                }
                             } catch (e: Exception) {
                                 android.util.Log.e("CameraXFallback", "Camera binding failed: ${e.message}")
                             }
@@ -701,7 +745,7 @@ fun ModernArCameraView(
                 // 3D. Active dynamic measurement capsule positioned along the live line
                 if (capturedPoints.isNotEmpty()) {
                     val lastPt = capturedPoints.last()
-                    val liveTarget = viewModel.liveTargetPoint.value
+                    val liveTarget = liveTargetPoint
 
                     if (liveTarget != null && liveDistanceMeters != null && liveDistanceMeters!! > 0.0) {
                         val mid3D = ArMath.midpoint(lastPt, liveTarget)
@@ -1023,35 +1067,106 @@ fun ModernArCameraView(
                 }
             }
 
-            // 4. Center Target Reticle (Clean Dynamic Precision Ring + White Center Dot)
+            // 4. Redesigned Futuristic AR Target Reticle (Spring Snap Aura + Rotating Crosshair Ticks + Center Laser Pinpoint)
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                Canvas(modifier = Modifier.size(54.dp)) {
+                Canvas(modifier = Modifier.size(72.dp)) {
                     val center = Offset(size.width / 2f, size.height / 2f)
+                    val baseRadius = 14.dp.toPx()
+                    val currentRadius = baseRadius * snapScaleAnimated * reticlePulseScale
 
-                    // Subtle contact shadow
+                    // 1. Snapped Target Lock Radial Aura Glow
+                    if (isSnapped) {
+                        drawCircle(
+                            color = Color(0xFF00E5FF).copy(alpha = snapGlowAlphaAnimated * 0.45f),
+                            center = center,
+                            radius = currentRadius * 1.6f
+                        )
+                        drawCircle(
+                            color = Color(0xFF00E5FF).copy(alpha = snapGlowAlphaAnimated * 0.25f),
+                            center = center,
+                            radius = currentRadius * 2.2f
+                        )
+                    }
+
+                    // 2. High-contrast ground shadow
                     drawCircle(
-                        color = Color.Black.copy(alpha = 0.25f),
-                        center = Offset(center.x, center.y + 1f),
-                        radius = 11.dp.toPx(),
-                        style = Stroke(width = 2.5.dp.toPx())
+                        color = Color.Black.copy(alpha = 0.35f),
+                        center = Offset(center.x + 1f, center.y + 1.5f),
+                        radius = currentRadius,
+                        style = Stroke(width = 3.dp.toPx())
                     )
 
-                    // Dynamic Outer Precision Ring
+                    // 3. Rotating Precision Outer Ring with Dashed Arc Pattern
                     drawCircle(
-                        color = colorPrimary,
+                        color = reticleColorAnimated,
                         center = center,
-                        radius = 11.dp.toPx() * (if (isSnapped) 1.2f else reticlePulseScale),
-                        style = Stroke(width = 2.5.dp.toPx())
+                        radius = currentRadius,
+                        style = Stroke(
+                            width = if (isSnapped) 3.2.dp.toPx() else 2.4.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(
+                                floatArrayOf(12f, 8f),
+                                (reticleRotationDeg * 0.5f)
+                            )
+                        )
                     )
 
-                    // Solid Center White Dot
+                    // 4. Precision Crosshair Hairlines (Top, Bottom, Left, Right Ticks)
+                    val crossHairOffsetInner = currentRadius + 3.dp.toPx()
+                    val crossHairLen = if (isSnapped) 10.dp.toPx() else 6.dp.toPx()
+                    val crossHairStroke = if (isSnapped) 2.2.dp.toPx() else 1.6.dp.toPx()
+                    val tickColor = if (isSnapped) Color(0xFF00E5FF) else Color.White.copy(alpha = 0.9f)
+
+                    // Top Hairline
+                    drawLine(
+                        color = tickColor,
+                        start = Offset(center.x, center.y - crossHairOffsetInner),
+                        end = Offset(center.x, center.y - crossHairOffsetInner - crossHairLen),
+                        strokeWidth = crossHairStroke,
+                        cap = StrokeCap.Round
+                    )
+                    // Bottom Hairline
+                    drawLine(
+                        color = tickColor,
+                        start = Offset(center.x, center.y + crossHairOffsetInner),
+                        end = Offset(center.x, center.y + crossHairOffsetInner + crossHairLen),
+                        strokeWidth = crossHairStroke,
+                        cap = StrokeCap.Round
+                    )
+                    // Left Hairline
+                    drawLine(
+                        color = tickColor,
+                        start = Offset(center.x - crossHairOffsetInner, center.y),
+                        end = Offset(center.x - crossHairOffsetInner - crossHairLen, center.y),
+                        strokeWidth = crossHairStroke,
+                        cap = StrokeCap.Round
+                    )
+                    // Right Hairline
+                    drawLine(
+                        color = tickColor,
+                        start = Offset(center.x + crossHairOffsetInner, center.y),
+                        end = Offset(center.x + crossHairOffsetInner + crossHairLen, center.y),
+                        strokeWidth = crossHairStroke,
+                        cap = StrokeCap.Round
+                    )
+
+                    // 5. Solid Center White & Accent Core Pinpoint Dot
+                    drawCircle(
+                        color = Color.Black.copy(alpha = 0.4f),
+                        center = Offset(center.x + 0.5f, center.y + 0.5f),
+                        radius = 4.5.dp.toPx()
+                    )
                     drawCircle(
                         color = Color.White,
                         center = center,
                         radius = 4.5.dp.toPx()
+                    )
+                    drawCircle(
+                        color = reticleColorAnimated,
+                        center = center,
+                        radius = 2.5.dp.toPx()
                     )
                 }
             }

@@ -15,67 +15,66 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
- * Top Gradient Blur container that provides a frosted glass gradient backdrop
- * fading downward from opaque/translucent to fully transparent.
+ * Top Gradient Blur container providing a true frosted glass gradient blur effect
+ * (blur radius transitioning smoothly with translucent glass tint).
  */
 @Composable
 fun GradientBlurTopBar(
     modifier: Modifier = Modifier,
     baseColor: Color = MaterialTheme.colorScheme.surface,
-    blurRadius: Dp = 20.dp,
+    blurRadius: Dp = 24.dp,
     content: @Composable BoxScope.() -> Unit
 ) {
     Box(
         modifier = modifier.fillMaxWidth()
     ) {
-        // 1. Frosted Blur Background Layer
+        // Multi-layer Gradient Blur Stack for smooth frosted glass edge fade
         Box(
             modifier = Modifier
                 .matchParentSize()
                 .blur(blurRadius, edgeTreatment = BlurredEdgeTreatment.Unbounded)
                 .background(
                     Brush.verticalGradient(
-                        0.0f to baseColor.copy(alpha = 0.92f),
-                        0.35f to baseColor.copy(alpha = 0.75f),
-                        0.70f to baseColor.copy(alpha = 0.35f),
+                        0.0f to baseColor.copy(alpha = 0.85f),
+                        0.4f to baseColor.copy(alpha = 0.55f),
+                        0.8f to baseColor.copy(alpha = 0.15f),
                         1.0f to Color.Transparent
                     )
                 )
         )
-        // 2. High-contrast translucent gradient scrim for guaranteed text/icon legibility
         Box(
             modifier = Modifier
                 .matchParentSize()
+                .blur(blurRadius * 0.5f, edgeTreatment = BlurredEdgeTreatment.Unbounded)
                 .background(
                     Brush.verticalGradient(
-                        0.0f to baseColor.copy(alpha = 0.88f),
-                        0.30f to baseColor.copy(alpha = 0.68f),
-                        0.65f to baseColor.copy(alpha = 0.28f),
+                        0.0f to baseColor.copy(alpha = 0.70f),
+                        0.5f to baseColor.copy(alpha = 0.30f),
                         1.0f to Color.Transparent
                     )
                 )
         )
-        // 3. Crisp Foreground Content
+        // Crisp Foreground Content
         content()
     }
 }
 
 /**
- * Bottom Gradient Blur container that provides a frosted glass gradient backdrop
- * fading upward from fully transparent to opaque/translucent at the bottom edge.
+ * Bottom Gradient Blur container providing a true frosted glass gradient blur effect
+ * fading upward from transparent to blurred glass.
  */
 @Composable
 fun GradientBlurBottomBar(
     modifier: Modifier = Modifier,
     baseColor: Color = MaterialTheme.colorScheme.surface,
-    blurRadius: Dp = 20.dp,
+    blurRadius: Dp = 24.dp,
     contentWindowInsets: WindowInsets = NavigationBarDefaults.windowInsets,
     content: @Composable BoxScope.() -> Unit
 ) {
     Box(
         modifier = modifier.fillMaxWidth()
     ) {
-        // 1. Frosted Blur Background Layer
+        // Multi-layer Gradient Blur Stack
         Box(
             modifier = Modifier
                 .matchParentSize()
@@ -83,27 +82,25 @@ fun GradientBlurBottomBar(
                 .background(
                     Brush.verticalGradient(
                         0.0f to Color.Transparent,
-                        0.25f to baseColor.copy(alpha = 0.35f),
-                        0.60f to baseColor.copy(alpha = 0.78f),
-                        1.0f to baseColor.copy(alpha = 0.95f)
+                        0.2f to baseColor.copy(alpha = 0.15f),
+                        0.6f to baseColor.copy(alpha = 0.60f),
+                        1.0f to baseColor.copy(alpha = 0.90f)
                     )
                 )
         )
-        // 2. Translucent gradient scrim layer
         Box(
             modifier = Modifier
                 .matchParentSize()
+                .blur(blurRadius * 0.5f, edgeTreatment = BlurredEdgeTreatment.Unbounded)
                 .background(
                     Brush.verticalGradient(
                         0.0f to Color.Transparent,
-                        0.20f to baseColor.copy(alpha = 0.25f),
-                        0.55f to baseColor.copy(alpha = 0.65f),
-                        0.85f to baseColor.copy(alpha = 0.88f),
-                        1.0f to baseColor.copy(alpha = 0.95f)
+                        0.5f to baseColor.copy(alpha = 0.35f),
+                        1.0f to baseColor.copy(alpha = 0.75f)
                     )
                 )
         )
-        // 3. Foreground Content with WindowInsets padding
+        // Foreground Content with WindowInsets padding
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -124,21 +121,21 @@ fun GradientBlurScrim(
     modifier: Modifier = Modifier,
     isTop: Boolean,
     baseColor: Color = Color.Black,
-    blurRadius: Dp = 24.dp
+    blurRadius: Dp = 28.dp
 ) {
     val gradient = if (isTop) {
         Brush.verticalGradient(
-            0.0f to baseColor.copy(alpha = 0.80f),
-            0.35f to baseColor.copy(alpha = 0.55f),
-            0.70f to baseColor.copy(alpha = 0.20f),
+            0.0f to baseColor.copy(alpha = 0.75f),
+            0.4f to baseColor.copy(alpha = 0.40f),
+            0.8f to baseColor.copy(alpha = 0.10f),
             1.0f to Color.Transparent
         )
     } else {
         Brush.verticalGradient(
             0.0f to Color.Transparent,
-            0.30f to baseColor.copy(alpha = 0.20f),
-            0.65f to baseColor.copy(alpha = 0.55f),
-            1.0f to baseColor.copy(alpha = 0.80f)
+            0.2f to baseColor.copy(alpha = 0.10f),
+            0.6f to baseColor.copy(alpha = 0.40f),
+            1.0f to baseColor.copy(alpha = 0.75f)
         )
     }
 
@@ -148,10 +145,12 @@ fun GradientBlurScrim(
                 .matchParentSize()
                 .blur(blurRadius, edgeTreatment = BlurredEdgeTreatment.Unbounded)
                 .background(gradient)
+            
         )
         Box(
             modifier = Modifier
                 .matchParentSize()
+                .blur(blurRadius * 0.5f, edgeTreatment = BlurredEdgeTreatment.Unbounded)
                 .background(gradient)
         )
     }

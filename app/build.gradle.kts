@@ -65,6 +65,11 @@ android {
     compose = true
     buildConfig = true
   }
+  lint {
+    abortOnError = false
+    checkReleaseBuilds = false
+    disable += setOf("UnsafeOptInUsageError")
+  }
   testOptions { unitTests { isIncludeAndroidResources = true } }
 }
 

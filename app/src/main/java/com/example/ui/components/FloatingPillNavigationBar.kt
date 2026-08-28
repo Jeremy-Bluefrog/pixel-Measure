@@ -111,17 +111,26 @@ fun FloatingPillNavigationBar(
                 )
 
                 val pillScale by animateFloatAsState(
-                    targetValue = if (isSelected) 1.0f else 0.96f,
+                    targetValue = if (isSelected) 1.04f else 0.95f,
                     animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioLowBouncy,
+                        dampingRatio = Spring.DampingRatioMediumBouncy,
                         stiffness = Spring.StiffnessMediumLow
                     ),
                     label = "pillScale"
                 )
 
+                val iconScale by animateFloatAsState(
+                    targetValue = if (isSelected) 1.12f else 1.0f,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                        stiffness = Spring.StiffnessLow
+                    ),
+                    label = "iconScale"
+                )
+
                 Box(
                     modifier = Modifier
-                        .height(42.dp)
+                        .height(44.dp)
                         .graphicsLayer {
                             scaleX = pillScale
                             scaleY = pillScale
@@ -138,13 +147,13 @@ fun FloatingPillNavigationBar(
                         )
                         .animateContentSize(
                             animationSpec = spring(
-                                dampingRatio = Spring.DampingRatioLowBouncy,
+                                dampingRatio = Spring.DampingRatioMediumBouncy,
                                 stiffness = Spring.StiffnessMediumLow
                             )
                         )
                         .minimumInteractiveComponentSize()
                         .testTag(item.testTag)
-                        .padding(horizontal = if (isSelected) 15.dp else 10.dp),
+                        .padding(horizontal = if (isSelected) 16.dp else 10.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Row(
@@ -155,7 +164,12 @@ fun FloatingPillNavigationBar(
                             imageVector = item.icon,
                             contentDescription = item.label,
                             tint = contentColor,
-                            modifier = Modifier.size(21.dp)
+                            modifier = Modifier
+                                .size(21.dp)
+                                .graphicsLayer {
+                                    scaleX = iconScale
+                                    scaleY = iconScale
+                                }
                         )
 
                         AnimatedVisibility(

@@ -21,6 +21,7 @@ import javax.microedition.khronos.opengles.GL10
  * 3. Detected 3D Planes (Grid Mesh & Boundaries).
  * Handles synchronized hit-testing and frame extraction on GL thread.
  */
+@android.annotation.SuppressLint("ViewConstructor")
 class ModernArGlView(
     context: Context,
     private val session: Session,
