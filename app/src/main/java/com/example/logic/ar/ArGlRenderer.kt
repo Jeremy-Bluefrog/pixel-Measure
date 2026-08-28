@@ -96,6 +96,13 @@ class ModernArGlView(
         renderMode = RENDERMODE_CONTINUOUSLY
     }
 
+    override fun onDetachedFromWindow() {
+        try {
+            onPause()
+        } catch (e: Exception) {}
+        super.onDetachedFromWindow()
+    }
+
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         GLES20.glEnable(GLES20.GL_BLEND)

@@ -206,34 +206,43 @@ fun RulerComponent(
             )
         }
 
-        // Live Measurement Floating Readout Card
+        // Live Measurement Floating Readout Card with Refined Glassmorphism
         Surface(
-            color = colorSurface.copy(alpha = 0.95f),
-            shape = RoundedCornerShape(20.dp),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+            color = colorSurface.copy(alpha = 0.92f),
+            shape = RoundedCornerShape(24.dp),
+            border = BorderStroke(1.5.dp, colorPrimary.copy(alpha = 0.25f)),
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = 16.dp, bottom = 16.dp)
-                .shadow(6.dp, RoundedCornerShape(20.dp))
+                .padding(start = 16.dp, bottom = 24.dp)
+                .shadow(12.dp, RoundedCornerShape(24.dp))
         ) {
             Column(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(
-                        Icons.Rounded.Straighten,
-                        contentDescription = null,
-                        tint = colorPrimary,
-                        modifier = Modifier.size(16.dp)
-                    )
+                    Surface(
+                        color = colorPrimary.copy(alpha = 0.15f),
+                        shape = CircleShape,
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Rounded.Straighten,
+                                contentDescription = null,
+                                tint = colorPrimary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
                     Text(
-                        text = "雙游標測量讀數",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = "高精度螢幕游標測量",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = colorOnSurface
                     )
                 }
 
@@ -257,40 +266,41 @@ fun RulerComponent(
 
                 // Quick Fine-Tuning Controls (-1mm / +1mm / Reset)
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    OutlinedButton(
+                    FilledTonalButton(
                         onClick = {
                             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
                             caliperBottomY = (caliperBottomY - (mmInPx / 10f)).coerceAtLeast(caliperTopY)
                         },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.height(32.dp)
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.height(34.dp)
                     ) {
-                        Text("-1mm", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text("-1mm", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
 
-                    OutlinedButton(
+                    FilledTonalButton(
                         onClick = {
                             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
                             caliperBottomY = (caliperBottomY + (mmInPx / 10f))
                         },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.height(32.dp)
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.height(34.dp)
                     ) {
-                        Text("+1mm", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text("+1mm", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
 
-                    IconButton(
+                    OutlinedIconButton(
                         onClick = {
                             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
                             caliperTopY = zeroY
                             caliperBottomY = zeroY + 100f * (mmInPx / 10f)
                         },
-                        modifier = Modifier.size(32.dp)
+                        shape = CircleShape,
+                        modifier = Modifier.size(34.dp)
                     ) {
                         Icon(
                             Icons.Rounded.Refresh,
@@ -301,22 +311,23 @@ fun RulerComponent(
                     }
                 }
 
-                Spacer(Modifier.height(2.dp))
+                Spacer(Modifier.height(4.dp))
 
-                FilledTonalButton(
+                Button(
                     onClick = {
                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                         ShareUtility.captureViewSnapshot(localView) { path ->
                             viewModel.saveRulerRecord(cmVal = measuredCm.toDouble(), imagePath = path)
                         }
                     },
-                    shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                    modifier = Modifier.height(36.dp)
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = colorPrimary),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    modifier = Modifier.height(40.dp).fillMaxWidth()
                 ) {
-                    Icon(Icons.Rounded.BookmarkAdd, null, Modifier.size(16.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("保存測量記錄", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Icon(Icons.Rounded.BookmarkAdd, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("保存測量記錄", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }

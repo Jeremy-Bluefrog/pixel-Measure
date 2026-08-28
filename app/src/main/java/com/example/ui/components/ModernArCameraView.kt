@@ -138,6 +138,15 @@ fun ModernArCameraView(
         ),
         label = "reticlePulse"
     )
+    val planeLockedParticleAnim by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1400, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "planeLockedParticle"
+    )
     val dashPhase by infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 40f,
@@ -291,6 +300,9 @@ fun ModernArCameraView(
                             viewModel = viewModel
                         )
                     },
+                    onRelease = { view ->
+                        (view as? android.opengl.GLSurfaceView)?.onPause()
+                    },
                     modifier = Modifier
                         .fillMaxSize()
                         .pointerInput(Unit) {
@@ -386,11 +398,18 @@ fun ModernArCameraView(
                 )
             }
 
+            val screenW = localView.width.takeIf { it > 0 } ?: 1080
+            val screenH = localView.height.takeIf { it > 0 } ?: 1920
+            val isArea = subMode == 1 || (subMode == 0 && autoDetectedType == "AREA")
+            val projectedPoints = capturedPoints.map { pt ->
+                ArMath.projectWorldToScreen(pt, viewMatrix, projectionMatrix, screenW, screenH)
+            }
+
             // 2. 3D Augmented Overlay Canvas (Planes, Projected Points, Lines, Measurements, Pings)
             Canvas(modifier = Modifier.fillMaxSize()) {
-                val screenW = size.width.toInt()
-                val screenH = size.height.toInt()
-                val screenCenter = Offset(size.width / 2f, size.height / 2f)
+                val canvasW = size.width.toInt().takeIf { it > 0 } ?: screenW
+                val canvasH = size.height.toInt().takeIf { it > 0 } ?: screenH
+                val screenCenter = Offset(canvasW / 2f, canvasH / 2f)
 
                 // Draw touch ripples
                 pings.forEach { (offset, anim) ->
@@ -403,96 +422,20 @@ fun ModernArCameraView(
                     )
                 }
 
-                // Project 3D points to 2D screen positions
-                val projectedPoints = capturedPoints.map { pt ->
-                    ArMath.projectWorldToScreen(pt, viewMatrix, projectionMatrix, screenW, screenH)
-                }
-
                 // 2B. Draw confirmed connecting 3D virtual lines
                 if (projectedPoints.size >= 2) {
-                    for (i in 0 until projectedPoints.size - 1) {
-                        val p1 = projectedPoints[i]
-                        val p2 = projectedPoints[i + 1]
-                        if (p1 != null && p2 != null) {
-                            val startOffset = Offset(p1.first, p1.second)
-                            val endOffset = Offset(p2.first, p2.second)
-                            val dx = endOffset.x - startOffset.x
-                            val dy = endOffset.y - startOffset.y
-                            val segLen = sqrt(dx * dx + dy * dy)
-
-                            // 1. Ambient dark drop shadow for maximum contrast
-                            drawLine(
-                                color = Color.Black.copy(alpha = 0.45f),
-                                start = Offset(startOffset.x + 1f, startOffset.y + 2f),
-                                end = Offset(endOffset.x + 1f, endOffset.y + 2f),
-                                strokeWidth = 7.dp.toPx(),
-                                cap = StrokeCap.Round
-                            )
-
-                            // 2. Luminous glow halo
-                            drawLine(
-                                color = colorPrimary.copy(alpha = 0.35f),
-                                start = startOffset,
-                                end = endOffset,
-                                strokeWidth = 8.5.dp.toPx(),
-                                cap = StrokeCap.Round
-                            )
-
-                            // 3. Core solid laser line
-                            drawLine(
-                                color = colorPrimary,
-                                start = startOffset,
-                                end = endOffset,
-                                strokeWidth = 4.5.dp.toPx(),
-                                cap = StrokeCap.Round
-                            )
-
-                            // 4. Perpendicular dimension ticks (Blueprint end-caps & scale ticks)
-                            if (segLen > 20f) {
-                                val nx = -dy / segLen
-                                val ny = dx / segLen
-                                val tickHalfLen = 9.dp.toPx()
-
-                                // End-cap at Start Point
-                                drawLine(
-                                    color = Color.White,
-                                    start = Offset(startOffset.x - nx * tickHalfLen, startOffset.y - ny * tickHalfLen),
-                                    end = Offset(startOffset.x + nx * tickHalfLen, startOffset.y + ny * tickHalfLen),
-                                    strokeWidth = 3.dp.toPx(),
-                                    cap = StrokeCap.Round
-                                )
-
-                                // End-cap at End Point
-                                drawLine(
-                                    color = Color.White,
-                                    start = Offset(endOffset.x - nx * tickHalfLen, endOffset.y - ny * tickHalfLen),
-                                    end = Offset(endOffset.x + nx * tickHalfLen, endOffset.y + ny * tickHalfLen),
-                                    strokeWidth = 3.dp.toPx(),
-                                    cap = StrokeCap.Round
-                                )
-
-                                // Holographic ruler scale hash marks along the segment
-                                val step = 28f
-                                var d = step
-                                while (d < segLen - step) {
-                                    val px = startOffset.x + (dx / segLen) * d
-                                    val py = startOffset.y + (dy / segLen) * d
-                                    val subTickLen = 4.dp.toPx()
-                                    drawLine(
-                                        color = Color.White.copy(alpha = 0.7f),
-                                        start = Offset(px - nx * subTickLen, py - ny * subTickLen),
-                                        end = Offset(px + nx * subTickLen, py + ny * subTickLen),
-                                        strokeWidth = 1.8.dp.toPx()
-                                    )
-                                    d += step
-                                }
+                    if (isArea) {
+                        for (i in 0 until projectedPoints.size - 1) {
+                            val p1 = projectedPoints[i]
+                            val p2 = projectedPoints[i + 1]
+                            if (p1 != null && p2 != null) {
+                                val startOffset = Offset(p1.first, p1.second)
+                                val endOffset = Offset(p2.first, p2.second)
+                                drawLine(color = Color.Black.copy(alpha = 0.45f), start = Offset(startOffset.x + 1f, startOffset.y + 2f), end = Offset(endOffset.x + 1f, endOffset.y + 2f), strokeWidth = 7.dp.toPx(), cap = StrokeCap.Round)
+                                drawLine(color = colorPrimary.copy(alpha = 0.35f), start = startOffset, end = endOffset, strokeWidth = 8.5.dp.toPx(), cap = StrokeCap.Round)
+                                drawLine(color = colorPrimary, start = startOffset, end = endOffset, strokeWidth = 4.5.dp.toPx(), cap = StrokeCap.Round)
                             }
                         }
-                    }
-
-                    // Closed Polygon in Area mode or Auto-Detected Area
-                    val isArea = subMode == 1 || (subMode == 0 && autoDetectedType == "AREA")
-                    if (isArea && projectedPoints.size >= 3) {
                         val first = projectedPoints.first()
                         val last = projectedPoints.last()
                         if (first != null && last != null) {
@@ -504,11 +447,41 @@ fun ModernArCameraView(
                                 pathEffect = PathEffect.dashPathEffect(floatArrayOf(15f, 10f), dashPhase)
                             )
                         }
+                    } else {
+                        // Independent separate line segments: (0,1), (2,3), (4,5)...
+                        val pairCount = projectedPoints.size / 2
+                        for (k in 0 until pairCount) {
+                            val p1 = projectedPoints[2 * k]
+                            val p2 = projectedPoints[2 * k + 1]
+                            if (p1 != null && p2 != null) {
+                                val startOffset = Offset(p1.first, p1.second)
+                                val endOffset = Offset(p2.first, p2.second)
+                                val dx = endOffset.x - startOffset.x
+                                val dy = endOffset.y - startOffset.y
+                                val segLen = sqrt(dx * dx + dy * dy)
+
+                                // 1. Shadow
+                                drawLine(color = Color.Black.copy(alpha = 0.45f), start = Offset(startOffset.x + 1f, startOffset.y + 2f), end = Offset(endOffset.x + 1f, endOffset.y + 2f), strokeWidth = 7.dp.toPx(), cap = StrokeCap.Round)
+                                // 2. Glow
+                                drawLine(color = colorPrimary.copy(alpha = 0.35f), start = startOffset, end = endOffset, strokeWidth = 8.5.dp.toPx(), cap = StrokeCap.Round)
+                                // 3. Core
+                                drawLine(color = colorPrimary, start = startOffset, end = endOffset, strokeWidth = 4.5.dp.toPx(), cap = StrokeCap.Round)
+
+                                // 4. Ticks
+                                if (segLen > 20f) {
+                                    val nx = -dy / segLen
+                                    val ny = dx / segLen
+                                    val tickHalfLen = 9.dp.toPx()
+                                    drawLine(color = Color.White, start = Offset(startOffset.x - nx * tickHalfLen, startOffset.y - ny * tickHalfLen), end = Offset(startOffset.x + nx * tickHalfLen, startOffset.y + ny * tickHalfLen), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
+                                    drawLine(color = Color.White, start = Offset(endOffset.x - nx * tickHalfLen, endOffset.y - ny * tickHalfLen), end = Offset(endOffset.x + nx * tickHalfLen, endOffset.y + ny * tickHalfLen), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
+                                }
+                            }
+                        }
                     }
                 }
 
-                // 2C. Draw active dynamic virtual line from last anchor point to current center reticle
-                if (projectedPoints.isNotEmpty()) {
+                // 2C. Draw active dynamic virtual line only when building second point of current line (odd point count)
+                if (!isArea && capturedPoints.size % 2 == 1 && projectedPoints.isNotEmpty()) {
                     val lastPt = projectedPoints.last()
                     if (lastPt != null) {
                         val startOffset = Offset(lastPt.first, lastPt.second)
@@ -516,65 +489,9 @@ fun ModernArCameraView(
                         val dy = screenCenter.y - startOffset.y
                         val liveLen = sqrt(dx * dx + dy * dy)
 
-                        // 1. Shadow under active line
-                        drawLine(
-                            color = Color.Black.copy(alpha = 0.4f),
-                            start = Offset(startOffset.x + 1f, startOffset.y + 2f),
-                            end = Offset(screenCenter.x + 1f, screenCenter.y + 2f),
-                            strokeWidth = 7.dp.toPx(),
-                            cap = StrokeCap.Round
-                        )
-
-                        // 2. Luminous animated laser stream
-                        drawLine(
-                            color = colorPrimary.copy(alpha = 0.35f),
-                            start = startOffset,
-                            end = screenCenter,
-                            strokeWidth = 8.5.dp.toPx(),
-                            cap = StrokeCap.Round
-                        )
-
-                        // 3. Flowing dynamic dash line
-                        drawLine(
-                            color = colorPrimary,
-                            start = startOffset,
-                            end = screenCenter,
-                            strokeWidth = 4.5.dp.toPx(),
-                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(16f, 12f), dashPhase),
-                            cap = StrokeCap.Round
-                        )
-
-                        // 4. Live perpendicular tick marks along the dynamic active line
-                        if (liveLen > 25f) {
-                            val nx = -dy / liveLen
-                            val ny = dx / liveLen
-                            val tickHalfLen = 7.dp.toPx()
-
-                            // End tick at start point
-                            drawLine(
-                                color = Color.White,
-                                start = Offset(startOffset.x - nx * tickHalfLen, startOffset.y - ny * tickHalfLen),
-                                end = Offset(startOffset.x + nx * tickHalfLen, startOffset.y + ny * tickHalfLen),
-                                strokeWidth = 2.5.dp.toPx(),
-                                cap = StrokeCap.Round
-                            )
-
-                            // Ticks along the live path
-                            val step = 32f
-                            var d = step
-                            while (d < liveLen - step) {
-                                val px = startOffset.x + (dx / liveLen) * d
-                                val py = startOffset.y + (dy / liveLen) * d
-                                val subTickLen = 3.5.dp.toPx()
-                                drawLine(
-                                    color = Color.White.copy(alpha = 0.6f),
-                                    start = Offset(px - nx * subTickLen, py - ny * subTickLen),
-                                    end = Offset(px + nx * subTickLen, py + ny * subTickLen),
-                                    strokeWidth = 1.5.dp.toPx()
-                                )
-                                d += step
-                            }
-                        }
+                        drawLine(color = Color.Black.copy(alpha = 0.4f), start = Offset(startOffset.x + 1f, startOffset.y + 2f), end = Offset(screenCenter.x + 1f, screenCenter.y + 2f), strokeWidth = 7.dp.toPx(), cap = StrokeCap.Round)
+                        drawLine(color = colorPrimary.copy(alpha = 0.35f), start = startOffset, end = screenCenter, strokeWidth = 8.5.dp.toPx(), cap = StrokeCap.Round)
+                        drawLine(color = colorPrimary, start = startOffset, end = screenCenter, strokeWidth = 4.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(16f, 12f), dashPhase), cap = StrokeCap.Round)
                     }
                 }
 
@@ -710,40 +627,75 @@ fun ModernArCameraView(
                 }
 
                 // 3C. Capsules for confirmed line segments
-                if (capturedPoints.size >= 2) {
-                    for (i in 0 until capturedPoints.size - 1) {
-                        val mid3D = ArMath.midpoint(capturedPoints[i], capturedPoints[i + 1])
-                        val midProj = ArMath.projectWorldToScreen(mid3D, viewMatrix, projectionMatrix, screenW, screenH)
-                        if (midProj != null) {
-                            val segDist = ArMath.distance(capturedPoints[i], capturedPoints[i + 1])
-                            val distText = viewModel.formatLength(segDist, selectedUnit)
+                if (projectedPoints.size >= 2) {
+                    if (isArea) {
+                        for (i in 0 until projectedPoints.size - 1) {
+                            val mid3D = ArMath.midpoint(capturedPoints[i], capturedPoints[i + 1])
+                            val midProj = ArMath.projectWorldToScreen(mid3D, viewMatrix, projectionMatrix, screenW, screenH)
+                            if (midProj != null) {
+                                val segDist = ArMath.distance(capturedPoints[i], capturedPoints[i + 1])
+                                val distText = viewModel.formatLength(segDist, selectedUnit)
 
-                            Surface(
-                                color = colorPrimaryContainer,
-                                shape = RoundedCornerShape(percent = 50),
-                                shadowElevation = 6.dp,
-                                modifier = Modifier
-                                    .offset {
-                                        androidx.compose.ui.unit.IntOffset(
-                                            (midProj.first - 60.dp.toPx() / 2).toInt(),
-                                            (midProj.second - 36.dp.toPx() / 2).toInt()
-                                        )
-                                    }
-                            ) {
-                                Text(
-                                    text = distText,
-                                    color = colorOnPrimaryContainer,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
-                                )
+                                Surface(
+                                    color = colorPrimaryContainer,
+                                    shape = RoundedCornerShape(percent = 50),
+                                    shadowElevation = 6.dp,
+                                    modifier = Modifier
+                                        .offset {
+                                            androidx.compose.ui.unit.IntOffset(
+                                                (midProj.first - 60.dp.toPx() / 2).toInt(),
+                                                (midProj.second - 36.dp.toPx() / 2).toInt()
+                                            )
+                                        }
+                                ) {
+                                    Text(
+                                        text = distText,
+                                        color = colorOnPrimaryContainer,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        val pairCount = projectedPoints.size / 2
+                        for (k in 0 until pairCount) {
+                            val pIdx1 = 2 * k
+                            val pIdx2 = 2 * k + 1
+                            val mid3D = ArMath.midpoint(capturedPoints[pIdx1], capturedPoints[pIdx2])
+                            val midProj = ArMath.projectWorldToScreen(mid3D, viewMatrix, projectionMatrix, screenW, screenH)
+                            if (midProj != null) {
+                                val segDist = ArMath.distance(capturedPoints[pIdx1], capturedPoints[pIdx2])
+                                val distText = viewModel.formatLength(segDist, selectedUnit)
+
+                                Surface(
+                                    color = colorPrimaryContainer,
+                                    shape = RoundedCornerShape(percent = 50),
+                                    shadowElevation = 6.dp,
+                                    modifier = Modifier
+                                        .offset {
+                                            androidx.compose.ui.unit.IntOffset(
+                                                (midProj.first - 60.dp.toPx() / 2).toInt(),
+                                                (midProj.second - 36.dp.toPx() / 2).toInt()
+                                            )
+                                        }
+                                ) {
+                                    Text(
+                                        text = distText,
+                                        color = colorOnPrimaryContainer,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                                    )
+                                }
                             }
                         }
                     }
                 }
 
-                // 3D. Active dynamic measurement capsule positioned along the live line
-                if (capturedPoints.isNotEmpty()) {
+                // 3D. Active dynamic measurement capsule positioned along the live line (only when building 2nd point of line)
+                if (!isArea && capturedPoints.size % 2 == 1 && capturedPoints.isNotEmpty()) {
                     val lastPt = capturedPoints.last()
                     val liveTarget = liveTargetPoint
 
@@ -1099,17 +1051,13 @@ fun ModernArCameraView(
                         style = Stroke(width = 3.dp.toPx())
                     )
 
-                    // 3. Rotating Precision Outer Ring with Dashed Arc Pattern
+                    // 3. Clean Elegant Static Outer Ring
                     drawCircle(
                         color = reticleColorAnimated,
                         center = center,
                         radius = currentRadius,
                         style = Stroke(
-                            width = if (isSnapped) 3.2.dp.toPx() else 2.4.dp.toPx(),
-                            pathEffect = PathEffect.dashPathEffect(
-                                floatArrayOf(12f, 8f),
-                                (reticleRotationDeg * 0.5f)
-                            )
+                            width = if (isSnapped) 2.5.dp.toPx() else 1.8.dp.toPx()
                         )
                     )
 
@@ -1168,6 +1116,26 @@ fun ModernArCameraView(
                         center = center,
                         radius = 2.5.dp.toPx()
                     )
+
+                    // 6. Plane Locked Center Micro Particle Feedback Ring (When AR system detects planes)
+                    if (planesCount > 0) {
+                        val particleCount = 8
+                        for (i in 0 until particleCount) {
+                            val angle = (i * (360f / particleCount)) + (planeLockedParticleAnim * 360f)
+                            val rad = Math.toRadians(angle.toDouble())
+                            val orbitRadius = (18.dp.toPx()) + (kotlin.math.sin(planeLockedParticleAnim * 6.28318f + i).toFloat() * 3.dp.toPx())
+                            val px = center.x + (kotlin.math.cos(rad).toFloat() * orbitRadius)
+                            val py = center.y + (kotlin.math.sin(rad).toFloat() * orbitRadius)
+                            val sineVal = kotlin.math.sin(planeLockedParticleAnim * 6.28318f + i)
+                            val pAlpha = ((sineVal + 1f) / 2f).coerceIn(0.2f, 0.9f)
+
+                            drawCircle(
+                                color = Color(0xFF00E5FF).copy(alpha = pAlpha),
+                                center = Offset(px, py),
+                                radius = 2f * density
+                            )
+                        }
+                    }
                 }
             }
 

@@ -163,9 +163,8 @@ fun MainScreen(viewModel: MeasureViewModel) {
         bottomBar = {
             val cameraLabel = viewModel.getString("nav_camera").ifEmpty { "相機 AR" }
             val rulerLabel = viewModel.getString("nav_ruler").ifEmpty { "螢幕尺" }
-            val historyLabel = viewModel.getString("history_title").ifEmpty { "歷史紀錄" }
 
-            val navItems = remember(cameraLabel, rulerLabel, historyLabel) {
+            val navItems = remember(cameraLabel, rulerLabel) {
                 listOf(
                     FloatingPillNavItem(
                         id = 0,
@@ -178,12 +177,6 @@ fun MainScreen(viewModel: MeasureViewModel) {
                         label = rulerLabel,
                         icon = Icons.Rounded.Straighten,
                         testTag = "segmented_button_ruler"
-                    ),
-                    FloatingPillNavItem(
-                        id = 2,
-                        label = historyLabel,
-                        icon = Icons.Rounded.History,
-                        testTag = "button_history_pill"
                     )
                 )
             }
@@ -197,22 +190,10 @@ fun MainScreen(viewModel: MeasureViewModel) {
                 contentAlignment = Alignment.Center
             ) {
                 FloatingPillNavigationBar(
-                    selectedIndex = if (showHistorySheet) 2 else currentMode,
+                    selectedIndex = currentMode,
                     items = navItems,
                     onItemSelected = { id ->
-                        when (id) {
-                            0 -> {
-                                showHistorySheet = false
-                                viewModel.setMode(0)
-                            }
-                            1 -> {
-                                showHistorySheet = false
-                                viewModel.setMode(1)
-                            }
-                            2 -> {
-                                showHistorySheet = !showHistorySheet
-                            }
-                        }
+                        viewModel.setMode(id)
                     },
                     modifier = Modifier.testTag("mode_segmented_button_row")
                 )
@@ -224,27 +205,27 @@ fun MainScreen(viewModel: MeasureViewModel) {
                 .fillMaxSize()
                 .padding(if (currentMode == 0) PaddingValues(bottom = 0.dp) else innerPadding)
         ) {
-            // 1. Camera AR Viewport (retained for instant 120fps switching without recreating camera)
-            ModernArCameraView(
-                viewModel = viewModel,
-                onShowHistoryClick = { showHistorySheet = true },
-                onShowSettingsClick = { showSettingsDialog = true },
-                bottomPadding = innerPadding.calculateBottomPadding()
-            )
+            // 1. Camera AR Viewport
+            AnimatedVisibility(
+                visible = currentMode == 0,
+                enter = fadeIn(animationSpec = tween(250)),
+                exit = fadeOut(animationSpec = tween(250)),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                ModernArCameraView(
+                    viewModel = viewModel,
+                    onShowHistoryClick = { showHistorySheet = true },
+                    onShowSettingsClick = { showSettingsDialog = true },
+                    bottomPadding = innerPadding.calculateBottomPadding()
+                )
+            }
 
-            // 2. Screen Ruler Viewport (fluid slide-and-fade over Camera without recreating camera session)
+            // 2. Screen Ruler Viewport (pure fade-in & fade-out)
             AnimatedVisibility(
                 visible = currentMode == 1,
-                enter = fadeIn(animationSpec = tween(240)) +
-                        slideInHorizontally(
-                            initialOffsetX = { it / 3 },
-                            animationSpec = tween(240)
-                        ),
-                exit = fadeOut(animationSpec = tween(200)) +
-                        slideOutHorizontally(
-                            targetOffsetX = { it / 3 },
-                            animationSpec = tween(200)
-                        )
+                enter = fadeIn(animationSpec = tween(250)),
+                exit = fadeOut(animationSpec = tween(250)),
+                modifier = Modifier.fillMaxSize()
             ) {
                 RulerComponent(
                     viewModel = viewModel,
