@@ -1309,22 +1309,27 @@ fun ModernArCameraView(
                 )
             }
 
-            // Bottom Gradient Blur Scrim for camera control deck
-            GradientBlurScrim(
+            // Bottom subtle vignette for camera control deck
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(230.dp)
-                    .align(Alignment.BottomCenter),
-                isTop = false,
-                baseColor = Color.Black
+                    .height(150.dp)
+                    .align(Alignment.BottomCenter)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color.Transparent,
+                                Color.Black.copy(alpha = 0.42f)
+                            )
+                        )
+                    )
             )
 
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = bottomPadding)
-                    .navigationBarsPadding()
-                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                    .padding(bottom = bottomPadding + 64.dp)
+                    .padding(horizontal = 24.dp, vertical = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 // AI Tile Interactive Floating Deck
@@ -1360,7 +1365,7 @@ fun ModernArCameraView(
                         color = Color.Black.copy(alpha = 0.72f),
                         shape = RoundedCornerShape(24.dp),
                         modifier = Modifier
-                            .padding(bottom = 16.dp)
+                            .padding(bottom = 12.dp)
                             .shadow(6.dp, RoundedCornerShape(24.dp))
                     ) {
                         Row(
@@ -1391,6 +1396,27 @@ fun ModernArCameraView(
                             )
                         }
                     }
+                } else {
+                    // Guidance Pill
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.55f),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.padding(bottom = 10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(Icons.Rounded.TouchApp, null, tint = colorPrimary, modifier = Modifier.size(16.dp))
+                            Text(
+                                text = "對準目標表面，點擊 ＋ 標定測量起點",
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
                 }
 
                 // Interactive Bottom Action Deck
@@ -1399,61 +1425,106 @@ fun ModernArCameraView(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Left: Undo button (or spacer)
+                    // Left: Undo & Clear buttons
                     if (capturedPoints.isNotEmpty()) {
-                        IconButton(
-                            onClick = { viewModel.undo() },
-                            modifier = Modifier
-                                .size(54.dp)
-                                .background(Color.Black.copy(alpha = 0.5f), CircleShape)
-                                .shadow(4.dp, CircleShape)
-                        ) {
-                            Icon(
-                                Icons.Rounded.Undo,
-                                contentDescription = "Undo",
-                                tint = Color.White,
-                                modifier = Modifier.size(24.dp)
-                            )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            IconButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                    viewModel.undo()
+                                },
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .background(Color.Black.copy(alpha = 0.55f), CircleShape)
+                                    .shadow(4.dp, CircleShape)
+                            ) {
+                                Icon(
+                                    Icons.Rounded.Undo,
+                                    contentDescription = "Undo",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+
+                            IconButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                    viewModel.clearActivePoints()
+                                },
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .background(Color.Black.copy(alpha = 0.55f), CircleShape)
+                                    .shadow(4.dp, CircleShape)
+                            ) {
+                                Icon(
+                                    Icons.Rounded.DeleteSweep,
+                                    contentDescription = "Clear",
+                                    tint = Color(0xFFFF8A80),
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
                         }
                     } else {
-                        Spacer(modifier = Modifier.size(54.dp))
+                        Spacer(modifier = Modifier.size(48.dp))
                     }
 
-                    // Center: Dynamic Primary Circular Main Button (+ when empty, ✓ when measuring)
-                    Surface(
-                        color = colorPrimary,
-                        shape = CircleShape,
-                        shadowElevation = 8.dp,
-                        modifier = Modifier
-                            .size(72.dp)
-                            .clickable {
-                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                viewModel.requestHitTest()
+                    // Center: Dynamic Primary Circular Main Button with count badge
+                    Box(contentAlignment = Alignment.Center) {
+                        Surface(
+                            color = colorPrimary,
+                            shape = CircleShape,
+                            shadowElevation = 8.dp,
+                            modifier = Modifier
+                                .size(68.dp)
+                                .clickable {
+                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                    viewModel.requestHitTest()
+                                }
+                                .testTag("add_point_fab")
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    Icons.Rounded.Add,
+                                    contentDescription = "Add Point",
+                                    tint = colorOnPrimary,
+                                    modifier = Modifier.size(34.dp)
+                                )
                             }
-                            .testTag("add_point_fab")
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                if (capturedPoints.isEmpty()) Icons.Rounded.Add else Icons.Rounded.Check,
-                                contentDescription = if (capturedPoints.isEmpty()) "Add Point" else "Confirm",
-                                tint = colorOnPrimary,
-                                modifier = Modifier.size(36.dp)
-                            )
+                        }
+
+                        if (capturedPoints.isNotEmpty()) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.tertiary,
+                                shape = CircleShape,
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .size(22.dp)
+                                    .shadow(3.dp, CircleShape)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = "${capturedPoints.size}",
+                                        color = MaterialTheme.colorScheme.onTertiary,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
                         }
                     }
 
                     // Right: Camera Shutter Button
                     Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        color = Color.White.copy(alpha = 0.9f),
                         shape = CircleShape,
-                        shadowElevation = 8.dp,
+                        shadowElevation = 6.dp,
                         modifier = Modifier
-                            .size(54.dp)
+                            .size(48.dp)
                             .clickable {
                                 haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                                 isShutterFlash = true
                                 coroutineScope.launch {
-                                    kotlinx.coroutines.delay(120)
+                                    kotlinx.coroutines.delay(100)
                                     isShutterFlash = false
                                 }
                                 ShareUtility.captureViewSnapshot(localView) { path ->
@@ -1465,8 +1536,8 @@ fun ModernArCameraView(
                             Icon(
                                 Icons.Rounded.PhotoCamera,
                                 contentDescription = "Take Photo Snapshot",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(26.dp)
+                                tint = Color(0xFF1E293B),
+                                modifier = Modifier.size(24.dp)
                             )
                         }
                     }

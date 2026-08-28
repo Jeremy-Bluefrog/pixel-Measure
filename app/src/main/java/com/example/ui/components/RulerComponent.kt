@@ -2,6 +2,7 @@ package com.example.ui.components
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -57,12 +58,22 @@ fun RulerComponent(
     val zeroY = with(LocalDensity.current) { 80.dp.toPx() }
     var caliperTopY by remember { mutableStateOf(zeroY) }
     var caliperBottomY by remember { mutableStateOf(zeroY + 150f * (mmInPx / 10f)) }
+    var draggedCaliper by remember { mutableStateOf(-1) }
 
     val measuredCm = abs(caliperBottomY - caliperTopY) / (mmInPx * 10f)
 
     val colorPrimary = MaterialTheme.colorScheme.primary
     val colorSurface = MaterialTheme.colorScheme.surface
     val colorOnSurface = MaterialTheme.colorScheme.onSurface
+
+    val textPaint = remember(colorOnSurface) {
+        android.graphics.Paint().apply {
+            color = android.graphics.Color.argb(170, 100, 116, 139)
+            textSize = 28f
+            isAntiAlias = true
+            textAlign = android.graphics.Paint.Align.RIGHT
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -74,15 +85,30 @@ fun RulerComponent(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(Unit) {
-                    detectDragGestures { change, dragAmount ->
-                        change.consume()
-                        val touchY = change.position.y
-                        if (abs(touchY - caliperTopY) < abs(touchY - caliperBottomY)) {
-                            caliperTopY = (caliperTopY + dragAmount.y).coerceIn(zeroY, size.height - 120f)
-                        } else {
-                            caliperBottomY = (caliperBottomY + dragAmount.y).coerceIn(zeroY, size.height - 120f)
+                    detectDragGestures(
+                        onDragStart = { offset ->
+                            draggedCaliper = if (abs(offset.y - caliperTopY) < abs(offset.y - caliperBottomY)) 0 else 1
+                        },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            val prevCm = (abs(caliperBottomY - caliperTopY) / (mmInPx * 10f)).toInt()
+                            if (draggedCaliper == 0) {
+                                caliperTopY = (caliperTopY + dragAmount.y).coerceIn(zeroY, size.height - 120f)
+                            } else {
+                                caliperBottomY = (caliperBottomY + dragAmount.y).coerceIn(zeroY, size.height - 120f)
+                            }
+                            val newCm = (abs(caliperBottomY - caliperTopY) / (mmInPx * 10f)).toInt()
+                            if (newCm != prevCm) {
+                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                            }
+                        },
+                        onDragEnd = {
+                            draggedCaliper = -1
+                        },
+                        onDragCancel = {
+                            draggedCaliper = -1
                         }
-                    }
+                    )
                 }
         ) {
             val w = size.width
@@ -99,13 +125,6 @@ fun RulerComponent(
             // Draw Millimeter and Centimeter graduation ticks
             var curY = zeroY
             var mmCount = 0
-
-            val textPaint = android.graphics.Paint().apply {
-                color = android.graphics.Color.GRAY
-                textSize = 28f
-                isAntiAlias = true
-                textAlign = android.graphics.Paint.Align.RIGHT
-            }
 
             while (curY < h) {
                 val isCm = (mmCount % 10 == 0)
@@ -172,40 +191,103 @@ fun RulerComponent(
         // Live Measurement Floating Readout Card
         Surface(
             color = colorSurface.copy(alpha = 0.95f),
-            shape = RoundedCornerShape(24.dp),
+            shape = RoundedCornerShape(20.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(24.dp)
-                .shadow(8.dp, RoundedCornerShape(24.dp))
+                .padding(start = 16.dp, bottom = 80.dp)
+                .shadow(6.dp, RoundedCornerShape(20.dp))
         ) {
             Column(
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text(
-                    text = "雙游標測量讀數",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        Icons.Rounded.Straighten,
+                        contentDescription = null,
+                        tint = colorPrimary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "雙游標測量讀數",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
                 Text(
                     text = viewModel.formatLength(measuredCm / 100.0, selectedUnit),
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Black,
                     color = colorPrimary
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    FilledTonalButton(
+
+                // Quick Fine-Tuning Controls (-1mm / +1mm / Reset)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedButton(
                         onClick = {
-                            ShareUtility.captureViewSnapshot(localView) { path ->
-                                viewModel.saveRulerRecord(cmVal = measuredCm.toDouble(), imagePath = path)
-                            }
+                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                            caliperBottomY = (caliperBottomY - (mmInPx / 10f)).coerceAtLeast(caliperTopY)
                         },
-                        shape = RoundedCornerShape(12.dp)
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.height(32.dp)
                     ) {
-                        Icon(Icons.Rounded.BookmarkAdd, null, Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("保存記錄")
+                        Text("-1mm", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     }
+
+                    OutlinedButton(
+                        onClick = {
+                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                            caliperBottomY = (caliperBottomY + (mmInPx / 10f))
+                        },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text("+1mm", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+
+                    IconButton(
+                        onClick = {
+                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                            caliperTopY = zeroY
+                            caliperBottomY = zeroY + 100f * (mmInPx / 10f)
+                        },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            Icons.Rounded.Refresh,
+                            contentDescription = "Reset",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(2.dp))
+
+                FilledTonalButton(
+                    onClick = {
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                        ShareUtility.captureViewSnapshot(localView) { path ->
+                            viewModel.saveRulerRecord(cmVal = measuredCm.toDouble(), imagePath = path)
+                        }
+                    },
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                    modifier = Modifier.height(36.dp)
+                ) {
+                    Icon(Icons.Rounded.BookmarkAdd, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("保存測量記錄", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
         }

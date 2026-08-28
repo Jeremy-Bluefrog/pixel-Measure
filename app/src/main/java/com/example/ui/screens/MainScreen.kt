@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -27,6 +28,8 @@ import coil.compose.AsyncImage
 import com.example.data.model.MeasureRecord
 import com.example.logic.ShareUtility
 import com.example.logic.TranslationManager
+import com.example.ui.components.FloatingPillNavigationBar
+import com.example.ui.components.FloatingPillNavItem
 import com.example.ui.components.GradientBlurBottomBar
 import com.example.ui.components.GradientBlurTopBar
 import com.example.ui.components.ModernArCameraView
@@ -157,74 +160,61 @@ fun MainScreen(viewModel: MeasureViewModel) {
             }
         },
         bottomBar = {
-            val isCameraMode = currentMode == 0
-            GradientBlurBottomBar(
-                baseColor = if (isCameraMode) Color.Black else MaterialTheme.colorScheme.surface,
-                modifier = Modifier.testTag("bottom_segmented_bar")
+            val cameraLabel = viewModel.getString("nav_camera").ifEmpty { "相機 AR" }
+            val rulerLabel = viewModel.getString("nav_ruler").ifEmpty { "螢幕尺" }
+            val historyLabel = viewModel.getString("history_title").ifEmpty { "歷史紀錄" }
+
+            val navItems = remember(cameraLabel, rulerLabel, historyLabel) {
+                listOf(
+                    FloatingPillNavItem(
+                        id = 0,
+                        label = cameraLabel,
+                        icon = Icons.Rounded.GridView,
+                        testTag = "segmented_button_camera"
+                    ),
+                    FloatingPillNavItem(
+                        id = 1,
+                        label = rulerLabel,
+                        icon = Icons.Outlined.Description,
+                        testTag = "segmented_button_ruler"
+                    ),
+                    FloatingPillNavItem(
+                        id = 2,
+                        label = historyLabel,
+                        icon = Icons.Rounded.History,
+                        testTag = "button_history_pill"
+                    )
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(bottom = 12.dp)
+                    .testTag("bottom_segmented_bar"),
+                contentAlignment = Alignment.Center
             ) {
-                SingleChoiceSegmentedButtonRow(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .widthIn(max = 440.dp)
-                        .testTag("mode_segmented_button_row")
-                ) {
-                    SegmentedButton(
-                        selected = currentMode == 0,
-                        onClick = { viewModel.setMode(0) },
-                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                        icon = {
-                            SegmentedButtonDefaults.Icon(active = currentMode == 0) {
-                                Icon(
-                                    Icons.Rounded.CameraAlt,
-                                    contentDescription = "相機 AR",
-                                    modifier = Modifier.size(SegmentedButtonDefaults.IconSize)
-                                )
+                FloatingPillNavigationBar(
+                    selectedIndex = if (showHistorySheet) 2 else currentMode,
+                    items = navItems,
+                    onItemSelected = { id ->
+                        when (id) {
+                            0 -> {
+                                showHistorySheet = false
+                                viewModel.setMode(0)
                             }
-                        },
-                        label = {
-                            Text(
-                                text = viewModel.getString("nav_camera").ifEmpty { "相機 AR" },
-                                fontWeight = if (currentMode == 0) FontWeight.Bold else FontWeight.Normal,
-                                fontSize = 14.sp
-                            )
-                        },
-                        colors = SegmentedButtonDefaults.colors(
-                            activeContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            activeContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            inactiveContainerColor = if (isCameraMode) Color.Black.copy(alpha = 0.55f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                            inactiveContentColor = if (isCameraMode) Color.White.copy(alpha = 0.9f) else MaterialTheme.colorScheme.onSurfaceVariant
-                        ),
-                        modifier = Modifier.testTag("segmented_button_camera")
-                    )
-                    SegmentedButton(
-                        selected = currentMode == 1,
-                        onClick = { viewModel.setMode(1) },
-                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                        icon = {
-                            SegmentedButtonDefaults.Icon(active = currentMode == 1) {
-                                Icon(
-                                    Icons.Rounded.Straighten,
-                                    contentDescription = "螢幕尺",
-                                    modifier = Modifier.size(SegmentedButtonDefaults.IconSize)
-                                )
+                            1 -> {
+                                showHistorySheet = false
+                                viewModel.setMode(1)
                             }
-                        },
-                        label = {
-                            Text(
-                                text = viewModel.getString("nav_ruler").ifEmpty { "螢幕尺" },
-                                fontWeight = if (currentMode == 1) FontWeight.Bold else FontWeight.Normal,
-                                fontSize = 14.sp
-                            )
-                        },
-                        colors = SegmentedButtonDefaults.colors(
-                            activeContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            activeContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            inactiveContainerColor = if (isCameraMode) Color.Black.copy(alpha = 0.55f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                            inactiveContentColor = if (isCameraMode) Color.White.copy(alpha = 0.9f) else MaterialTheme.colorScheme.onSurfaceVariant
-                        ),
-                        modifier = Modifier.testTag("segmented_button_ruler")
-                    )
-                }
+                            2 -> {
+                                showHistorySheet = !showHistorySheet
+                            }
+                        }
+                    },
+                    modifier = Modifier.testTag("mode_segmented_button_row")
+                )
             }
         }
     ) { innerPadding ->
@@ -233,25 +223,32 @@ fun MainScreen(viewModel: MeasureViewModel) {
                 .fillMaxSize()
                 .padding(if (currentMode == 0) PaddingValues(bottom = 0.dp) else innerPadding)
         ) {
-            AnimatedContent(
-                targetState = currentMode,
-                transitionSpec = {
-                    fadeIn(animationSpec = tween(220)) togetherWith fadeOut(animationSpec = tween(180))
-                },
-                label = "ToolModeTransition"
-            ) { mode ->
-                when (mode) {
-                    0 -> ModernArCameraView(
-                        viewModel = viewModel,
-                        onShowHistoryClick = { showHistorySheet = true },
-                        onShowSettingsClick = { showSettingsDialog = true },
-                        bottomPadding = innerPadding.calculateBottomPadding()
-                    )
-                    else -> RulerComponent(
-                        viewModel = viewModel,
-                        onShowHistoryClick = { showHistorySheet = true }
-                    )
-                }
+            // 1. Camera AR Viewport (retained for instant 120fps switching without recreating camera)
+            ModernArCameraView(
+                viewModel = viewModel,
+                onShowHistoryClick = { showHistorySheet = true },
+                onShowSettingsClick = { showSettingsDialog = true },
+                bottomPadding = innerPadding.calculateBottomPadding()
+            )
+
+            // 2. Screen Ruler Viewport (fluid slide-and-fade over Camera without recreating camera session)
+            AnimatedVisibility(
+                visible = currentMode == 1,
+                enter = fadeIn(animationSpec = tween(240)) +
+                        slideInHorizontally(
+                            initialOffsetX = { it / 3 },
+                            animationSpec = tween(240)
+                        ),
+                exit = fadeOut(animationSpec = tween(200)) +
+                        slideOutHorizontally(
+                            targetOffsetX = { it / 3 },
+                            animationSpec = tween(200)
+                        )
+            ) {
+                RulerComponent(
+                    viewModel = viewModel,
+                    onShowHistoryClick = { showHistorySheet = true }
+                )
             }
 
             // Quick Floating Share Banner when a record is newly saved
