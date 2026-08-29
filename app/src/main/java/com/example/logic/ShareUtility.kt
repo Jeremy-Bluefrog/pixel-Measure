@@ -231,31 +231,61 @@ object ShareUtility {
      * Captures a screenshot of the specified view (including SurfaceView like Camera Preview)
      * and saves it to the gallery.
      */
-    fun captureScreen(window: Window, view: View, onComplete: (Uri?) -> Unit) {
+    /**
+     * Captures a screenshot of the specified view (including SurfaceView like Camera Preview)
+     * and saves it to the gallery with fallback drawing support.
+     */
+    fun captureAndSaveToGallery(view: View, onComplete: (Uri?) -> Unit) {
+        val activity = findActivity(view.context)
+        val window = activity?.window
+
+        if (view.width <= 0 || view.height <= 0) {
+            onComplete(null)
+            return
+        }
+
         val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
-        val locationOfViewInWindow = IntArray(2)
-        view.getLocationInWindow(locationOfViewInWindow)
+
+        if (window != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val locationOfViewInWindow = IntArray(2)
+            view.getLocationInWindow(locationOfViewInWindow)
+
+            try {
+                PixelCopy.request(
+                    window,
+                    Rect(
+                        locationOfViewInWindow[0],
+                        locationOfViewInWindow[1],
+                        locationOfViewInWindow[0] + view.width,
+                        locationOfViewInWindow[1] + view.height
+                    ),
+                    bitmap,
+                    { copyResult ->
+                        if (copyResult == PixelCopy.SUCCESS) {
+                            val uri = saveBitmapToGallery(view.context, bitmap)
+                            onComplete(uri)
+                        } else {
+                            val canvas = Canvas(bitmap)
+                            view.draw(canvas)
+                            val uri = saveBitmapToGallery(view.context, bitmap)
+                            onComplete(uri)
+                        }
+                    },
+                    Handler(Looper.getMainLooper())
+                )
+                return
+            } catch (e: Exception) {
+                // Fallback below
+            }
+        }
 
         try {
-            PixelCopy.request(
-                window,
-                Rect(
-                    locationOfViewInWindow[0],
-                    locationOfViewInWindow[1],
-                    locationOfViewInWindow[0] + view.width,
-                    locationOfViewInWindow[1] + view.height
-                ),
-                bitmap,
-                { copyResult ->
-                    if (copyResult == PixelCopy.SUCCESS) {
-                        onComplete(saveBitmapToGallery(view.context, bitmap))
-                    } else {
-                        onComplete(null)
-                    }
-                },
-                Handler(Looper.getMainLooper())
-            )
-        } catch (e: IllegalArgumentException) {
+            val canvas = Canvas(bitmap)
+            view.draw(canvas)
+            val uri = saveBitmapToGallery(view.context, bitmap)
+            onComplete(uri)
+        } catch (e: Exception) {
+            e.printStackTrace()
             onComplete(null)
         }
     }

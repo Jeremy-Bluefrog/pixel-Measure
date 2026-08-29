@@ -166,43 +166,28 @@ fun RulerComponent(
 
             // Span highlight band
             drawRect(
-                color = colorPrimary.copy(alpha = 0.14f),
+                color = colorPrimary.copy(alpha = 0.12f),
                 topLeft = Offset(0f, minCaliperY),
                 size = androidx.compose.ui.geometry.Size(w, maxCaliperY - minCaliperY)
             )
 
-            // Top Caliper Line & Active Laser Glow
+            // Draw clean edge indicator tabs on the ruler for top and bottom calipers (no full-screen lines)
             val isTopActive = draggedCaliper == 0
-            if (isTopActive) {
-                drawLine(
-                    color = colorPrimary.copy(alpha = 0.35f),
-                    start = Offset(0f, caliperTopY),
-                    end = Offset(w, caliperTopY),
-                    strokeWidth = 10.dp.toPx()
-                )
-            }
-            drawLine(
+            val isBottomActive = draggedCaliper == 1
+            val tabWidth = 28.dp.toPx()
+
+            // Top caliper edge tab
+            drawRect(
                 color = if (isTopActive) Color(0xFF00E5FF) else colorPrimary,
-                start = Offset(0f, caliperTopY),
-                end = Offset(w, caliperTopY),
-                strokeWidth = if (isTopActive) 4.dp.toPx() else 3.dp.toPx()
+                topLeft = Offset(rulerX - 10f, caliperTopY - 4f),
+                size = androidx.compose.ui.geometry.Size(tabWidth + 10f, 8f)
             )
 
-            // Bottom Caliper Line & Active Laser Glow
-            val isBottomActive = draggedCaliper == 1
-            if (isBottomActive) {
-                drawLine(
-                    color = colorPrimary.copy(alpha = 0.35f),
-                    start = Offset(0f, caliperBottomY),
-                    end = Offset(w, caliperBottomY),
-                    strokeWidth = 10.dp.toPx()
-                )
-            }
-            drawLine(
+            // Bottom caliper edge tab
+            drawRect(
                 color = if (isBottomActive) Color(0xFF00E5FF) else colorPrimary,
-                start = Offset(0f, caliperBottomY),
-                end = Offset(w, caliperBottomY),
-                strokeWidth = if (isBottomActive) 4.dp.toPx() else 3.dp.toPx()
+                topLeft = Offset(rulerX - 10f, caliperBottomY - 4f),
+                size = androidx.compose.ui.geometry.Size(tabWidth + 10f, 8f)
             )
         }
 
