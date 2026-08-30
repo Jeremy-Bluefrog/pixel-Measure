@@ -174,8 +174,13 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
                 }
             }
             if (rearCameraCount >= 2 && !isStereoAvailable) {
-                // Typical Pixel / flagship dual camera baseline ~20.5mm - 24.0mm
-                detectedStereoBaselineMm = 22.0f
+                // Check if device is Google Pixel 10 Pro, Pixel 11 Pro, or Pixel 9 Pro flagship triple-lens bar
+                val deviceModelStr = "${android.os.Build.MODEL} ${android.os.Build.DEVICE} ${android.os.Build.PRODUCT}".lowercase()
+                detectedStereoBaselineMm = when {
+                    deviceModelStr.contains("pixel 11 pro") || deviceModelStr.contains("pixel 10 pro") -> 24.5f
+                    deviceModelStr.contains("pixel 9 pro") -> 23.8f
+                    else -> 22.0f
+                }
                 isStereoAvailable = true
             }
         } catch (_: Exception) {
