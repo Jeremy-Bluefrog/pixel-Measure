@@ -1,40 +1,47 @@
 package com.example.ui.components
 
-import android.os.Build
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.rounded.*
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.logic.ShareUtility
 import com.example.ui.viewmodel.MeasureViewModel
+import kotlin.math.abs
 
 /**
- * Pure Physical Screen Ruler (極簡純粹螢幕尺)
- * Optimized specifically for Google Pixel 10 Pro, Pixel 11 Pro, Pixel 10 Pro XL, and Pixel 11 Pro XL.
- * - Exact hardware display PPI presets (495 PPI for Pro, 486 PPI for Pro XL, 498 PPI for Pixel 11 Pro)
- * - 120Hz LTPO sub-pixel touch tracking & zero-drift alignment
- * - Left edge: Imperial Scale (Inches with 1/16", 1/8", 1/4", 1/2" divisions)
- * - Right edge: Metric Scale (Centimeters with 1mm, 5mm, 10mm divisions)
- * - Zero mark starts exactly at the top screen physical bezel edge (0 cm / 0 in)
- * - Interactive finger hairline with instant dual-unit readout
+ * Modern High-Precision 2D Screen Ruler with Material 3 Motion transitions:
+ * - Fluid entrance reveal for graduation scale
+ * - Spring-based caliper opening on activation
+ * - Reactive drag scale and glowing caliper touch handles
+ * - Animated measurement readout transitions
  */
 @Composable
 fun RulerComponent(
@@ -42,329 +49,390 @@ fun RulerComponent(
     onShowHistoryClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val localView = LocalView.current
     val haptic = LocalHapticFeedback.current
     val displayMetrics = context.resources.displayMetrics
-
+    val selectedUnit by viewModel.selectedUnit.collectAsState()
     val calibrationFactor by viewModel.rulerCalibration.collectAsState()
 
-    // Detect Pixel 10 Pro / Pixel 11 Pro / Pixel 9 Pro hardware profiles
-    val deviceModel = remember {
-        val model = Build.MODEL.orEmpty()
-        val device = Build.DEVICE.orEmpty()
-        val product = Build.PRODUCT.orEmpty()
-        "$model $device $product".lowercase()
+    val ydpi = remember(displayMetrics) {
+        val y = displayMetrics.ydpi
+        if (y > 50f && !y.isNaN() && !y.isInfinite()) y else displayMetrics.densityDpi.toFloat()
     }
-
-    val pixelProfileInfo = remember(deviceModel) {
-        when {
-            deviceModel.contains("pixel 11 pro xl") -> "Pixel 11 Pro XL (488 PPI 硬體校準)" to 488.0f
-            deviceModel.contains("pixel 11 pro") -> "Pixel 11 Pro (498 PPI 硬體校準)" to 498.0f
-            deviceModel.contains("pixel 10 pro xl") || deviceModel.contains("komodo") -> "Pixel 10 Pro XL (486 PPI 硬體校準)" to 486.0f
-            deviceModel.contains("pixel 10 pro") || deviceModel.contains("caiman") -> "Pixel 10 Pro (495 PPI 硬體校準)" to 495.0f
-            deviceModel.contains("pixel 9 pro xl") -> "Pixel 9 Pro XL (486 PPI 硬體校準)" to 486.0f
-            deviceModel.contains("pixel 9 pro") -> "Pixel 9 Pro (495 PPI 硬體校準)" to 495.0f
-            deviceModel.contains("pixel") -> "Google Pixel (1:1 高精度校準)" to 495.0f
-            else -> null
-        }
-    }
-
-    // Accurate hardware DPI calculation with Pixel 10 Pro / 11 Pro exact physical panel PPI
-    val ydpi = remember(displayMetrics, calibrationFactor, pixelProfileInfo) {
-        val basePpi = if (pixelProfileInfo != null) {
-            pixelProfileInfo.second
-        } else {
-            val rawYdpi = displayMetrics.ydpi
-            if (rawYdpi > 50f && !rawYdpi.isNaN() && !rawYdpi.isInfinite()) rawYdpi else displayMetrics.densityDpi.toFloat()
-        }
-        basePpi * calibrationFactor
-    }
-
     val mmInPx = ydpi / 25.4f
-    val inchInPx = ydpi
-    val sixteenthInPx = inchInPx / 16f
 
-    // Interactive touch indicator (shows hairline when touching screen)
-    var touchY by remember { mutableStateOf<Float?>(null) }
+    val zeroY = with(LocalDensity.current) { 80.dp.toPx() }
+    val defaultTargetBottomY = zeroY + 150f * (mmInPx / 10f)
 
-    // Colors
-    val isDark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
-    val rulerBackground = if (isDark) Color(0xFF14181E) else Color(0xFFFAFBFD)
-    val tickColor = if (isDark) Color(0xFFE2E8F0) else Color(0xFF1E293B)
-    val subTickColor = if (isDark) Color(0xFF64748B) else Color(0xFF94A3B8)
-    val metricAccent = Color(0xFF0284C7)
-    val imperialAccent = Color(0xFFEA580C)
-    val hairlineColor = Color(0xFFEF4444)
+    var caliperTopY by remember { mutableStateOf(zeroY) }
+    var targetCaliperBottomY by remember { mutableStateOf(defaultTargetBottomY) }
+    var draggedCaliper by remember { mutableStateOf(-1) }
 
-    val metricTextPaint = remember(isDark) {
-        android.graphics.Paint().apply {
-            color = if (isDark) android.graphics.Color.WHITE else android.graphics.Color.argb(230, 15, 23, 42)
-            textSize = 34f
-            isAntiAlias = true
-            textAlign = android.graphics.Paint.Align.RIGHT
-            typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.BOLD)
-        }
+    // Material 3 Launch & Activation Entrance Animations
+    val rulerRevealProgress = remember { Animatable(0f) }
+    val caliperSpreadProgress = remember { Animatable(0.2f) }
+
+    LaunchedEffect(Unit) {
+        // Staggered M3 spring reveals on ruler startup
+        rulerRevealProgress.animateTo(
+            targetValue = 1f,
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioLowBouncy,
+                stiffness = Spring.StiffnessMediumLow
+            )
+        )
     }
 
-    val metricUnitPaint = remember(metricAccent) {
-        android.graphics.Paint().apply {
-            color = android.graphics.Color.argb(200, 2, 132, 199)
-            textSize = 24f
-            isAntiAlias = true
-            textAlign = android.graphics.Paint.Align.RIGHT
-            typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.BOLD)
-        }
+    LaunchedEffect(Unit) {
+        caliperSpreadProgress.animateTo(
+            targetValue = 1f,
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioMediumBouncy,
+                stiffness = Spring.StiffnessLow
+            )
+        )
     }
 
-    val imperialTextPaint = remember(isDark) {
-        android.graphics.Paint().apply {
-            color = if (isDark) android.graphics.Color.WHITE else android.graphics.Color.argb(230, 15, 23, 42)
-            textSize = 34f
-            isAntiAlias = true
-            textAlign = android.graphics.Paint.Align.LEFT
-            typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.BOLD)
-        }
+    // Smoothly animated bottom caliper position taking entrance animation into account
+    val effectiveCaliperBottomY = if (caliperSpreadProgress.value < 0.999f && draggedCaliper == -1) {
+        zeroY + (targetCaliperBottomY - zeroY) * caliperSpreadProgress.value
+    } else {
+        targetCaliperBottomY
     }
 
-    val imperialUnitPaint = remember(imperialAccent) {
-        android.graphics.Paint().apply {
-            color = android.graphics.Color.argb(200, 234, 88, 12)
-            textSize = 24f
-            isAntiAlias = true
-            textAlign = android.graphics.Paint.Align.LEFT
-            typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.BOLD)
-        }
-    }
+    val measuredCm = abs(effectiveCaliperBottomY - caliperTopY) / (mmInPx * 10f)
 
-    val touchReadoutPaint = remember {
+    // Interactive Drag Spring Dynamics
+    val topCaliperScale by animateFloatAsState(
+        targetValue = if (draggedCaliper == 0) 1.25f else 1.0f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+        label = "topCaliperScale"
+    )
+    val bottomCaliperScale by animateFloatAsState(
+        targetValue = if (draggedCaliper == 1) 1.25f else 1.0f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+        label = "bottomCaliperScale"
+    )
+    val topCaliperGlow by animateFloatAsState(
+        targetValue = if (draggedCaliper == 0) 1.0f else 0.0f,
+        animationSpec = tween(150, easing = FastOutSlowInEasing),
+        label = "topCaliperGlow"
+    )
+    val bottomCaliperGlow by animateFloatAsState(
+        targetValue = if (draggedCaliper == 1) 1.0f else 0.0f,
+        animationSpec = tween(150, easing = FastOutSlowInEasing),
+        label = "bottomCaliperGlow"
+    )
+
+    val colorPrimary = MaterialTheme.colorScheme.primary
+    val colorSurface = MaterialTheme.colorScheme.surface
+    val colorOnSurface = MaterialTheme.colorScheme.onSurface
+
+    val textPaint = remember(colorOnSurface) {
         android.graphics.Paint().apply {
-            color = android.graphics.Color.WHITE
+            color = android.graphics.Color.argb(170, 100, 116, 139)
             textSize = 28f
             isAntiAlias = true
-            textAlign = android.graphics.Paint.Align.CENTER
-            typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.BOLD)
+            textAlign = android.graphics.Paint.Align.RIGHT
         }
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(rulerBackground)
+            .background(MaterialTheme.colorScheme.background)
     ) {
+        // Main Ruler Canvas with Material 3 Entrance Scale & Offset Transition
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(Unit) {
-                    detectTapGestures(
-                        onPress = { offset ->
-                            touchY = offset.y
-                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
-                            tryAwaitRelease()
-                            touchY = null
-                        }
-                    )
-                }
-                .pointerInput(Unit) {
                     detectDragGestures(
                         onDragStart = { offset ->
-                            touchY = offset.y
-                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                            draggedCaliper = if (abs(offset.y - caliperTopY) < abs(offset.y - effectiveCaliperBottomY)) 0 else 1
                         },
-                        onDrag = { change, _ ->
+                        onDrag = { change, dragAmount ->
                             change.consume()
-                            val prevCm = ((touchY ?: 0f) / (mmInPx * 10f)).toInt()
-                            touchY = change.position.y
-                            val newCm = (change.position.y / (mmInPx * 10f)).toInt()
+                            val prevCm = (abs(targetCaliperBottomY - caliperTopY) / (mmInPx * 10f)).toInt()
+                            if (draggedCaliper == 0) {
+                                caliperTopY = (caliperTopY + dragAmount.y).coerceIn(zeroY, size.height - 120f)
+                            } else {
+                                targetCaliperBottomY = (targetCaliperBottomY + dragAmount.y).coerceIn(zeroY, size.height - 120f)
+                            }
+                            val newCm = (abs(targetCaliperBottomY - caliperTopY) / (mmInPx * 10f)).toInt()
                             if (newCm != prevCm) {
                                 haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
                             }
                         },
-                        onDragEnd = { touchY = null },
-                        onDragCancel = { touchY = null }
+                        onDragEnd = {
+                            draggedCaliper = -1
+                        },
+                        onDragCancel = {
+                            draggedCaliper = -1
+                        }
                     )
                 }
         ) {
             val w = size.width
             val h = size.height
+            val reveal = rulerRevealProgress.value
+            val baseRulerWidth = 160.dp.toPx()
+            val animatedRulerWidth = baseRulerWidth * (0.5f + 0.5f * reveal)
+            val rulerX = w - animatedRulerWidth
 
-            // 0 mark starts directly at the top physical bezel
-            val zeroY = 0f
+            // Draw Ruler Body background with soft subtle shadow
+            drawRect(
+                color = Color.Black.copy(alpha = 0.06f * reveal),
+                topLeft = Offset(rulerX - 6.dp.toPx(), 0f),
+                size = androidx.compose.ui.geometry.Size(animatedRulerWidth + 6.dp.toPx(), h)
+            )
 
-            // Background subtle centimeter extension guidelines
-            var bgMm = 0
-            var bgY = zeroY
-            while (bgY < h) {
-                if (bgMm % 10 == 0 && bgMm > 0) {
-                    drawLine(
-                        color = subTickColor.copy(alpha = 0.08f),
-                        start = Offset(0f, bgY),
-                        end = Offset(w, bgY),
-                        strokeWidth = 1.dp.toPx()
-                    )
-                }
-                bgY += mmInPx
-                bgMm++
-            }
+            drawRect(
+                color = colorSurface,
+                topLeft = Offset(rulerX, 0f),
+                size = androidx.compose.ui.geometry.Size(animatedRulerWidth, h)
+            )
 
-            // Top Header Indicators
-            drawContext.canvas.nativeCanvas.drawText("INCH", 16.dp.toPx(), 42.dp.toPx(), imperialUnitPaint)
-            drawContext.canvas.nativeCanvas.drawText("CM / MM", w - 16.dp.toPx(), 42.dp.toPx(), metricUnitPaint)
+            // Draw Millimeter and Centimeter graduation ticks with stagger reveal
+            var curY = zeroY
+            var mmCount = 0
 
-            // --- 1. Right Edge: Metric Scale (cm & mm) ---
-            var curMmY = zeroY
-            var mmIndex = 0
+            while (curY < h) {
+                val isCm = (mmCount % 10 == 0)
+                val isHalfCm = (mmCount % 5 == 0)
 
-            while (curMmY <= h) {
-                val isCm = (mmIndex % 10 == 0)
-                val isHalfCm = (mmIndex % 5 == 0)
-
-                val tickLen = when {
-                    isCm -> 56.dp.toPx()
-                    isHalfCm -> 36.dp.toPx()
-                    else -> 20.dp.toPx()
+                val tickLength = when {
+                    isCm -> 48.dp.toPx() * reveal
+                    isHalfCm -> 32.dp.toPx() * reveal
+                    else -> 18.dp.toPx() * reveal
                 }
 
-                val strokeW = when {
-                    isCm -> 2.2.dp.toPx()
-                    isHalfCm -> 1.5.dp.toPx()
-                    else -> 1.0.dp.toPx()
-                }
-
-                val col = when {
-                    isCm -> tickColor
-                    isHalfCm -> tickColor.copy(alpha = 0.8f)
-                    else -> subTickColor
-                }
+                val tickColor = if (isCm) colorPrimary.copy(alpha = reveal) else colorOnSurface.copy(alpha = 0.35f * reveal)
+                val strokeWidth = if (isCm) 2.5.dp.toPx() else 1.dp.toPx()
 
                 drawLine(
-                    color = col,
-                    start = Offset(w, curMmY),
-                    end = Offset(w - tickLen, curMmY),
-                    strokeWidth = strokeW,
-                    cap = StrokeCap.Square
+                    color = tickColor,
+                    start = Offset(rulerX, curY),
+                    end = Offset(rulerX + tickLength, curY),
+                    strokeWidth = strokeWidth
                 )
 
-                if (isCm && curMmY > 10.dp.toPx()) {
-                    val cmNumber = mmIndex / 10
+                if (isCm && reveal > 0.5f) {
+                    val cmVal = mmCount / 10
+                    textPaint.alpha = (170 * reveal).toInt()
                     drawContext.canvas.nativeCanvas.drawText(
-                        "$cmNumber",
-                        w - tickLen - 16.dp.toPx(),
-                        curMmY + 12f,
-                        metricTextPaint
+                        "$cmVal",
+                        rulerX + tickLength + 36f,
+                        curY + 10f,
+                        textPaint
                     )
                 }
 
-                curMmY += mmInPx
-                mmIndex++
+                curY += mmInPx
+                mmCount++
             }
 
-            // --- 2. Left Edge: Imperial Scale (Inches & Fractions) ---
-            var curInchY = zeroY
-            var fracIndex = 0
+            // Draw Caliper Guidelines & Span
+            val minCaliperY = minOf(caliperTopY, effectiveCaliperBottomY)
+            val maxCaliperY = maxOf(caliperTopY, effectiveCaliperBottomY)
 
-            while (curInchY <= h) {
-                val isInch = (fracIndex % 16 == 0)
-                val isHalf = (fracIndex % 8 == 0)
-                val isQuarter = (fracIndex % 4 == 0)
-                val isEighth = (fracIndex % 2 == 0)
+            // Span highlight band with dynamic gradient
+            drawRect(
+                brush = Brush.horizontalGradient(
+                    colors = listOf(
+                        colorPrimary.copy(alpha = 0.04f * reveal),
+                        colorPrimary.copy(alpha = 0.16f * reveal)
+                    ),
+                    startX = 0f,
+                    endX = w
+                ),
+                topLeft = Offset(0f, minCaliperY),
+                size = androidx.compose.ui.geometry.Size(w, maxCaliperY - minCaliperY)
+            )
 
-                val tickLen = when {
-                    isInch -> 50.dp.toPx()
-                    isHalf -> 36.dp.toPx()
-                    isQuarter -> 26.dp.toPx()
-                    isEighth -> 18.dp.toPx()
-                    else -> 12.dp.toPx()
-                }
+            // Draw top and bottom caliper edge lines with glow
+            val isTopActive = draggedCaliper == 0
+            val isBottomActive = draggedCaliper == 1
+            val baseTabWidth = 32.dp.toPx()
 
-                val strokeW = when {
-                    isInch -> 2.2.dp.toPx()
-                    isHalf -> 1.6.dp.toPx()
-                    else -> 1.0.dp.toPx()
-                }
-
-                val col = when {
-                    isInch -> tickColor
-                    isHalf -> tickColor.copy(alpha = 0.8f)
-                    else -> subTickColor
-                }
-
-                drawLine(
-                    color = col,
-                    start = Offset(0f, curInchY),
-                    end = Offset(tickLen, curInchY),
-                    strokeWidth = strokeW,
-                    cap = StrokeCap.Square
-                )
-
-                if (isInch && curInchY > 10.dp.toPx()) {
-                    val inchNumber = fracIndex / 16
-                    drawContext.canvas.nativeCanvas.drawText(
-                        "$inchNumber",
-                        tickLen + 16.dp.toPx(),
-                        curInchY + 12f,
-                        imperialTextPaint
-                    )
-                }
-
-                curInchY += sixteenthInPx
-                fracIndex++
-            }
-
-            // --- 3. Interactive Finger Hairline (when touching screen) ---
-            touchY?.let { yPos ->
-                val clampedY = yPos.coerceIn(0f, h)
-                val measuredMm = clampedY / mmInPx
-                val measuredCm = measuredMm / 10.0
-                val measuredInch = clampedY / inchInPx
-
-                // Full-width precision crosshair line
-                drawLine(
-                    color = hairlineColor,
-                    start = Offset(0f, clampedY),
-                    end = Offset(w, clampedY),
-                    strokeWidth = 1.5.dp.toPx()
-                )
-
-                // Center floating measurement pill
-                val pillWidth = 190.dp.toPx()
-                val pillHeight = 36.dp.toPx()
-                val pillX = (w - pillWidth) / 2f
-                val pillY = (clampedY - pillHeight - 12.dp.toPx()).coerceAtLeast(16.dp.toPx())
-
-                drawRoundRect(
-                    color = Color(0xFF0F172A).copy(alpha = 0.92f),
-                    topLeft = Offset(pillX, pillY),
-                    size = Size(pillWidth, pillHeight),
-                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(18.dp.toPx())
-                )
-
-                val infoText = String.format(java.util.Locale.US, "%.1f cm  |  %.2f in", measuredCm, measuredInch)
-                drawContext.canvas.nativeCanvas.drawText(
-                    infoText,
-                    w / 2f,
-                    pillY + 24.dp.toPx(),
-                    touchReadoutPaint
+            // Top caliper edge tab & luminous line
+            val topTabWidth = baseTabWidth * topCaliperScale
+            if (isTopActive) {
+                // Glow
+                drawRect(
+                    color = Color(0xFF00E5FF).copy(alpha = 0.4f * topCaliperGlow),
+                    topLeft = Offset(rulerX - 16f, caliperTopY - 8f),
+                    size = androidx.compose.ui.geometry.Size(topTabWidth + 16f, 16f)
                 )
             }
+            drawRect(
+                color = if (isTopActive) Color(0xFF00E5FF) else colorPrimary,
+                topLeft = Offset(rulerX - 10f, caliperTopY - (3f * topCaliperScale)),
+                size = androidx.compose.ui.geometry.Size(topTabWidth + 10f, 6f * topCaliperScale)
+            )
+
+            // Bottom caliper edge tab & luminous line
+            val bottomTabWidth = baseTabWidth * bottomCaliperScale
+            if (isBottomActive) {
+                // Glow
+                drawRect(
+                    color = Color(0xFF00E5FF).copy(alpha = 0.4f * bottomCaliperGlow),
+                    topLeft = Offset(rulerX - 16f, effectiveCaliperBottomY - 8f),
+                    size = androidx.compose.ui.geometry.Size(bottomTabWidth + 16f, 16f)
+                )
+            }
+            drawRect(
+                color = if (isBottomActive) Color(0xFF00E5FF) else colorPrimary,
+                topLeft = Offset(rulerX - 10f, effectiveCaliperBottomY - (3f * bottomCaliperScale)),
+                size = androidx.compose.ui.geometry.Size(bottomTabWidth + 10f, 6f * bottomCaliperScale)
+            )
         }
 
-        // Discrete Pixel Hardware Calibration Badge at bottom center
-        pixelProfileInfo?.let { (profileLabel, _) ->
-            Surface(
-                color = if (isDark) Color(0xFF1E293B).copy(alpha = 0.75f) else Color(0xFFE2E8F0).copy(alpha = 0.75f),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 12.dp)
+        // Live Measurement Floating Readout Card with Refined Glassmorphism & Spring Reveal
+        val cardAlpha by animateFloatAsState(
+            targetValue = if (rulerRevealProgress.value > 0.4f) 1f else 0f,
+            animationSpec = tween(300),
+            label = "cardAlpha"
+        )
+        val cardScale by animateFloatAsState(
+            targetValue = if (rulerRevealProgress.value > 0.4f) 1f else 0.9f,
+            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow),
+            label = "cardScale"
+        )
+
+        Surface(
+            color = colorSurface.copy(alpha = 0.94f),
+            shape = RoundedCornerShape(24.dp),
+            border = BorderStroke(
+                1.5.dp,
+                if (draggedCaliper != -1) Color(0xFF00E5FF).copy(alpha = 0.6f) else colorPrimary.copy(alpha = 0.25f)
+            ),
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = 16.dp, bottom = 24.dp)
+                .alpha(cardAlpha)
+                .scale(cardScale)
+                .shadow(12.dp, RoundedCornerShape(24.dp))
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text(
-                    text = profileLabel,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    fontFamily = FontFamily.Monospace,
-                    color = if (isDark) Color(0xFF94A3B8) else Color(0xFF475569),
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Surface(
+                        color = colorPrimary.copy(alpha = 0.15f),
+                        shape = CircleShape,
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Rounded.Straighten,
+                                contentDescription = null,
+                                tint = colorPrimary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                    Text(
+                        text = "高精度螢幕游標測量",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = colorOnSurface
+                    )
+                }
+
+                val formattedText = viewModel.formatLength(measuredCm / 100.0, selectedUnit)
+                AnimatedContent(
+                    targetState = formattedText,
+                    transitionSpec = {
+                        (fadeIn(tween(180)) + slideInVertically(
+                            animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessMediumLow)
+                        ) { it / 3 }).togetherWith(
+                            fadeOut(tween(140)) + slideOutVertically { -it / 3 }
+                        )
+                    },
+                    label = "rulerReadoutAnim"
+                ) { targetVal ->
+                    Text(
+                        text = targetVal,
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Black,
+                        color = colorPrimary
+                    )
+                }
+
+                // Quick Fine-Tuning Controls (-1mm / +1mm / Reset) with tactile spring interactions
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    FilledTonalButton(
+                        onClick = {
+                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                            targetCaliperBottomY = (targetCaliperBottomY - (mmInPx / 10f)).coerceAtLeast(caliperTopY)
+                        },
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.height(34.dp)
+                    ) {
+                        Text("-1mm", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    FilledTonalButton(
+                        onClick = {
+                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                            targetCaliperBottomY = (targetCaliperBottomY + (mmInPx / 10f))
+                        },
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.height(34.dp)
+                    ) {
+                        Text("+1mm", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    OutlinedIconButton(
+                        onClick = {
+                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                            caliperTopY = zeroY
+                            targetCaliperBottomY = zeroY + 100f * (mmInPx / 10f)
+                        },
+                        shape = CircleShape,
+                        modifier = Modifier.size(34.dp)
+                    ) {
+                        Icon(
+                            Icons.Rounded.Refresh,
+                            contentDescription = "Reset",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(4.dp))
+
+                Button(
+                    onClick = {
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                        ShareUtility.captureViewSnapshot(localView) { path ->
+                            viewModel.saveRulerRecord(cmVal = measuredCm.toDouble(), imagePath = path)
+                        }
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = colorPrimary),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    modifier = Modifier
+                        .height(40.dp)
+                        .fillMaxWidth()
+                ) {
+                    Icon(Icons.Rounded.BookmarkAdd, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("保存測量記錄", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
     }
 }
+

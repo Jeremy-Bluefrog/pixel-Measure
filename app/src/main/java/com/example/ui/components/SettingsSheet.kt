@@ -42,7 +42,6 @@ fun SettingsSheet(
 
     val currentLang by viewModel.currentLanguage.collectAsState()
     val vibrateOnAlign by viewModel.vibrateOnAlignment.collectAsState()
-    val dynamicColorEnabled by viewModel.dynamicColorEnabled.collectAsState()
     val showPointCloud by viewModel.showPointCloud.collectAsState()
     val selectedUnit by viewModel.selectedUnit.collectAsState()
     val highFpsModeEnabled by viewModel.highFpsModeEnabled.collectAsState()
@@ -56,7 +55,6 @@ fun SettingsSheet(
     val stereoParallaxEnabled by viewModel.stereoParallaxEnabled.collectAsState()
     val sensorTelemetry by viewModel.sensorTelemetry.collectAsState()
 
-    val isDynamicColorSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
     val context = LocalContext.current
 
     ModalBottomSheet(
@@ -102,22 +100,6 @@ fun SettingsSheet(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    // Dynamic Color
-                    SettingsSwitchRow(
-                        icon = Icons.Rounded.ColorLens,
-                        title = "動態色彩 (Material You)",
-                        subtitle = if (isDynamicColorSupported) "依據系統桌布配色自動選用介面主題色" else "需 Android 12 (API 31) 以上版本支援",
-                        checked = dynamicColorEnabled,
-                        enabled = isDynamicColorSupported,
-                        onCheckedChange = { viewModel.setDynamicColorEnabled(it) },
-                        testTag = "switch_dynamic_color"
-                    )
-
-                    HorizontalDivider(
-                        modifier = Modifier.padding(vertical = 12.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                    )
-
                     // 60Hz High FPS Preview
                     SettingsSwitchRow(
                         icon = Icons.Rounded.Speed,

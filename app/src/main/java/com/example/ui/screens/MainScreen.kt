@@ -2,7 +2,7 @@ package com.example.ui.screens
 
 import android.os.Build
 import androidx.compose.animation.*
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -84,7 +84,19 @@ fun MainScreen(viewModel: MeasureViewModel) {
             )
         },
         topBar = {
-            if (currentMode == 1) {
+            AnimatedVisibility(
+                visible = currentMode == 1,
+                enter = fadeIn(animationSpec = tween(300, easing = FastOutSlowInEasing)) +
+                        slideInVertically(
+                            initialOffsetY = { -it / 2 },
+                            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
+                        ),
+                exit = fadeOut(animationSpec = tween(200, easing = FastOutSlowInEasing)) +
+                        slideOutVertically(
+                            targetOffsetY = { -it / 2 },
+                            animationSpec = tween(200, easing = FastOutSlowInEasing)
+                        )
+            ) {
                 GradientBlurTopBar(
                     baseColor = MaterialTheme.colorScheme.surface,
                     modifier = Modifier.testTag("top_gradient_blur_bar")
@@ -205,32 +217,74 @@ fun MainScreen(viewModel: MeasureViewModel) {
                 .fillMaxSize()
                 .padding(if (currentMode == 0) PaddingValues(bottom = 0.dp) else innerPadding)
         ) {
-            // 1. Camera AR Viewport
-            AnimatedVisibility(
-                visible = currentMode == 0,
-                enter = fadeIn(animationSpec = tween(250)),
-                exit = fadeOut(animationSpec = tween(250)),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                ModernArCameraView(
-                    viewModel = viewModel,
-                    onShowHistoryClick = { showHistorySheet = true },
-                    onShowSettingsClick = { showSettingsDialog = true },
-                    bottomPadding = innerPadding.calculateBottomPadding()
-                )
-            }
-
-            // 2. Screen Ruler Viewport (pure fade-in & fade-out)
-            AnimatedVisibility(
-                visible = currentMode == 1,
-                enter = fadeIn(animationSpec = tween(250)),
-                exit = fadeOut(animationSpec = tween(250)),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                RulerComponent(
-                    viewModel = viewModel,
-                    onShowHistoryClick = { showHistorySheet = true }
-                )
+            // Material 3 Shared Axis Mode Transition: Camera AR (0) <-> Screen Ruler (1)
+            AnimatedContent(
+                targetState = currentMode,
+                transitionSpec = {
+                    if (targetState > initialState) {
+                        // Forward transition: Camera AR -> Ruler (Slide from right with scale and fade)
+                        (slideInHorizontally(
+                            initialOffsetX = { fullWidth -> (fullWidth * 0.2f).toInt() },
+                            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
+                        ) + fadeIn(
+                            animationSpec = tween(300, easing = FastOutSlowInEasing)
+                        ) + scaleIn(
+                            initialScale = 0.96f,
+                            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
+                        )).togetherWith(
+                            slideOutHorizontally(
+                                targetOffsetX = { fullWidth -> (-fullWidth * 0.2f).toInt() },
+                                animationSpec = tween(220, easing = FastOutSlowInEasing)
+                            ) + fadeOut(
+                                animationSpec = tween(200, easing = FastOutSlowInEasing)
+                            ) + scaleOut(
+                                targetScale = 0.96f,
+                                animationSpec = tween(200, easing = FastOutSlowInEasing)
+                            )
+                        )
+                    } else {
+                        // Backward transition: Ruler -> Camera AR (Slide from left with scale and fade)
+                        (slideInHorizontally(
+                            initialOffsetX = { fullWidth -> (-fullWidth * 0.2f).toInt() },
+                            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
+                        ) + fadeIn(
+                            animationSpec = tween(300, easing = FastOutSlowInEasing)
+                        ) + scaleIn(
+                            initialScale = 0.96f,
+                            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
+                        )).togetherWith(
+                            slideOutHorizontally(
+                                targetOffsetX = { fullWidth -> (fullWidth * 0.2f).toInt() },
+                                animationSpec = tween(220, easing = FastOutSlowInEasing)
+                            ) + fadeOut(
+                                animationSpec = tween(200, easing = FastOutSlowInEasing)
+                            ) + scaleOut(
+                                targetScale = 0.96f,
+                                animationSpec = tween(200, easing = FastOutSlowInEasing)
+                            )
+                        )
+                    }
+                },
+                contentKey = { it },
+                modifier = Modifier.fillMaxSize(),
+                label = "MainModeSharedAxisTransition"
+            ) { mode ->
+                when (mode) {
+                    0 -> {
+                        ModernArCameraView(
+                            viewModel = viewModel,
+                            onShowHistoryClick = { showHistorySheet = true },
+                            onShowSettingsClick = { showSettingsDialog = true },
+                            bottomPadding = innerPadding.calculateBottomPadding()
+                        )
+                    }
+                    1 -> {
+                        RulerComponent(
+                            viewModel = viewModel,
+                            onShowHistoryClick = { showHistorySheet = true }
+                        )
+                    }
+                }
             }
 
             // Quick Floating Share Banner when a record is newly saved

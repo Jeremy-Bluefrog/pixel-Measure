@@ -20,8 +20,7 @@ class MainActivity : ComponentActivity() {
         viewModel = ViewModelProvider(this)[MeasureViewModel::class.java]
         
         setContent {
-            val dynamicColorEnabled by viewModel.dynamicColorEnabled.collectAsState()
-            MyApplicationTheme(dynamicColor = dynamicColorEnabled) {
+            MyApplicationTheme(dynamicColor = true) {
                 MainScreen(viewModel = viewModel)
             }
         }

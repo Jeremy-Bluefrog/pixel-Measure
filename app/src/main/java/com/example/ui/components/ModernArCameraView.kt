@@ -99,13 +99,6 @@ fun ModernArCameraView(
     val sensorCorrectionEnabled by viewModel.sensorCorrectionEnabled.collectAsState()
     val highFpsModeEnabled by viewModel.highFpsModeEnabled.collectAsState()
 
-    // AI Core Tile Recognition states
-    val isAiTileMode by viewModel.isAiTileMode.collectAsState()
-    val isAiTileAnalyzing by viewModel.isAiTileAnalyzing.collectAsState()
-    val detectedTiles by viewModel.detectedTiles.collectAsState()
-    val selectedTileForDetail by viewModel.selectedTileForDetail.collectAsState()
-    val activeTilePreset by viewModel.activeTilePreset.collectAsState()
-
     // Touch ripple visual pings
     val pings = remember { mutableStateListOf<Pair<Offset, Animatable<Float, AnimationVector1D>>>() }
 
@@ -156,33 +149,6 @@ fun ModernArCameraView(
             repeatMode = RepeatMode.Restart
         ),
         label = "dashPhase"
-    )
-    val geminiGlowRotation by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(3600, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "geminiGlowRotation"
-    )
-    val geminiFloatBob by infiniteTransition.animateFloat(
-        initialValue = -4.0f,
-        targetValue = 4.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1300, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "geminiFloatBob"
-    )
-    val geminiLassoPulse by infiniteTransition.animateFloat(
-        initialValue = 0.85f,
-        targetValue = 1.05f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(850, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "geminiLassoPulse"
     )
     val reticleRotationDeg by infiniteTransition.animateFloat(
         initialValue = 0f,
@@ -306,6 +272,23 @@ fun ModernArCameraView(
                     },
                     modifier = Modifier
                         .fillMaxSize()
+                        .pointerInput(Unit) {
+                            detectTapGestures { offset ->
+                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+
+                                // Trigger tactile ping ripple
+                                val pingAnim = Animatable(0f)
+                                val pingPair = offset to pingAnim
+                                pings.add(pingPair)
+                                coroutineScope.launch {
+                                    pingAnim.animateTo(1f, animationSpec = tween(600, easing = LinearOutSlowInEasing))
+                                    pings.remove(pingPair)
+                                }
+
+                                // Request hit-test at tap coordinates
+                                viewModel.requestHitTest(offset.x, offset.y)
+                            }
+                        }
                 )
             } else {
                 // High-Precision CameraX Fallback Live Feed (60Hz / 60 FPS Direct Hardware Surface Composition)
@@ -323,13 +306,30 @@ fun ModernArCameraView(
 
                                 try {
                                     val camera2Extender = androidx.camera.camera2.interop.Camera2Interop.Extender(previewBuilder)
+                                    val camManager = ctx.getSystemService(android.content.Context.CAMERA_SERVICE) as? android.hardware.camera2.CameraManager
+                                    val backCamId = camManager?.cameraIdList?.firstOrNull { id ->
+                                        camManager.getCameraCharacteristics(id).get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) ==
+                                                android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
+                                    } ?: camManager?.cameraIdList?.firstOrNull()
+
+                                    val characteristics = if (backCamId != null) camManager?.getCameraCharacteristics(backCamId) else null
+                                    val fpsRanges = characteristics?.get(android.hardware.camera2.CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                                    val target60FpsRange = fpsRanges?.firstOrNull { range ->
+                                        range.upper >= 60 && range.lower >= 30
+                                    } ?: android.util.Range(60, 60)
+
                                     camera2Extender.setCaptureRequestOption(
                                         android.hardware.camera2.CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
-                                        android.util.Range(60, 60)
+                                        target60FpsRange
                                     )
                                     camera2Extender.setCaptureRequestOption(
                                         android.hardware.camera2.CaptureRequest.CONTROL_MODE,
                                         android.hardware.camera2.CaptureRequest.CONTROL_MODE_AUTO
+                                    )
+                                    // Clamp exposure time to max 1/60s (16.6ms) to maintain 60 FPS in dim environments
+                                    camera2Extender.setCaptureRequestOption(
+                                        android.hardware.camera2.CaptureRequest.SENSOR_EXPOSURE_TIME,
+                                        1_000_000_000L / 60L
                                     )
                                     camera2Extender.setCaptureRequestOption(
                                         android.hardware.camera2.CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
@@ -366,6 +366,19 @@ fun ModernArCameraView(
                     },
                     modifier = Modifier
                         .fillMaxSize()
+                        .pointerInput(Unit) {
+                            detectTapGestures { offset ->
+                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                val pingAnim = Animatable(0f)
+                                val pingPair = offset to pingAnim
+                                pings.add(pingPair)
+                                coroutineScope.launch {
+                                    pingAnim.animateTo(1f, animationSpec = tween(600, easing = LinearOutSlowInEasing))
+                                    pings.remove(pingPair)
+                                }
+                                viewModel.requestHitTest(offset.x, offset.y)
+                            }
+                        }
                 )
             }
 
@@ -770,296 +783,6 @@ fun ModernArCameraView(
                         }
                     }
                 }
-
-                // 3E. AI Core Tile Detection Gemini-Style Glowing Holographic Lasso & Auto-Tracking Badges
-                if (isAiTileMode && detectedTiles.isNotEmpty()) {
-                    detectedTiles.forEach { tile ->
-                        // Calculate real-time 3D projected screen coordinates or fallback to normalized box
-                        val has3D = tile.worldCorners.size == 4
-                        val projTL = if (has3D) ArMath.projectWorldToScreen(tile.worldCorners[0], viewMatrix, projectionMatrix, screenW, screenH) else null
-                        val projTR = if (has3D) ArMath.projectWorldToScreen(tile.worldCorners[1], viewMatrix, projectionMatrix, screenW, screenH) else null
-                        val projBR = if (has3D) ArMath.projectWorldToScreen(tile.worldCorners[2], viewMatrix, projectionMatrix, screenW, screenH) else null
-                        val projBL = if (has3D) ArMath.projectWorldToScreen(tile.worldCorners[3], viewMatrix, projectionMatrix, screenW, screenH) else null
-
-                        val is3DValid = projTL != null && projTR != null && projBR != null && projBL != null
-
-                        val pTL = if (is3DValid) projTL!! else Pair(tile.leftNorm * screenW, tile.topNorm * screenH)
-                        val pTR = if (is3DValid) projTR!! else Pair(tile.rightNorm * screenW, tile.topNorm * screenH)
-                        val pBR = if (is3DValid) projBR!! else Pair(tile.rightNorm * screenW, tile.bottomNorm * screenH)
-                        val pBL = if (is3DValid) projBL!! else Pair(tile.leftNorm * screenW, tile.bottomNorm * screenH)
-
-                        val minX = minOf(pTL.first, pTR.first, pBR.first, pBL.first)
-                        val maxX = maxOf(pTL.first, pTR.first, pBR.first, pBL.first)
-                        val minY = minOf(pTL.second, pTR.second, pBR.second, pBL.second)
-                        val maxY = maxOf(pTL.second, pTR.second, pBR.second, pBL.second)
-                        val boxW = (maxX - minX).coerceAtLeast(60f)
-                        val boxH = (maxY - minY).coerceAtLeast(60f)
-                        val centerX = (pTL.first + pTR.first + pBR.first + pBL.first) / 4f
-                        val centerY = (pTL.second + pTR.second + pBR.second + pBL.second) / 4f
-                        val topMidX = (pTL.first + pTR.first) / 2f
-                        val topMidY = (pTL.second + pTR.second) / 2f
-
-                        // 1. Dynamic Organic Glowing Lasso & Holographic Surface Canvas (Circles the Tile)
-                        Canvas(modifier = Modifier.fillMaxSize()) {
-                            val path = Path().apply {
-                                moveTo(pTL.first, pTL.second)
-                                lineTo(pTR.first, pTR.second)
-                                lineTo(pBR.first, pBR.second)
-                                lineTo(pBL.first, pBL.second)
-                                close()
-                            }
-
-                            // Inner Holographic Tint
-                            drawPath(
-                                path = path,
-                                brush = Brush.radialGradient(
-                                    colors = listOf(
-                                        Color(0x384285F4),
-                                        Color(0x18AB47BC),
-                                        Color(0x0600E5FF),
-                                        Color.Transparent
-                                    ),
-                                    center = Offset(centerX, centerY),
-                                    radius = maxOf(boxW, boxH) * 0.75f
-                                )
-                            )
-
-                            // Outer Soft Glowing Halo Lasso (Circle Effect)
-                            drawPath(
-                                path = path,
-                                brush = Brush.linearGradient(
-                                    colors = listOf(
-                                        Color(0x6664B5F6),
-                                        Color(0x66BA68C8),
-                                        Color(0x66FFD54F),
-                                        Color(0x6680D8FF)
-                                    ),
-                                    start = Offset(minX, minY),
-                                    end = Offset(maxX, maxY)
-                                ),
-                                style = Stroke(
-                                    width = (7.dp.toPx() * geminiLassoPulse),
-                                    cap = StrokeCap.Round,
-                                    join = StrokeJoin.Round
-                                )
-                            )
-
-                            // Primary Crisp Animated Glowing Contour Stroke
-                            drawPath(
-                                path = path,
-                                brush = Brush.linearGradient(
-                                    colors = listOf(
-                                        Color(0xFF80D8FF),
-                                        Color(0xFFE1BEE7),
-                                        Color(0xFFFFD54F),
-                                        Color(0xFF00E5FF),
-                                        Color(0xFF80D8FF)
-                                    ),
-                                    start = Offset(minX, minY),
-                                    end = Offset(maxX, maxY)
-                                ),
-                                style = Stroke(
-                                    width = 2.6.dp.toPx(),
-                                    cap = StrokeCap.Round,
-                                    join = StrokeJoin.Round,
-                                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(18f, 10f), dashPhase)
-                                )
-                            )
-
-                            // 4 Corner Tactile Brackets for AR Spatial Precision
-                            val bracketLen = 22.dp.toPx().coerceAtMost(minOf(boxW, boxH) / 3.5f)
-                            val bracketStroke = 3.5.dp.toPx()
-                            val bracketColor = Color(0xFF80D8FF)
-
-                            // Top-Left bracket
-                            drawLine(bracketColor, Offset(pTL.first, pTL.second), Offset(pTL.first + bracketLen, pTL.second), bracketStroke, cap = StrokeCap.Round)
-                            drawLine(bracketColor, Offset(pTL.first, pTL.second), Offset(pTL.first, pTL.second + bracketLen), bracketStroke, cap = StrokeCap.Round)
-
-                            // Top-Right bracket
-                            drawLine(bracketColor, Offset(pTR.first, pTR.second), Offset(pTR.first - bracketLen, pTR.second), bracketStroke, cap = StrokeCap.Round)
-                            drawLine(bracketColor, Offset(pTR.first, pTR.second), Offset(pTR.first, pTR.second + bracketLen), bracketStroke, cap = StrokeCap.Round)
-
-                            // Bottom-Right bracket
-                            drawLine(bracketColor, Offset(pBR.first, pBR.second), Offset(pBR.first - bracketLen, pBR.second), bracketStroke, cap = StrokeCap.Round)
-                            drawLine(bracketColor, Offset(pBR.first, pBR.second), Offset(pBR.first, pBR.second - bracketLen), bracketStroke, cap = StrokeCap.Round)
-
-                            // Bottom-Left bracket
-                            drawLine(bracketColor, Offset(pBL.first, pBL.second), Offset(pBL.first + bracketLen, pBL.second), bracketStroke, cap = StrokeCap.Round)
-                            drawLine(bracketColor, Offset(pBL.first, pBL.second), Offset(pBL.first, pBL.second - bracketLen), bracketStroke, cap = StrokeCap.Round)
-                        }
-
-                        // Transparent Clickable Overlay Region for Tile Surface
-                        Box(
-                            modifier = Modifier
-                                .offset { androidx.compose.ui.unit.IntOffset(minX.toInt(), minY.toInt()) }
-                                .size(
-                                    width = (boxW / localView.resources.displayMetrics.density).dp,
-                                    height = (boxH / localView.resources.displayMetrics.density).dp
-                                )
-                                .clickable {
-                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                    viewModel.measureTileOneTap(tile)
-                                }
-                        )
-
-                        // 2. Gemini AI Intelligence Floating Frosted Glass Pill Badge (Auto-Tracks Tile)
-                        val pillWidthDp = 248.dp
-                        val pillHeightDp = 48.dp
-                        val density = localView.resources.displayMetrics.density
-                        val pillWpx = pillWidthDp.value * density
-                        val pillHpx = pillHeightDp.value * density
-
-                        val targetPillX = (topMidX - pillWpx / 2f).toInt().coerceIn(16, (screenW - pillWpx - 16).toInt().coerceAtLeast(16))
-                        val targetPillY = (topMidY - pillHpx - (22f * density) + (geminiFloatBob * density)).toInt().coerceIn(50, (screenH - 140).coerceAtLeast(50))
-
-                        Surface(
-                            shape = RoundedCornerShape(26.dp),
-                            color = Color(0xF2141722),
-                            shadowElevation = 10.dp,
-                            border = BorderStroke(
-                                1.3.dp,
-                                Brush.linearGradient(
-                                    colors = listOf(
-                                        Color(0xFF80D8FF),
-                                        Color(0xFFBA68C8),
-                                        Color(0xFFFFD54F),
-                                        Color(0xFF80D8FF)
-                                    )
-                                )
-                            ),
-                            modifier = Modifier
-                                .offset { androidx.compose.ui.unit.IntOffset(targetPillX, targetPillY) }
-                                .width(pillWidthDp)
-                                .height(pillHeightDp)
-                                .clickable {
-                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                    viewModel.measureTileOneTap(tile)
-                                }
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(9.dp)
-                            ) {
-                                // Gemini 4-Point AI Sparkle Icon with Vibrant Animated Gradient Aura
-                                Box(
-                                    modifier = Modifier
-                                        .size(32.dp)
-                                        .clip(CircleShape)
-                                        .background(
-                                            Brush.sweepGradient(
-                                                colors = listOf(
-                                                    Color(0xFFFFB74D),
-                                                    Color(0xFFFF4081),
-                                                    Color(0xFF7C4DFF),
-                                                    Color(0xFF00E5FF),
-                                                    Color(0xFFFFB74D)
-                                                )
-                                            )
-                                        ),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.AutoAwesome,
-                                        contentDescription = "Gemini AI",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-
-                                // Tile Identification Spec Details
-                                Column(
-                                    modifier = Modifier.weight(1f),
-                                    verticalArrangement = Arrangement.Center
-                                ) {
-                                    Text(
-                                        text = "${tile.label} (${tile.estimatedWidthCm.toInt()}×${tile.estimatedHeightCm.toInt()} cm)",
-                                        color = Color.White,
-                                        fontSize = 12.5.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1
-                                    )
-                                    Text(
-                                        text = "${tile.material} · 輕觸即測",
-                                        color = Color(0xFF80D8FF),
-                                        fontSize = 10.5.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        maxLines = 1
-                                    )
-                                }
-
-                                // Arrow Indicator
-                                Icon(
-                                    imageVector = Icons.Rounded.ChevronRight,
-                                    contentDescription = null,
-                                    tint = Color.White.copy(alpha = 0.7f),
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // 3F. AI Scanning Laser Sweep Line Animation (when analyzing)
-                if (isAiTileMode && isAiTileAnalyzing) {
-                    val scanProgress by infiniteTransition.animateFloat(
-                        initialValue = 0.15f,
-                        targetValue = 0.85f,
-                        animationSpec = infiniteRepeatable(
-                            animation = tween(1800, easing = LinearEasing),
-                            repeatMode = RepeatMode.Restart
-                        ),
-                        label = "laserSweep"
-                    )
-
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        val currentY = size.height * scanProgress
-                        // Laser Glow Gradient
-                        drawLine(
-                            brush = Brush.horizontalGradient(
-                                colors = listOf(
-                                    Color.Transparent,
-                                    colorPrimary.copy(alpha = 0.8f),
-                                    Color.White,
-                                    colorPrimary.copy(alpha = 0.8f),
-                                    Color.Transparent
-                                )
-                            ),
-                            start = Offset(0f, currentY),
-                            end = Offset(size.width, currentY),
-                            strokeWidth = 4.dp.toPx()
-                        )
-                    }
-
-                    // Floating prompt indicator
-                    Surface(
-                        color = Color.Black.copy(alpha = 0.75f),
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .padding(top = 80.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(14.dp),
-                                strokeWidth = 2.dp,
-                                color = colorPrimary
-                            )
-                            Text(
-                                text = "AI Core 正在識別磁磚紋理與接縫幾何...",
-                                color = Color.White,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
-                }
             }
 
             // 4. Redesigned Futuristic AR Target Reticle (Spring Snap Aura + Rotating Crosshair Ticks + Center Laser Pinpoint)
@@ -1205,170 +928,143 @@ fun ModernArCameraView(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                // Left: Status badge or clear button
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    if (capturedPoints.isNotEmpty()) {
-                        // "測量中" active indicator badge
-                        Surface(
-                            color = colorPrimary.copy(alpha = 0.9f),
-                            shape = RoundedCornerShape(20.dp),
-                            modifier = Modifier.shadow(4.dp, RoundedCornerShape(20.dp))
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                // Left: Status badge or clear button with Material 3 AnimatedContent transition
+                AnimatedContent(
+                    targetState = capturedPoints.isNotEmpty(),
+                    transitionSpec = {
+                        (fadeIn(animationSpec = tween(220)) + scaleIn(
+                            initialScale = 0.92f,
+                            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow)
+                        )).togetherWith(
+                            fadeOut(animationSpec = tween(160)) + scaleOut(
+                                targetScale = 0.92f,
+                                animationSpec = tween(160)
+                            )
+                        )
+                    },
+                    label = "TopStatusChipAnim"
+                ) { isMeasuring ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (isMeasuring) {
+                            // "測量中" active indicator badge
+                            Surface(
+                                color = colorPrimary.copy(alpha = 0.9f),
+                                shape = RoundedCornerShape(20.dp),
+                                modifier = Modifier.shadow(4.dp, RoundedCornerShape(20.dp))
                             ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(10.dp),
-                                    strokeWidth = 2.dp,
-                                    color = colorOnPrimary
-                                )
-                                Text(
-                                    text = "測量中...",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = colorOnPrimary
-                                )
-                            }
-                        }
-
-                        // "清除" button
-                        Surface(
-                            color = Color.Black.copy(alpha = 0.55f),
-                            shape = RoundedCornerShape(20.dp),
-                            modifier = Modifier
-                                .clickable {
-                                    viewModel.clearActivePoints()
-                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                }
-                                .shadow(4.dp, RoundedCornerShape(20.dp))
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    Icons.Rounded.DeleteOutline,
-                                    contentDescription = "Clear",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "清除",
-                                    color = Color.White,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                    } else {
-                        Surface(
-                            color = Color.Black.copy(alpha = 0.45f),
-                            shape = RoundedCornerShape(20.dp),
-                            modifier = Modifier.shadow(2.dp, RoundedCornerShape(20.dp))
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                if (trackingState == TrackingState.TRACKING) {
-                                    Surface(
-                                        color = colorPrimary,
-                                        shape = CircleShape,
-                                        modifier = Modifier.size(8.dp)
-                                    ) {}
-                                    Text(
-                                        text = "已就緒",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = Color.White
-                                    )
-                                    if (highFpsModeEnabled) {
-                                        Surface(
-                                            color = colorPrimary.copy(alpha = 0.25f),
-                                            shape = RoundedCornerShape(6.dp),
-                                            border = BorderStroke(1.dp, colorPrimary.copy(alpha = 0.6f))
-                                        ) {
-                                            Text(
-                                                text = "60Hz",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontWeight = FontWeight.ExtraBold,
-                                                color = colorPrimary,
-                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                            )
-                                        }
-                                    }
-                                } else {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
                                     CircularProgressIndicator(
                                         modifier = Modifier.size(10.dp),
                                         strokeWidth = 2.dp,
-                                        color = colorPrimary
+                                        color = colorOnPrimary
                                     )
                                     Text(
-                                        text = "尋找表面...",
+                                        text = "測量中...",
                                         style = MaterialTheme.typography.labelMedium,
-                                        color = Color.White.copy(alpha = 0.85f)
+                                        fontWeight = FontWeight.Bold,
+                                        color = colorOnPrimary
                                     )
+                                }
+                            }
+
+                            // "清除" button
+                            Surface(
+                                color = Color.Black.copy(alpha = 0.55f),
+                                shape = RoundedCornerShape(20.dp),
+                                modifier = Modifier
+                                    .clickable {
+                                        viewModel.clearActivePoints()
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                    }
+                                    .shadow(4.dp, RoundedCornerShape(20.dp))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.DeleteOutline,
+                                        contentDescription = "Clear",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "清除",
+                                        color = Color.White,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            }
+                        } else {
+                            Surface(
+                                color = Color.Black.copy(alpha = 0.45f),
+                                shape = RoundedCornerShape(20.dp),
+                                modifier = Modifier.shadow(2.dp, RoundedCornerShape(20.dp))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    if (trackingState == TrackingState.TRACKING) {
+                                        Surface(
+                                            color = colorPrimary,
+                                            shape = CircleShape,
+                                            modifier = Modifier.size(8.dp)
+                                        ) {}
+                                        Text(
+                                            text = "已就緒",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color.White
+                                        )
+                                        if (highFpsModeEnabled) {
+                                            Surface(
+                                                color = colorPrimary.copy(alpha = 0.25f),
+                                                shape = RoundedCornerShape(6.dp),
+                                                border = BorderStroke(1.dp, colorPrimary.copy(alpha = 0.6f))
+                                            ) {
+                                                Text(
+                                                    text = "60Hz",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    color = colorPrimary,
+                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(10.dp),
+                                            strokeWidth = 2.dp,
+                                            color = colorPrimary
+                                        )
+                                        Text(
+                                            text = "尋找表面...",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = Color.White.copy(alpha = 0.85f)
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
                 }
 
-                // Right: Essential Quick Actions (AI Tile, Torch, History, Settings)
+                // Right: Essential Quick Actions (Torch, History, Settings)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // AI Core Tile Recognition Button
-                    Surface(
-                        color = if (isAiTileMode) colorPrimary else Color.Black.copy(alpha = 0.55f),
-                        contentColor = if (isAiTileMode) colorOnPrimary else Color.White,
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier
-                            .shadow(if (isAiTileMode) 6.dp else 3.dp, RoundedCornerShape(20.dp))
-                            .clickable {
-                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                ShareUtility.captureViewSnapshot(localView) { path ->
-                                    val bmp = if (path != null) android.graphics.BitmapFactory.decodeFile(path) else null
-                                    viewModel.toggleAiTileMode(bmp)
-                                }
-                            }
-                            .testTag("ai_tile_recognition_button")
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
-                        ) {
-                            if (isAiTileAnalyzing) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(14.dp),
-                                    strokeWidth = 2.dp,
-                                    color = if (isAiTileMode) colorOnPrimary else colorPrimary
-                                )
-                            } else {
-                                Icon(
-                                    Icons.Rounded.AutoAwesome,
-                                    contentDescription = "AI Tile Recognition",
-                                    modifier = Modifier.size(16.dp),
-                                    tint = if (isAiTileMode) colorOnPrimary else colorPrimary
-                                )
-                            }
-                            Text(
-                                text = if (isAiTileAnalyzing) "識別中..." else if (isAiTileMode) "磁磚模式" else "AI 磁磚",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-
                     // Flashlight / Torch
                     IconButton(
                         onClick = { viewModel.toggleTorch(context) },
@@ -1458,89 +1154,82 @@ fun ModernArCameraView(
                     .padding(horizontal = 24.dp, vertical = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // AI Tile Interactive Floating Deck
-                if (isAiTileMode) {
-                    TileFloatingControlDeck(
-                        viewModel = viewModel,
-                        detectedTiles = detectedTiles,
-                        isAiTileMode = isAiTileMode,
-                        isAiTileAnalyzing = isAiTileAnalyzing,
-                        activePreset = activeTilePreset,
-                        onOpenDetailSheet = {
-                            val targetTile = detectedTiles.firstOrNull() ?: DetectedTile(
-                                label = activeTilePreset.name,
-                                material = activeTilePreset.defaultMaterial,
-                                estimatedWidthCm = activeTilePreset.widthCm,
-                                estimatedHeightCm = activeTilePreset.heightCm,
-                                areaM2 = activeTilePreset.singleTileAreaM2,
-                                groutWidthMm = activeTilePreset.defaultGroutMm
+                // Live Auto-Detected Dimension / Guidance Pill with Fluid Spring Transition
+                AnimatedContent(
+                    targetState = capturedPoints.isNotEmpty(),
+                    transitionSpec = {
+                        (fadeIn(animationSpec = tween(220)) + scaleIn(
+                            initialScale = 0.92f,
+                            animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessMediumLow)
+                        )).togetherWith(
+                            fadeOut(animationSpec = tween(160)) + scaleOut(
+                                targetScale = 0.92f,
+                                animationSpec = tween(160)
                             )
-                            viewModel.selectTileForDetail(targetTile)
-                        },
-                        modifier = Modifier.padding(bottom = 12.dp)
-                    )
-                }
+                        )
+                    },
+                    label = "DimensionPillTransition"
+                ) { hasPoints ->
+                    if (hasPoints) {
+                        val totalLen = viewModel.calculateTotalDistance()
+                        val area = viewModel.calculatePolygonArea()
+                        val height = viewModel.calculateVerticalHeight()
 
-                // Live Auto-Detected Dimension / Result Pill
-                if (capturedPoints.isNotEmpty()) {
-                    val totalLen = viewModel.calculateTotalDistance()
-                    val area = viewModel.calculatePolygonArea()
-                    val height = viewModel.calculateVerticalHeight()
-
-                    Surface(
-                        color = Color.Black.copy(alpha = 0.72f),
-                        shape = RoundedCornerShape(24.dp),
-                        modifier = Modifier
-                            .padding(bottom = 12.dp)
-                            .shadow(6.dp, RoundedCornerShape(24.dp))
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        Surface(
+                            color = Color.Black.copy(alpha = 0.72f),
+                            shape = RoundedCornerShape(24.dp),
+                            modifier = Modifier
+                                .padding(bottom = 12.dp)
+                                .shadow(6.dp, RoundedCornerShape(24.dp))
                         ) {
-                            val (badgeText, badgeIcon) = when {
-                                autoDetectedType == "AREA" && capturedPoints.size >= 3 ->
-                                    "面積: ${viewModel.formatArea(area, selectedUnit)}" to Icons.Rounded.SquareFoot
-                                autoDetectedType == "HEIGHT" && capturedPoints.size >= 2 ->
-                                    "高度: ${viewModel.formatLength(height, selectedUnit)}" to Icons.Rounded.Height
-                                else ->
-                                    "總長: ${viewModel.formatLength(totalLen, selectedUnit)}" to Icons.Rounded.Straighten
+                            Row(
+                                modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                val (badgeText, badgeIcon) = when {
+                                    autoDetectedType == "AREA" && capturedPoints.size >= 3 ->
+                                        "面積: ${viewModel.formatArea(area, selectedUnit)}" to Icons.Rounded.SquareFoot
+                                    autoDetectedType == "HEIGHT" && capturedPoints.size >= 2 ->
+                                        "高度: ${viewModel.formatLength(height, selectedUnit)}" to Icons.Rounded.Height
+                                    else ->
+                                        "總長: ${viewModel.formatLength(totalLen, selectedUnit)}" to Icons.Rounded.Straighten
+                                }
+
+                                Icon(
+                                    badgeIcon,
+                                    contentDescription = null,
+                                    tint = colorPrimary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = badgeText,
+                                    color = Color.White,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
-
-                            Icon(
-                                badgeIcon,
-                                contentDescription = null,
-                                tint = colorPrimary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Text(
-                                text = badgeText,
-                                color = Color.White,
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold
-                            )
                         }
-                    }
-                } else {
-                    // Guidance Pill
-                    Surface(
-                        color = Color.Black.copy(alpha = 0.55f),
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.padding(bottom = 10.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    } else {
+                        // Guidance Pill
+                        Surface(
+                            color = Color.Black.copy(alpha = 0.55f),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.padding(bottom = 10.dp)
                         ) {
-                            Icon(Icons.Rounded.TouchApp, null, tint = colorPrimary, modifier = Modifier.size(16.dp))
-                            Text(
-                                text = "對準目標表面，點擊 ＋ 標定測量起點",
-                                color = Color.White,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium
-                            )
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(Icons.Rounded.TouchApp, null, tint = colorPrimary, modifier = Modifier.size(16.dp))
+                                Text(
+                                    text = "對準目標表面，點擊 ＋ 標定測量起點",
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
                         }
                     }
                 }
@@ -1551,47 +1240,63 @@ fun ModernArCameraView(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Left: Undo & Clear buttons
-                    if (capturedPoints.isNotEmpty()) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            IconButton(
-                                onClick = {
-                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
-                                    viewModel.undo()
-                                },
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .background(Color.Black.copy(alpha = 0.55f), CircleShape)
-                                    .shadow(4.dp, CircleShape)
-                            ) {
-                                Icon(
-                                    Icons.Rounded.Undo,
-                                    contentDescription = "Undo",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                            }
+                    // Left: Undo & Clear buttons with spring slide and scale
+                    Box(modifier = Modifier.width(108.dp), contentAlignment = Alignment.CenterStart) {
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = capturedPoints.isNotEmpty(),
+                            enter = slideInHorizontally(
+                                initialOffsetX = { -it },
+                                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow)
+                            ) + fadeIn(animationSpec = tween(200)) + scaleIn(
+                                initialScale = 0.8f,
+                                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow)
+                            ),
+                            exit = slideOutHorizontally(
+                                targetOffsetX = { -it },
+                                animationSpec = tween(180)
+                            ) + fadeOut(animationSpec = tween(150)) + scaleOut(
+                                targetScale = 0.8f,
+                                animationSpec = tween(180)
+                            )
+                        ) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                IconButton(
+                                    onClick = {
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                        viewModel.undo()
+                                    },
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .background(Color.Black.copy(alpha = 0.55f), CircleShape)
+                                        .shadow(4.dp, CircleShape)
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.Undo,
+                                        contentDescription = "Undo",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
 
-                            IconButton(
-                                onClick = {
-                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
-                                    viewModel.clearActivePoints()
-                                },
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .background(Color.Black.copy(alpha = 0.55f), CircleShape)
-                                    .shadow(4.dp, CircleShape)
-                            ) {
-                                Icon(
-                                    Icons.Rounded.DeleteSweep,
-                                    contentDescription = "Clear",
-                                    tint = Color(0xFFFF8A80),
-                                    modifier = Modifier.size(22.dp)
-                                )
+                                IconButton(
+                                    onClick = {
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                        viewModel.clearActivePoints()
+                                    },
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .background(Color.Black.copy(alpha = 0.55f), CircleShape)
+                                        .shadow(4.dp, CircleShape)
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.DeleteSweep,
+                                        contentDescription = "Clear",
+                                        tint = Color(0xFFFF8A80),
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
                             }
                         }
-                    } else {
-                        Spacer(modifier = Modifier.size(48.dp))
                     }
 
                     // Center: Dynamic Primary Circular Main Button with count badge
@@ -1618,12 +1323,22 @@ fun ModernArCameraView(
                             }
                         }
 
-                        if (capturedPoints.isNotEmpty()) {
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = capturedPoints.isNotEmpty(),
+                            enter = scaleIn(
+                                initialScale = 0.5f,
+                                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow)
+                            ) + fadeIn(animationSpec = tween(180)),
+                            exit = scaleOut(
+                                targetScale = 0.5f,
+                                animationSpec = tween(150)
+                            ) + fadeOut(animationSpec = tween(150)),
+                            modifier = Modifier.align(Alignment.TopEnd)
+                        ) {
                             Surface(
                                 color = MaterialTheme.colorScheme.tertiary,
                                 shape = CircleShape,
                                 modifier = Modifier
-                                    .align(Alignment.TopEnd)
                                     .size(22.dp)
                                     .shadow(3.dp, CircleShape)
                             ) {
@@ -1952,15 +1667,6 @@ fun ModernArCameraView(
                     Text("確定")
                 }
             }
-        )
-    }
-
-    // AI Core Tile Detail & Estimator Bottom Sheet
-    if (selectedTileForDetail != null) {
-        TileDetailBottomSheet(
-            tile = selectedTileForDetail!!,
-            viewModel = viewModel,
-            onDismiss = { viewModel.selectTileForDetail(null) }
         )
     }
 }
