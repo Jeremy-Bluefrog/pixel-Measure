@@ -1190,10 +1190,10 @@ fun ModernArCameraView(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = bottomPadding + 64.dp)
-                    .padding(horizontal = 24.dp, vertical = 8.dp),
+                    .padding(horizontal = 20.dp, vertical = 6.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Live Auto-Detected Dimension / Guidance Pill with Fluid Spring Transition
+                // 1. Live Auto-Detected Dimension / Guidance Pill with Fluid Spring Transition
                 AnimatedContent(
                     targetState = capturedPoints.isNotEmpty(),
                     transitionSpec = {
@@ -1215,14 +1215,13 @@ fun ModernArCameraView(
                         val height = viewModel.calculateVerticalHeight()
 
                         Surface(
-                            color = Color.Black.copy(alpha = 0.72f),
+                            color = Color.Black.copy(alpha = 0.78f),
                             shape = RoundedCornerShape(24.dp),
-                            modifier = Modifier
-                                .padding(bottom = 12.dp)
-                                .shadow(6.dp, RoundedCornerShape(24.dp))
+                            border = BorderStroke(1.dp, colorPrimary.copy(alpha = 0.4f)),
+                            modifier = Modifier.shadow(8.dp, RoundedCornerShape(24.dp))
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
+                                modifier = Modifier.padding(horizontal = 18.dp, vertical = 9.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
@@ -1252,12 +1251,13 @@ fun ModernArCameraView(
                     } else {
                         // Guidance Pill
                         Surface(
-                            color = Color.Black.copy(alpha = 0.55f),
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier.padding(bottom = 10.dp)
+                            color = Color.Black.copy(alpha = 0.65f),
+                            shape = RoundedCornerShape(18.dp),
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
+                            modifier = Modifier.shadow(4.dp, RoundedCornerShape(18.dp))
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
@@ -1273,14 +1273,18 @@ fun ModernArCameraView(
                     }
                 }
 
-                // Interactive Bottom Action Deck
+                Spacer(modifier = Modifier.height(18.dp))
+
+                // 2. Interactive Bottom Action Deck (Left, Center, Right Symmetrical Layout)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Left: Undo & Clear buttons with spring slide and scale
-                    Box(modifier = Modifier.width(108.dp), contentAlignment = Alignment.CenterStart) {
+                    // Left Slot (Balanced 1f weight): Undo & Clear buttons
+                    Box(
+                        modifier = Modifier.weight(1f),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
                         androidx.compose.animation.AnimatedVisibility(
                             visible = capturedPoints.isNotEmpty(),
                             enter = slideInHorizontally(
@@ -1305,15 +1309,15 @@ fun ModernArCameraView(
                                         viewModel.undo()
                                     },
                                     modifier = Modifier
-                                        .size(48.dp)
-                                        .background(Color.Black.copy(alpha = 0.55f), CircleShape)
+                                        .size(46.dp)
+                                        .background(Color.Black.copy(alpha = 0.60f), CircleShape)
                                         .shadow(4.dp, CircleShape)
                                 ) {
                                     Icon(
                                         Icons.Rounded.Undo,
                                         contentDescription = "Undo",
                                         tint = Color.White,
-                                        modifier = Modifier.size(22.dp)
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
 
@@ -1323,23 +1327,26 @@ fun ModernArCameraView(
                                         viewModel.clearActivePoints()
                                     },
                                     modifier = Modifier
-                                        .size(48.dp)
-                                        .background(Color.Black.copy(alpha = 0.55f), CircleShape)
+                                        .size(46.dp)
+                                        .background(Color.Black.copy(alpha = 0.60f), CircleShape)
                                         .shadow(4.dp, CircleShape)
                                 ) {
                                     Icon(
                                         Icons.Rounded.DeleteSweep,
                                         contentDescription = "Clear",
                                         tint = Color(0xFFFF8A80),
-                                        modifier = Modifier.size(22.dp)
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
                             }
                         }
                     }
 
-                    // Center: Dynamic Primary Circular Main Button with count badge
-                    Box(contentAlignment = Alignment.Center) {
+                    // Center Slot: Primary Circular Main Button with count badge
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.padding(horizontal = 8.dp)
+                    ) {
                         Surface(
                             color = colorPrimary,
                             shape = CircleShape,
@@ -1393,81 +1400,98 @@ fun ModernArCameraView(
                         }
                     }
 
-                    // Right: Save Result & Camera Shutter Button
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    // Right Slot (Balanced 1f weight): Save Result & Camera Shutter Button
+                    Box(
+                        modifier = Modifier.weight(1f),
+                        contentAlignment = Alignment.CenterEnd
                     ) {
-                        // Save Result Button
-                        Surface(
-                            color = colorPrimary,
-                            shape = RoundedCornerShape(24.dp),
-                            shadowElevation = 6.dp,
-                            modifier = Modifier
-                                .clickable {
-                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                    isShutterFlash = true
-                                    coroutineScope.launch {
-                                        kotlinx.coroutines.delay(100)
-                                        isShutterFlash = false
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // Save Result Button (Only shown when a valid measurement is completed)
+                            androidx.compose.animation.AnimatedVisibility(
+                                visible = capturedPoints.size >= 2,
+                                enter = scaleIn(
+                                    initialScale = 0.8f,
+                                    animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow)
+                                ) + fadeIn(animationSpec = tween(180)),
+                                exit = scaleOut(
+                                    targetScale = 0.8f,
+                                    animationSpec = tween(150)
+                                ) + fadeOut(animationSpec = tween(150))
+                            ) {
+                                Surface(
+                                    color = colorPrimary,
+                                    shape = RoundedCornerShape(24.dp),
+                                    shadowElevation = 6.dp,
+                                    modifier = Modifier
+                                        .clickable {
+                                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                            isShutterFlash = true
+                                            coroutineScope.launch {
+                                                kotlinx.coroutines.delay(100)
+                                                isShutterFlash = false
+                                            }
+                                            ShareUtility.captureAndSaveToGallery(localView) { uri ->
+                                                if (uri != null) {
+                                                    Toast.makeText(context, "已成功儲存至相簿", Toast.LENGTH_SHORT).show()
+                                                    viewModel.saveMeasurementRecord(imagePath = uri.toString())
+                                                } else {
+                                                    Toast.makeText(context, "儲存失敗，請重試", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        }
+                                        .testTag("save_result_button")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Rounded.SaveAlt,
+                                            contentDescription = "儲存結果",
+                                            tint = colorOnPrimary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = "儲存",
+                                            color = colorOnPrimary,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
                                     }
-                                    ShareUtility.captureAndSaveToGallery(localView) { uri ->
-                                        if (uri != null) {
-                                            Toast.makeText(context, "已成功儲存至相簿", Toast.LENGTH_SHORT).show()
-                                            viewModel.saveMeasurementRecord(imagePath = uri.toString())
-                                        } else {
-                                            Toast.makeText(context, "儲存失敗，請重試", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+
+                            // Camera Shutter Button
+                            Surface(
+                                color = Color.White.copy(alpha = 0.92f),
+                                shape = CircleShape,
+                                shadowElevation = 6.dp,
+                                modifier = Modifier
+                                    .size(46.dp)
+                                    .clickable {
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                        isShutterFlash = true
+                                        coroutineScope.launch {
+                                            kotlinx.coroutines.delay(100)
+                                            isShutterFlash = false
+                                        }
+                                        ShareUtility.captureViewSnapshot(localView) { path ->
+                                            viewModel.saveMeasurementRecord(imagePath = path)
                                         }
                                     }
-                                }
-                                .testTag("save_result_button")
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Icon(
-                                    Icons.Rounded.SaveAlt,
-                                    contentDescription = "儲存結果",
-                                    tint = colorOnPrimary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Text(
-                                    text = "儲存結果",
-                                    color = colorOnPrimary,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-
-                        // Camera Shutter Button
-                        Surface(
-                            color = Color.White.copy(alpha = 0.9f),
-                            shape = CircleShape,
-                            shadowElevation = 6.dp,
-                            modifier = Modifier
-                                .size(48.dp)
-                                .clickable {
-                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                    isShutterFlash = true
-                                    coroutineScope.launch {
-                                        kotlinx.coroutines.delay(100)
-                                        isShutterFlash = false
-                                    }
-                                    ShareUtility.captureViewSnapshot(localView) { path ->
-                                        viewModel.saveMeasurementRecord(imagePath = path)
-                                    }
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        Icons.Rounded.PhotoCamera,
+                                        contentDescription = "Take Photo Snapshot",
+                                        tint = Color(0xFF1E293B),
+                                        modifier = Modifier.size(22.dp)
+                                    )
                                 }
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    Icons.Rounded.PhotoCamera,
-                                    contentDescription = "Take Photo Snapshot",
-                                    tint = Color(0xFF1E293B),
-                                    modifier = Modifier.size(24.dp)
-                                )
                             }
                         }
                     }
