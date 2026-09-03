@@ -70,6 +70,9 @@ class ModernArEngine(private val context: Context) {
     var isDepthModeActive: Boolean = false
         private set
 
+    var isTorchActive: Boolean = false
+        private set
+
     private var frameCounter = 0
     private var cachedPlanes: List<DetectedPlaneInfo> = emptyList()
 
@@ -189,6 +192,16 @@ class ModernArEngine(private val context: Context) {
                     isDepthModeActive = false
                     Log.w("ModernArEngine", "Depth mode check unavailable: ${e.message}")
                 }
+
+                // Apply initial FlashMode if requested
+                if (isTorchActive) {
+                    try {
+                        flashMode = Config.FlashMode.TORCH
+                        Log.i("ModernArEngine", "FlashMode.TORCH configured on session init.")
+                    } catch (e: Throwable) {
+                        Log.w("ModernArEngine", "Initial FlashMode TORCH unavailable: ${e.message}")
+                    }
+                }
             }
 
             sessionInstance.configure(config)
@@ -203,7 +216,25 @@ class ModernArEngine(private val context: Context) {
         }
     }
 
+    fun setTorchMode(enabled: Boolean): Boolean {
+        isTorchActive = enabled
+        val currentSession = session ?: return false
+        return try {
+            val config = currentSession.config
+            config.flashMode = if (enabled) Config.FlashMode.TORCH else Config.FlashMode.OFF
+            currentSession.configure(config)
+            Log.i("ModernArEngine", "ARCore FlashMode configured: ${config.flashMode}")
+            true
+        } catch (e: Throwable) {
+            Log.w("ModernArEngine", "Failed to set ARCore flashMode: ${e.message}")
+            false
+        }
+    }
+
     fun pause() {
+        if (isTorchActive) {
+            setTorchMode(false)
+        }
         session?.pause()
     }
 
@@ -220,12 +251,16 @@ class ModernArEngine(private val context: Context) {
     }
 
     fun destroy() {
+        if (isTorchActive) {
+            setTorchMode(false)
+        }
         try {
             session?.close()
         } catch (e: Exception) {
             Log.e("ModernArEngine", "Error closing ARCore session", e)
         }
         session = null
+        isTorchActive = false
     }
 
     /**

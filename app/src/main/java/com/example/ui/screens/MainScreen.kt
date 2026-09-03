@@ -48,6 +48,7 @@ fun MainScreen(viewModel: MeasureViewModel) {
     val selectedUnit by viewModel.selectedUnit.collectAsState()
     val savedRecords by viewModel.savedRecords.collectAsState()
     val currentLang by viewModel.currentLanguage.collectAsState()
+    val isTorchOn by viewModel.isTorchOn.collectAsState()
 
     var showHistorySheet by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
@@ -145,6 +146,18 @@ fun MainScreen(viewModel: MeasureViewModel) {
                                         )
                                     }
                                 }
+                            }
+
+                            // Flashlight button
+                            IconButton(
+                                onClick = { viewModel.toggleTorch(context) },
+                                modifier = Modifier.testTag("ruler_flashlight_button")
+                            ) {
+                                Icon(
+                                    if (isTorchOn) Icons.Rounded.FlashlightOn else Icons.Rounded.FlashlightOff,
+                                    contentDescription = "手電筒",
+                                    tint = if (isTorchOn) Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurface
+                                )
                             }
 
                             // History sheet button

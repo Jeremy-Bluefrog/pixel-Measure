@@ -53,6 +53,10 @@ fun SettingsSheet(
     val jerkRejectionEnabled by viewModel.jerkRejectionEnabled.collectAsState()
     val proximityContactEnabled by viewModel.proximityContactEnabled.collectAsState()
     val stereoParallaxEnabled by viewModel.stereoParallaxEnabled.collectAsState()
+    val multiSampleAveragingEnabled by viewModel.multiSampleAveragingEnabled.collectAsState()
+    val coplanarProjectionEnabled by viewModel.coplanarProjectionEnabled.collectAsState()
+    val orthogonalSnapEnabled by viewModel.orthogonalSnapEnabled.collectAsState()
+    val scaleCalibrationFactor by viewModel.scaleCalibrationFactor.collectAsState()
     val sensorTelemetry by viewModel.sensorTelemetry.collectAsState()
 
     val context = LocalContext.current
@@ -320,6 +324,21 @@ fun SettingsSheet(
                                         onCheckedChange = { viewModel.setAntiJitterEnabled(it) }
                                     )
                                     SettingsSubSwitchRow(
+                                        title = "多採樣聚束濾波 (Multi-Sample Averaging)",
+                                        checked = multiSampleAveragingEnabled,
+                                        onCheckedChange = { viewModel.setMultiSampleAveragingEnabled(it) }
+                                    )
+                                    SettingsSubSwitchRow(
+                                        title = "同平面幾何投影約束 (Coplanar Projection)",
+                                        checked = coplanarProjectionEnabled,
+                                        onCheckedChange = { viewModel.setCoplanarProjectionEnabled(it) }
+                                    )
+                                    SettingsSubSwitchRow(
+                                        title = "智慧直角與邊界吸附 (Orthogonal Snapping)",
+                                        checked = orthogonalSnapEnabled,
+                                        onCheckedChange = { viewModel.setOrthogonalSnapEnabled(it) }
+                                    )
+                                    SettingsSubSwitchRow(
                                         title = "重力向量垂直 / 水平姿態校正",
                                         checked = gravityAlignmentEnabled,
                                         onCheckedChange = { viewModel.setGravityAlignmentEnabled(it) }
@@ -344,6 +363,47 @@ fun SettingsSheet(
                                         checked = jerkRejectionEnabled,
                                         onCheckedChange = { viewModel.setJerkRejectionEnabled(it) }
                                     )
+
+                                    HorizontalDivider(
+                                        modifier = Modifier.padding(vertical = 4.dp),
+                                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                                    )
+
+                                    // Scale Calibration Adjustment
+                                    Column(modifier = Modifier.fillMaxWidth()) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "物理尺度校正比例",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            Text(
+                                                text = "${"%.4f".format(scaleCalibrationFactor)}x",
+                                                style = MaterialTheme.typography.labelLarge,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                        Slider(
+                                            value = scaleCalibrationFactor,
+                                            onValueChange = { viewModel.setScaleCalibrationFactor(it) },
+                                            valueRange = 0.9500f..1.0500f,
+                                            steps = 100,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text("縮小 (-5%)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                                            Text("標準 (1.0000x)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline, modifier = Modifier.clickable { viewModel.setScaleCalibrationFactor(1.0000f) })
+                                            Text("放大 (+5%)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+                                        }
+                                    }
                                 }
                             }
 

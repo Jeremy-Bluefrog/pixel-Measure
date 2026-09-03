@@ -3,7 +3,9 @@ package com.example.ui.viewmodel
 import android.app.Application
 import android.content.Context
 import android.content.SharedPreferences
+import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.util.Log
 import androidx.compose.runtime.mutableStateListOf
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -205,6 +207,10 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     val jerkRejectionEnabled = MutableStateFlow(prefs.getBoolean("sensor_jerk_rejection_enabled", true))
     val proximityContactEnabled = MutableStateFlow(prefs.getBoolean("sensor_proximity_enabled", true))
     val stereoParallaxEnabled = MutableStateFlow(prefs.getBoolean("sensor_stereo_enabled", true))
+    val multiSampleAveragingEnabled = MutableStateFlow(prefs.getBoolean("sensor_multisample_enabled", true))
+    val coplanarProjectionEnabled = MutableStateFlow(prefs.getBoolean("sensor_coplanar_enabled", true))
+    val orthogonalSnapEnabled = MutableStateFlow(prefs.getBoolean("sensor_ortho_snap_enabled", true))
+    val scaleCalibrationFactor = MutableStateFlow(prefs.getFloat("scale_calibration_factor", 1.0000f))
 
     val highFpsModeEnabled = MutableStateFlow(prefs.getBoolean("high_fps_mode_enabled", true))
 
@@ -255,6 +261,32 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         stereoParallaxEnabled.value = enabled
         sensorCorrectionEngine.isStereoParallaxScaleEnabled = enabled
         prefs.edit().putBoolean("sensor_stereo_enabled", enabled).apply()
+    }
+
+    fun setMultiSampleAveragingEnabled(enabled: Boolean) {
+        multiSampleAveragingEnabled.value = enabled
+        sensorCorrectionEngine.isMultiSampleAveragingEnabled = enabled
+        prefs.edit().putBoolean("sensor_multisample_enabled", enabled).apply()
+    }
+
+    fun setCoplanarProjectionEnabled(enabled: Boolean) {
+        coplanarProjectionEnabled.value = enabled
+        sensorCorrectionEngine.isCoplanarProjectionEnabled = enabled
+        prefs.edit().putBoolean("sensor_coplanar_enabled", enabled).apply()
+    }
+
+    fun setOrthogonalSnapEnabled(enabled: Boolean) {
+        orthogonalSnapEnabled.value = enabled
+        sensorCorrectionEngine.isOrthogonalSnapEnabled = enabled
+        prefs.edit().putBoolean("sensor_ortho_snap_enabled", enabled).apply()
+    }
+
+    fun setScaleCalibrationFactor(factor: Float) {
+        val clamped = factor.coerceIn(0.9000f, 1.1000f)
+        scaleCalibrationFactor.value = clamped
+        sensorCorrectionEngine.userScaleCalibrationFactor = clamped
+        prefs.edit().putFloat("scale_calibration_factor", clamped).apply()
+        _toastMessage.tryEmit("尺度校正係數已設定為：${"%.4f".format(clamped)}x")
     }
 
     fun calibrateSensors() {
@@ -441,21 +473,28 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
             // 0. Proximity Zero-Contact Offset (if touching surface directly)
             val contactPoint = sensorCorrectionEngine.applyProximityZeroContactOffset(rawPoint)
 
-            // 1. Apply Multi-Sensor Fusion Anti-Tremor & Jitter Filter (Gyroscope + Accelerometer)
+            // 1. Plane Coplanar Projection (for 2D Area & Polygon measuring on flat surfaces)
+            val planeProjectedPoint = if (_cameraSubMode.value == 1 || centerHit.hitType == com.example.logic.ar.HitType.PLANE_POLYGON) {
+                sensorCorrectionEngine.projectPointToPlane(contactPoint, centerHit.pose)
+            } else {
+                contactPoint
+            }
+
+            // 2. Apply 3D Adaptive Kalman Filter & Multi-Sample Burst Averaging
             val sensorCorrectedPoint = sensorCorrectionEngine.correctPointWithSensorFusion(
-                rawPoint = contactPoint,
+                rawPoint = planeProjectedPoint,
                 previousPoint = _liveTargetPoint.value
             )
             val smoothedPoint = ArMath.filterJitterEMA(_liveTargetPoint.value, sensorCorrectedPoint)
 
-            // 2. Gravity-aligned orthogonal leveling if measuring line/distance
-            val orthogonalAdjustedPoint = if (capturedPoints.isNotEmpty() && _cameraSubMode.value == 0) {
+            // 3. Gravity-aligned orthogonal leveling & 45/90-deg snapping
+            val orthogonalAdjustedPoint = if (capturedPoints.isNotEmpty() && (_cameraSubMode.value == 0 || _cameraSubMode.value == 1)) {
                 sensorCorrectionEngine.correctOrthogonalAlignment(capturedPoints.last(), smoothedPoint)
             } else {
                 smoothedPoint
             }
 
-            // 3. Magnetic Vertex Snapping check
+            // 4. Magnetic Vertex Snapping check
             val snappedVertex = ArMath.findVertexSnap(orthogonalAdjustedPoint, capturedPoints, 0.07)
             val finalTargetPoint: Point3D
 
@@ -472,7 +511,7 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
 
             _liveTargetPoint.value = finalTargetPoint
 
-            // 4. Calculate live real-time distance with stability & Dual-Camera Stereo Parallax scale calibration
+            // 5. Calculate live real-time distance with stability & Dual-Camera Stereo Parallax scale calibration
             if (capturedPoints.isNotEmpty()) {
                 val lastPoint = capturedPoints.last()
                 val dist = if (_cameraSubMode.value == 2) {
@@ -488,7 +527,7 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
             }
         }
 
-        // 5. If a tap was requested, commit the point with sensor correction
+        // 6. If a tap was requested, commit the point with sensor correction
         if (tapRequest != null && hitResult != null) {
             val pose = hitResult.pose
             val rawP = Point3D(
@@ -499,13 +538,18 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
                 anchor = hitResult.anchor
             )
             val contactP = sensorCorrectionEngine.applyProximityZeroContactOffset(rawP)
-            val livePt = _liveTargetPoint.value
-            val baseP = if (livePt != null && ArMath.distance(livePt, contactP) < 0.08) {
-                livePt.copy(anchor = hitResult.anchor ?: livePt.anchor)
+            val planarP = if (_cameraSubMode.value == 1 || hitResult.hitType == com.example.logic.ar.HitType.PLANE_POLYGON) {
+                sensorCorrectionEngine.projectPointToPlane(contactP, hitResult.pose)
             } else {
                 contactP
             }
-            val correctedP = if (capturedPoints.isNotEmpty() && _cameraSubMode.value == 0) {
+            val livePt = _liveTargetPoint.value
+            val baseP = if (livePt != null && ArMath.distance(livePt, planarP) < 0.08) {
+                livePt.copy(anchor = hitResult.anchor ?: livePt.anchor)
+            } else {
+                planarP
+            }
+            val correctedP = if (capturedPoints.isNotEmpty() && (_cameraSubMode.value == 0 || _cameraSubMode.value == 1)) {
                 sensorCorrectionEngine.correctOrthogonalAlignment(capturedPoints.last(), baseP)
             } else {
                 baseP
@@ -721,17 +765,96 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    // Toggle Torch
+    // Active CameraX camera control reference (when in CameraX mode)
+    private var cameraControl: androidx.camera.core.CameraControl? = null
+
+    fun setCameraControl(control: androidx.camera.core.CameraControl?) {
+        cameraControl = control
+        if (_isTorchOn.value && control != null) {
+            try {
+                control.enableTorch(true)
+            } catch (e: Exception) {
+                Log.w("MeasureViewModel", "Failed to sync torch state with CameraControl: ${e.message}")
+            }
+        }
+    }
+
+    // Toggle Torch (Flashlight) with multi-engine support (ARCore, CameraX, CameraManager)
     fun toggleTorch(context: Context) {
-        try {
-            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-            val cameraId = cameraManager.cameraIdList.firstOrNull() ?: return
-            val newState = !_isTorchOn.value
-            cameraManager.setTorchMode(cameraId, newState)
+        val newState = !_isTorchOn.value
+        var success = false
+
+        // 1. If ARCore session is running, configure flashMode via ARCore
+        if (modernArEngine.session != null) {
+            val arOk = modernArEngine.setTorchMode(newState)
+            if (arOk) {
+                success = true
+            }
+        }
+
+        // 2. If CameraX is active and controlling the camera
+        if (!success && cameraControl != null) {
+            try {
+                cameraControl?.enableTorch(newState)
+                success = true
+            } catch (e: Exception) {
+                Log.w("MeasureViewModel", "CameraX enableTorch failed: ${e.message}")
+            }
+        }
+
+        // 3. Fallback: CameraManager (hardware flash when camera isn't locked by active camera session, or screen ruler mode)
+        if (!success) {
+            try {
+                val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                // Find camera with flash unit (prefer rear camera)
+                val targetCameraId = cameraManager.cameraIdList.firstOrNull { id ->
+                    val chars = cameraManager.getCameraCharacteristics(id)
+                    val hasFlash = chars.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                    val isBack = chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+                    hasFlash && isBack
+                } ?: cameraManager.cameraIdList.firstOrNull { id ->
+                    cameraManager.getCameraCharacteristics(id).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                }
+
+                if (targetCameraId != null) {
+                    cameraManager.setTorchMode(targetCameraId, newState)
+                    success = true
+                }
+            } catch (e: Exception) {
+                Log.w("MeasureViewModel", "CameraManager setTorchMode error: ${e.message}")
+            }
+        }
+
+        if (success) {
             _isTorchOn.value = newState
             triggerHapticFeedback()
-        } catch (e: Exception) {
-            _isTorchOn.value = false
+            _toastMessage.tryEmit(if (newState) "已開啟手電筒補光" else "已關閉手電筒")
+        } else {
+            // Also notify modernArEngine state in case it is requested ahead of session
+            modernArEngine.setTorchMode(newState)
+            _isTorchOn.value = newState
+            triggerHapticFeedback()
+            _toastMessage.tryEmit(if (newState) "已開啟手電筒" else "已關閉手電筒")
+        }
+    }
+
+    fun turnOffTorch(context: Context? = null) {
+        if (!_isTorchOn.value) return
+        _isTorchOn.value = false
+        modernArEngine.setTorchMode(false)
+        try {
+            cameraControl?.enableTorch(false)
+        } catch (e: Exception) {}
+        if (context != null) {
+            try {
+                val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                val targetCameraId = cameraManager.cameraIdList.firstOrNull { id ->
+                    cameraManager.getCameraCharacteristics(id).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                }
+                if (targetCameraId != null) {
+                    cameraManager.setTorchMode(targetCameraId, false)
+                }
+            } catch (e: Exception) {}
         }
     }
 
@@ -1032,12 +1155,14 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun onPause() {
+        turnOffTorch(getApplication())
         modernArEngine.pause()
         sensorCorrectionEngine.stopListening()
     }
 
     override fun onCleared() {
         super.onCleared()
+        turnOffTorch(getApplication())
         modernArEngine.destroy()
         sensorCorrectionEngine.stopListening()
     }

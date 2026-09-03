@@ -132,15 +132,6 @@ fun ModernArCameraView(
         ),
         label = "reticlePulse"
     )
-    val planeLockedParticleAnim by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1400, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "planeLockedParticle"
-    )
     val dashPhase by infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 40f,
@@ -150,14 +141,14 @@ fun ModernArCameraView(
         ),
         label = "dashPhase"
     )
-    val reticleRotationDeg by infiniteTransition.animateFloat(
+    val planeLockedParticleAnim by infiniteTransition.animateFloat(
         initialValue = 0f,
-        targetValue = 360f,
+        targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(10000, easing = LinearEasing),
+            animation = tween(1800, easing = LinearEasing),
             repeatMode = RepeatMode.Restart
         ),
-        label = "reticleRotationDeg"
+        label = "planeLockedParticle"
     )
 
     // Redesigned Reactive Spring Animations for Target Snapping & Lock (Ultra-Smooth & Responsive)
@@ -348,7 +339,7 @@ fun ModernArCameraView(
                                     androidx.camera.core.CameraSelector.DEFAULT_FRONT_CAMERA
                                 }
                                 cameraProvider.unbindAll()
-                                try {
+                                val camera = try {
                                     cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview)
                                 } catch (bindEx: Exception) {
                                     android.util.Log.w("CameraXFallback", "High FPS binding fallback to standard: ${bindEx.message}")
@@ -358,11 +349,15 @@ fun ModernArCameraView(
                                     cameraProvider.unbindAll()
                                     cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, standardPreview)
                                 }
+                                viewModel.setCameraControl(camera.cameraControl)
                             } catch (e: Exception) {
                                 android.util.Log.e("CameraXFallback", "Camera binding failed: ${e.message}")
                             }
                         }, androidx.core.content.ContextCompat.getMainExecutor(ctx))
                         previewView
+                    },
+                    onRelease = {
+                        viewModel.setCameraControl(null)
                     },
                     modifier = Modifier
                         .fillMaxSize()
@@ -827,6 +822,20 @@ fun ModernArCameraView(
                         )
                     )
 
+                    // 3.1 Multi-Sample Burst Averaging Dynamic Progress Arc (Precision Lock)
+                    if (sensorTelemetry.multiSampleProgress > 0f) {
+                        val arcRadius = currentRadius + 5.dp.toPx()
+                        drawArc(
+                            color = if (sensorTelemetry.isMultiSampleLocked) Color(0xFF00E676) else Color(0xFF00E5FF),
+                            startAngle = -90f,
+                            sweepAngle = sensorTelemetry.multiSampleProgress * 360f,
+                            useCenter = false,
+                            topLeft = Offset(center.x - arcRadius, center.y - arcRadius),
+                            size = androidx.compose.ui.geometry.Size(arcRadius * 2f, arcRadius * 2f),
+                            style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
+                        )
+                    }
+
                     // 4. Precision Crosshair Hairlines (Top, Bottom, Left, Right Ticks)
                     val crossHairOffsetInner = currentRadius + 3.dp.toPx()
                     val crossHairLen = if (isSnapped) 10.dp.toPx() else 6.dp.toPx()
@@ -889,11 +898,11 @@ fun ModernArCameraView(
                         for (i in 0 until particleCount) {
                             val angle = (i * (360f / particleCount)) + (planeLockedParticleAnim * 360f)
                             val rad = Math.toRadians(angle.toDouble())
-                            val orbitRadius = (18.dp.toPx()) + (kotlin.math.sin(planeLockedParticleAnim * 6.28318f + i).toFloat() * 3.dp.toPx())
+                            val orbitRadius = (18.dp.toPx()) + (kotlin.math.sin(planeLockedParticleAnim * 6.28318f + i).toFloat() * 2.5.dp.toPx())
                             val px = center.x + (kotlin.math.cos(rad).toFloat() * orbitRadius)
                             val py = center.y + (kotlin.math.sin(rad).toFloat() * orbitRadius)
                             val sineVal = kotlin.math.sin(planeLockedParticleAnim * 6.28318f + i)
-                            val pAlpha = ((sineVal + 1f) / 2f).coerceIn(0.2f, 0.9f)
+                            val pAlpha = ((sineVal + 1f) / 2f).coerceIn(0.25f, 0.9f)
 
                             drawCircle(
                                 color = Color(0xFF00E5FF).copy(alpha = pAlpha),
@@ -1017,16 +1026,45 @@ fun ModernArCameraView(
                                 ) {
                                     if (trackingState == TrackingState.TRACKING) {
                                         Surface(
-                                            color = colorPrimary,
+                                            color = if (sensorTelemetry.isMultiSampleLocked) Color(0xFF00E676) else colorPrimary,
                                             shape = CircleShape,
                                             modifier = Modifier.size(8.dp)
                                         ) {}
                                         Text(
-                                            text = "已就緒",
+                                            text = if (sensorTelemetry.isMultiSampleLocked) "超精準鎖定" else "已就緒",
                                             style = MaterialTheme.typography.labelMedium,
                                             fontWeight = FontWeight.SemiBold,
                                             color = Color.White
                                         )
+                                        // Precision uncertainty pill
+                                        Surface(
+                                            color = (if (sensorTelemetry.isMultiSampleLocked) Color(0xFF00E676) else Color(0xFF00E5FF)).copy(alpha = 0.22f),
+                                            shape = RoundedCornerShape(6.dp),
+                                            border = BorderStroke(1.dp, (if (sensorTelemetry.isMultiSampleLocked) Color(0xFF00E676) else Color(0xFF00E5FF)).copy(alpha = 0.5f))
+                                        ) {
+                                            Text(
+                                                text = "±${"%.1f".format(sensorTelemetry.estimatedErrorMm)}mm",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (sensorTelemetry.isMultiSampleLocked) Color(0xFF00E676) else Color(0xFF00E5FF),
+                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                            )
+                                        }
+                                        if (sensorTelemetry.isOrthogonalSnapped) {
+                                            Surface(
+                                                color = Color(0xFFFFD54F).copy(alpha = 0.25f),
+                                                shape = RoundedCornerShape(6.dp),
+                                                border = BorderStroke(1.dp, Color(0xFFFFD54F).copy(alpha = 0.6f))
+                                            ) {
+                                                Text(
+                                                    text = "📐直角",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = Color(0xFFFFD54F),
+                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                )
+                                            }
+                                        }
                                         if (highFpsModeEnabled) {
                                             Surface(
                                                 color = colorPrimary.copy(alpha = 0.25f),
@@ -1071,15 +1109,16 @@ fun ModernArCameraView(
                         modifier = Modifier
                             .size(40.dp)
                             .background(
-                                if (isTorchOn) colorPrimary else Color.Black.copy(alpha = 0.55f),
+                                if (isTorchOn) Color(0xFFFFD54F) else Color.Black.copy(alpha = 0.55f),
                                 CircleShape
                             )
-                            .shadow(4.dp, CircleShape)
+                            .shadow(if (isTorchOn) 8.dp else 4.dp, CircleShape)
+                            .testTag("flashlight_toggle_button")
                     ) {
                         Icon(
                             if (isTorchOn) Icons.Rounded.FlashlightOn else Icons.Rounded.FlashlightOff,
                             contentDescription = "Flashlight",
-                            tint = if (isTorchOn) colorOnPrimary else Color.White,
+                            tint = if (isTorchOn) Color(0xFF212121) else Color.White,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -1510,7 +1549,7 @@ fun ModernArCameraView(
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Surface(
-                                    color = colorPrimary,
+                                    color = if (antiJitter) colorPrimary else Color.Gray,
                                     shape = CircleShape,
                                     modifier = Modifier.size(8.dp)
                                 ) {}
@@ -1522,6 +1561,25 @@ fun ModernArCameraView(
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
+                        // Anti-Jitter toggle
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { viewModel.setAntiJitterEnabled(!antiJitter) },
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "陀螺儀防手震濾波 (Anti-Jitter)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Switch(
+                                checked = antiJitter,
+                                onCheckedChange = { viewModel.setAntiJitterEnabled(it) }
                             )
                         }
 
