@@ -1,4 +1,4 @@
-# 相機 AR 測量儀 (Pixel Measure) 📐✨
+# 相機 AR 測量儀 (Pixel Measure) 
 
 [![Platform](https://img.shields.io/badge/Platform-Android-green.svg)](https://developer.android.com)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0+-purple.svg)](https://kotlinlang.org)
@@ -65,44 +65,6 @@ app/src/main/java/com/example/
 │   └── db/                # Room 本地持久化資料庫 (MeasureHistoryDao.kt, AppDatabase.kt)
 └── MainActivity.kt        # 應用程式入口與權限請求管理
 ```
-
----
-
-## 📥 APK 下載與安裝
-
-本專案編譯完成的 Android 安裝包存放於 [`build-outputs/`](./build-outputs/) 資料夾：
-
-- **檔案位置**：[`build-outputs/app-debug.apk`](./build-outputs/app-debug.apk)
-- **安裝步驟**：
-  1. 將 `app-debug.apk` 下載並傳送至 Android 手機。
-  2. 在手機上點選檔案進行安裝（若系統提示未知來源，請點選「允許從此來源安裝」或「仍要安裝」）。
-  3. 開啟 App 並授予相機權限，即可開始 60Hz 空間測量！
-
----
-
-## 💻 本地開發與編譯指南
-
-### 環境需求
-- **Android Studio** Ladybug (2024.2+) 或更高版本
-- **JDK** 17 或 21
-- **Android SDK** API 35 (最低支援 Android 8.0 / API 26)
-
-### 建置步驟
-1. 複製專案：
-   ```bash
-   git clone https://github.com/jeremy1030623-boop/pixel-Measure.git
-   cd pixel-Measure
-   ```
-2. 設定環境變數（可選，用於 Gemini AI 磁磚多模態辨識）：
-   ```bash
-   cp .env.example .env
-   # 在 .env 中填入 GEMINI_API_KEY=您的API金鑰
-   ```
-3. 編譯並安裝至裝置：
-   ```bash
-   ./gradlew assembleDebug
-   adb install -r app/build/outputs/apk/debug/app-debug.apk
-   ```
 
 ---
 
