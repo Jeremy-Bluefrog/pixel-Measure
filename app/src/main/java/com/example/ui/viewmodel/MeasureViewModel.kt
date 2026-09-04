@@ -13,6 +13,10 @@ import com.example.data.db.MeasureDatabase
 import com.example.data.model.MeasureRecord
 import com.example.data.repository.MeasureRepository
 import com.example.logic.TranslationManager
+import com.example.logic.ai.ObjectronEngine
+import com.example.logic.ai.Objectron3DBox
+import com.example.logic.ai.MobileSamEngine
+import com.example.logic.ai.SegmentedObject
 import com.example.logic.ai.AiTileDetector
 import com.example.logic.ai.AiTilePreset
 import com.example.logic.ai.DetectedTile
@@ -412,6 +416,105 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    // AI 3D Bounding Box (MediaPipe Objectron) Estimation State
+    private val _objectron3DBox = MutableStateFlow<Objectron3DBox?>(null)
+    val objectron3DBox: StateFlow<Objectron3DBox?> = _objectron3DBox.asStateFlow()
+
+    private val _isObjectronMode = MutableStateFlow(false)
+    val isObjectronMode: StateFlow<Boolean> = _isObjectronMode.asStateFlow()
+
+    fun toggleObjectronMode() {
+        val nextState = !_isObjectronMode.value
+        _isObjectronMode.value = nextState
+        triggerHapticFeedback()
+        if (nextState) {
+            updateObjectron3DBox()
+            _toastMessage.tryEmit("已啟用 MediaPipe Objectron 3D AI 立體方框輔助")
+        } else {
+            _objectron3DBox.value = null
+            _toastMessage.tryEmit("已退出 Objectron 3D 模式")
+        }
+    }
+
+    fun updateObjectron3DBox() {
+        if (capturedPoints.isEmpty()) {
+            val liveTarget = _liveTargetPoint.value
+            if (liveTarget != null) {
+                // Generate instant 3D bounding box around live target
+                _objectron3DBox.value = ObjectronEngine.estimateBoxFromPlane(
+                    centerPoint = liveTarget,
+                    widthMeters = 0.30,
+                    heightMeters = 0.20,
+                    depthMeters = 0.25,
+                    category = "Object"
+                )
+            } else {
+                _objectron3DBox.value = null
+            }
+        } else {
+            _objectron3DBox.value = ObjectronEngine.fitBoxFromPoints(capturedPoints)
+        }
+    }
+
+    fun applyObjectronBoxCorners() {
+        val box = _objectron3DBox.value ?: return
+        saveUndoState()
+        capturedPoints.clear()
+        capturedPoints.addAll(box.corners)
+        _autoDetectedType.value = "AREA"
+        triggerHapticFeedback()
+        val volLiters = Math.round(box.volumeM3 * 1000.0)
+        _toastMessage.tryEmit("✨ 已鎖定 Objectron 3D 空間錨點（體積: ${volLiters} L）")
+    }
+
+    // MobileSAM / FastSAM On-Device Segmentation State
+    private val _isMobileSamMode = MutableStateFlow(false)
+    val isMobileSamMode: StateFlow<Boolean> = _isMobileSamMode.asStateFlow()
+
+    private val _segmentedObject = MutableStateFlow<SegmentedObject?>(null)
+    val segmentedObject: StateFlow<SegmentedObject?> = _segmentedObject.asStateFlow()
+
+    fun toggleMobileSamMode() {
+        val nextState = !_isMobileSamMode.value
+        _isMobileSamMode.value = nextState
+        triggerHapticFeedback()
+        if (nextState) {
+            _toastMessage.tryEmit("已啟用 MobileSAM 智慧一鍵物件邊緣分割")
+        } else {
+            _segmentedObject.value = null
+            _toastMessage.tryEmit("已退出 MobileSAM 模式")
+        }
+    }
+
+    fun triggerSamSegmentationAtTap(
+        screenTap: androidx.compose.ui.geometry.Offset,
+        screenW: Float,
+        screenH: Float
+    ) {
+        val refPoint = _liveTargetPoint.value ?: capturedPoints.lastOrNull()
+        val segResult = MobileSamEngine.segmentAtPoint(
+            screenTap = screenTap,
+            screenWidth = screenW,
+            screenHeight = screenH,
+            reference3DPoint = refPoint,
+            viewMatrix = _viewMatrix.value,
+            projectionMatrix = _projectionMatrix.value
+        )
+        _segmentedObject.value = segResult
+        triggerHapticFeedback()
+        _toastMessage.tryEmit("✨ 已分割 ${segResult.label}（面積: ${"%.2f".format(segResult.areaM2)} m²）")
+    }
+
+    fun applySegmentedObjectCorners() {
+        val seg = _segmentedObject.value ?: return
+        saveUndoState()
+        capturedPoints.clear()
+        capturedPoints.addAll(seg.corners3D)
+        _autoDetectedType.value = "AREA"
+        triggerHapticFeedback()
+        _toastMessage.tryEmit("🎯 已鎖定 ${seg.label} 邊緣多邊形測量")
+    }
+
     fun measureTileUnderReticle() {
         val preset = _activeTilePreset.value
         val detected = _detectedTiles.value.firstOrNull() ?: DetectedTile(
@@ -560,6 +663,9 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
                 capturedPoints.add(correctedP)
                 triggerHapticFeedback()
                 updateAutoDetectedGeometry()
+                if (_isObjectronMode.value) {
+                    updateObjectron3DBox()
+                }
             }
         }
         return centerHit
@@ -756,6 +862,9 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         capturedPoints.clear()
         _liveDistanceMeters.value = null
         _autoDetectedType.value = "DISTANCE"
+        if (_isObjectronMode.value) {
+            updateObjectron3DBox()
+        }
         triggerHapticFeedback()
     }
 

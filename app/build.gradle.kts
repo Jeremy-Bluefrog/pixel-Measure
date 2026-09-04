@@ -1,5 +1,3 @@
-import java.net.URL
-
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.kotlin.android)
@@ -143,58 +141,6 @@ tasks.register<Copy>("copyApkToBuildOutputs") {
     from(layout.buildDirectory.file("outputs/apk/debug/app-debug.apk"))
     into(rootProject.file("build-outputs"))
 }
-
-tasks.register("downloadFonts") {
-    doLast {
-        val fontDir = file("src/main/res/font")
-        if (!fontDir.exists()) {
-            fontDir.mkdirs()
-        }
-        val fonts = mapOf(
-            "google_sans_rounded_regular.ttf" to listOf("GoogleSansRounded-Regular.ttf", "GoogleSans-Rounded-Regular.ttf"),
-            "google_sans_rounded_medium.ttf" to listOf("GoogleSansRounded-Medium.ttf", "GoogleSans-Rounded-Medium.ttf"),
-            "google_sans_rounded_bold.ttf" to listOf("GoogleSansRounded-Bold.ttf", "GoogleSans-Rounded-Bold.ttf")
-        )
-        fonts.forEach { (localName, remoteNameVariants) ->
-            val destFile = file("src/main/res/font/$localName")
-            if (!destFile.exists()) {
-                var downloaded = false
-                val branches = listOf("main", "master")
-                for (branch in branches) {
-                    for (remoteName in remoteNameVariants) {
-                        try {
-                            val urlString = "https://raw.githubusercontent.com/tiwa244/Google-Sans-Rounded/$branch/$remoteName"
-                            println("Trying to download from: $urlString")
-                            val url = URL(urlString)
-                            val input = url.openStream()
-                            val output = destFile.outputStream()
-                            try {
-                                input.copyTo(output)
-                            } finally {
-                                input.close()
-                                output.close()
-                            }
-                            println("Successfully downloaded $localName as $remoteName from branch $branch")
-                            downloaded = true
-                            break
-                        } catch (e: Exception) {
-                            println("Skipping variant/branch ($remoteName on $branch): ${e.message}")
-                        }
-                    }
-                    if (downloaded) break
-                }
-                if (!downloaded) {
-                    println("WARNING: Could not download font $localName from any source. Creating placeholder empty file.")
-                    destFile.writeText("") // Create placeholder so build doesn't fail on missing resource during build setups
-                }
-            }
-        }
-    }
-}
-
-// tasks.matching { it.name.startsWith("preBuild") }.all {
-//     dependsOn("downloadFonts")
-// }
 
 tasks.matching { it.name == "assembleDebug" }.all {
     finalizedBy("copyApkToBuildOutputs")

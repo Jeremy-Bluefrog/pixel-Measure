@@ -1,6 +1,5 @@
 package com.example.ui.screens
 
-import android.os.Build
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -10,8 +9,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -27,17 +24,14 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.data.model.MeasureRecord
 import com.example.logic.ShareUtility
-import com.example.logic.TranslationManager
 import com.example.ui.components.FloatingPillNavigationBar
 import com.example.ui.components.FloatingPillNavItem
-import com.example.ui.components.GradientBlurBottomBar
 import com.example.ui.components.GradientBlurTopBar
 import com.example.ui.components.ModernArCameraView
 import com.example.ui.components.RulerComponent
 import com.example.ui.components.SettingsSheet
 import com.example.ui.viewmodel.MeasureViewModel
 import java.io.File
-import java.text.DecimalFormat
 import java.text.SimpleDateFormat
 import java.util.*
 

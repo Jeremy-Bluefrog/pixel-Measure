@@ -42,6 +42,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.example.logic.ShareUtility
 import com.example.logic.ai.DetectedTile
+import com.example.logic.ai.Objectron3DBox
+import com.example.logic.ai.ObjectronEngine
+import com.example.logic.ai.SegmentedObject
 import com.example.logic.ar.ArMath
 import com.example.logic.ar.ModernArGlView
 import com.example.ui.components.TileDetailBottomSheet
@@ -98,13 +101,18 @@ fun ModernArCameraView(
     val sensorTelemetry by viewModel.sensorTelemetry.collectAsState()
     val sensorCorrectionEnabled by viewModel.sensorCorrectionEnabled.collectAsState()
     val highFpsModeEnabled by viewModel.highFpsModeEnabled.collectAsState()
+    val isObjectronMode by viewModel.isObjectronMode.collectAsState()
+    val objectron3DBox by viewModel.objectron3DBox.collectAsState()
+    val isMobileSamMode by viewModel.isMobileSamMode.collectAsState()
+    val segmentedObject by viewModel.segmentedObject.collectAsState()
 
     // Touch ripple visual pings
     val pings = remember { mutableStateListOf<Pair<Offset, Animatable<Float, AnimationVector1D>>>() }
 
-    // Dialogs
+    // Dialogs & Guidance Overlay
     var showHelpDialog by remember { mutableStateOf(false) }
     var showSensorStatusDialog by remember { mutableStateOf(false) }
+    var showPlaneGuidanceOverlay by remember { mutableStateOf(true) }
 
     // Lifecycle sync for ARCore
     DisposableEffect(lifecycleOwner) {
@@ -276,8 +284,14 @@ fun ModernArCameraView(
                                     pings.remove(pingPair)
                                 }
 
-                                // Request hit-test at tap coordinates
-                                viewModel.requestHitTest(offset.x, offset.y)
+                                if (isMobileSamMode) {
+                                    val screenW = localView.width.takeIf { it > 0 }?.toFloat() ?: 1080f
+                                    val screenH = localView.height.takeIf { it > 0 }?.toFloat() ?: 1920f
+                                    viewModel.triggerSamSegmentationAtTap(offset, screenW, screenH)
+                                } else {
+                                    // Request hit-test at tap coordinates
+                                    viewModel.requestHitTest(offset.x, offset.y)
+                                }
                             }
                         }
                 )
@@ -371,7 +385,14 @@ fun ModernArCameraView(
                                     pingAnim.animateTo(1f, animationSpec = tween(600, easing = LinearOutSlowInEasing))
                                     pings.remove(pingPair)
                                 }
-                                viewModel.requestHitTest(offset.x, offset.y)
+
+                                if (isMobileSamMode) {
+                                    val screenW = localView.width.takeIf { it > 0 }?.toFloat() ?: 1080f
+                                    val screenH = localView.height.takeIf { it > 0 }?.toFloat() ?: 1920f
+                                    viewModel.triggerSamSegmentationAtTap(offset, screenW, screenH)
+                                } else {
+                                    viewModel.requestHitTest(offset.x, offset.y)
+                                }
                             }
                         }
                 )
@@ -581,7 +602,133 @@ fun ModernArCameraView(
                     }
                 }
 
-                // 2D. Draw start and confirmed anchor pin node markers (3D Spatial Anchors)
+                // 2D. Draw MediaPipe Objectron 3D Bounding Box Wireframe & Oriented Cube
+                if (isObjectronMode && objectron3DBox != null) {
+                    val box = objectron3DBox!!
+                    val boxScreenCorners = box.corners.map { cornerPt ->
+                        ArMath.projectWorldToScreen(cornerPt, viewMatrix, projectionMatrix, screenW, screenH)
+                    }
+
+                    val boxCyan = Color(0xFF00E5FF)
+                    val boxAmber = Color(0xFFFFD54F)
+
+                    // Draw 12 Wireframe Edges
+                    ObjectronEngine.WIREFRAME_EDGES.forEach { (i1, i2) ->
+                        val p1 = boxScreenCorners.getOrNull(i1)
+                        val p2 = boxScreenCorners.getOrNull(i2)
+                        if (p1 != null && p2 != null) {
+                            // Bottom face (0,1,2,3) in cyan, Top face (4,5,6,7) in amber, vertical pillars in white/cyan
+                            val edgeColor = when {
+                                i1 < 4 && i2 < 4 -> boxCyan
+                                i1 >= 4 && i2 >= 4 -> boxAmber
+                                else -> Color.White.copy(alpha = 0.85f)
+                            }
+                            drawLine(
+                                color = edgeColor,
+                                start = Offset(p1.first, p1.second),
+                                end = Offset(p2.first, p2.second),
+                                strokeWidth = 2.5.dp.toPx(),
+                                cap = StrokeCap.Round
+                            )
+                        }
+                    }
+
+                    // Draw 8 Vertex Keypoints
+                    boxScreenCorners.forEachIndexed { vIdx, proj ->
+                        if (proj != null) {
+                            val vOffset = Offset(proj.first, proj.second)
+                            val isTopVertex = vIdx >= 4
+                            val vColor = if (isTopVertex) boxAmber else boxCyan
+
+                            drawCircle(
+                                color = Color.Black.copy(alpha = 0.5f),
+                                center = Offset(vOffset.x, vOffset.y + 1.5f),
+                                radius = 5.dp.toPx()
+                            )
+                            drawCircle(
+                                color = Color.White,
+                                center = vOffset,
+                                radius = 4.5.dp.toPx()
+                            )
+                            drawCircle(
+                                color = vColor,
+                                center = vOffset,
+                                radius = 3.dp.toPx()
+                            )
+                        }
+                    }
+
+                    // Draw Center Ground Projection Reticle
+                    val centerProj = ArMath.projectWorldToScreen(box.center, viewMatrix, projectionMatrix, screenW, screenH)
+                    if (centerProj != null) {
+                        val cOffset = Offset(centerProj.first, centerProj.second)
+                        drawCircle(
+                            color = boxCyan.copy(alpha = 0.35f * reticlePulseScale),
+                            center = cOffset,
+                            radius = (16.dp * reticlePulseScale).toPx(),
+                            style = Stroke(width = 1.5.dp.toPx())
+                        )
+                    }
+                }
+
+                // 2D-2. Draw MobileSAM / FastSAM Segment Anything Mask & Boundary Polyline
+                if (isMobileSamMode && segmentedObject != null) {
+                    val seg = segmentedObject!!
+                    if (seg.contour2D.size >= 3) {
+                        val samPath = Path().apply {
+                            moveTo(seg.contour2D[0].x, seg.contour2D[0].y)
+                            for (i in 1 until seg.contour2D.size) {
+                                lineTo(seg.contour2D[i].x, seg.contour2D[i].y)
+                            }
+                            close()
+                        }
+                        val samEmerald = Color(0xFF00E676)
+                        val samCyan = Color(0xFF00E5FF)
+
+                        // Translucent radial gradient fill mask
+                        drawPath(
+                            path = samPath,
+                            brush = Brush.radialGradient(
+                                colors = listOf(samEmerald.copy(alpha = 0.35f), samCyan.copy(alpha = 0.12f)),
+                                center = seg.promptPoint,
+                                radius = 220.dp.toPx()
+                            )
+                        )
+
+                        // Glowing neon border stroke with dashes
+                        drawPath(
+                            path = samPath,
+                            color = samEmerald,
+                            style = Stroke(
+                                width = 3.dp.toPx(),
+                                cap = StrokeCap.Round,
+                                join = StrokeJoin.Round,
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(24f, 12f), 0f)
+                            )
+                        )
+
+                        // Vertex pinpoints
+                        seg.contour2D.forEach { pt ->
+                            drawCircle(color = Color.White, center = pt, radius = 4.dp.toPx())
+                            drawCircle(color = samEmerald, center = pt, radius = 2.5.dp.toPx())
+                        }
+
+                        // Prompt point radar beacon
+                        drawCircle(
+                            color = Color.White,
+                            center = seg.promptPoint,
+                            radius = 5.dp.toPx()
+                        )
+                        drawCircle(
+                            color = samEmerald,
+                            center = seg.promptPoint,
+                            radius = (14.dp * reticlePulseScale).toPx(),
+                            style = Stroke(width = 2.dp.toPx())
+                        )
+                    }
+                }
+
+                // 2E. Draw start and confirmed anchor pin node markers (3D Spatial Anchors)
                 projectedPoints.forEachIndexed { index, proj ->
                     if (proj != null) {
                         val offset = Offset(proj.first, proj.second)
@@ -1098,11 +1245,51 @@ fun ModernArCameraView(
                     }
                 }
 
-                // Right: Essential Quick Actions (Torch, History, Settings)
+                // Right: Essential Quick Actions (Objectron 3D AI, Torch, History, Settings)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    // MobileSAM Segment Anything AI Mode Toggle Button
+                    IconButton(
+                        onClick = { viewModel.toggleMobileSamMode() },
+                        modifier = Modifier
+                            .size(40.dp)
+                            .background(
+                                if (isMobileSamMode) Color(0xFF00E676) else Color.Black.copy(alpha = 0.55f),
+                                CircleShape
+                            )
+                            .shadow(if (isMobileSamMode) 8.dp else 4.dp, CircleShape)
+                            .testTag("mobilesam_ai_button")
+                    ) {
+                        Icon(
+                            Icons.Rounded.AutoAwesomeMosaic,
+                            contentDescription = "MobileSAM AI",
+                            tint = if (isMobileSamMode) Color(0xFF0D1B2A) else Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    // MediaPipe Objectron 3D AI Mode Toggle Button
+                    IconButton(
+                        onClick = { viewModel.toggleObjectronMode() },
+                        modifier = Modifier
+                            .size(40.dp)
+                            .background(
+                                if (isObjectronMode) Color(0xFF00E5FF) else Color.Black.copy(alpha = 0.55f),
+                                CircleShape
+                            )
+                            .shadow(if (isObjectronMode) 8.dp else 4.dp, CircleShape)
+                            .testTag("objectron_ai_button")
+                    ) {
+                        Icon(
+                            Icons.Rounded.ViewInAr,
+                            contentDescription = "Objectron 3D AI",
+                            tint = if (isObjectronMode) Color(0xFF0D1B2A) else Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
                     // Flashlight / Torch
                     IconButton(
                         onClick = { viewModel.toggleTorch(context) },
@@ -1157,6 +1344,25 @@ fun ModernArCameraView(
                 }
             }
         }
+
+            // 5B. Brief Instructional Overlay for Plane Detection Initialization
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showPlaneGuidanceOverlay && capturedPoints.isEmpty(),
+                enter = fadeIn(animationSpec = tween(280)) + slideInVertically(initialOffsetY = { -it / 2 }),
+                exit = fadeOut(animationSpec = tween(240)) + slideOutVertically(targetOffsetY = { -it / 2 }),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 74.dp)
+                    .padding(horizontal = 16.dp)
+            ) {
+                PlaneDetectionInstructionOverlay(
+                    trackingState = trackingState,
+                    trackingFailureReason = trackingFailureReason,
+                    planesCount = planesCount,
+                    onDismiss = { showPlaneGuidanceOverlay = false }
+                )
+            }
 
             // 6. Bottom Dynamic Control Deck (+ / ✓ Button & Camera Shutter)
             var isShutterFlash by remember { mutableStateOf(false) }
@@ -1226,6 +1432,8 @@ fun ModernArCameraView(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 val (badgeText, badgeIcon) = when {
+                                    isObjectronMode && objectron3DBox != null ->
+                                        "3D體積: ${"%.1f".format(objectron3DBox!!.volumeM3 * 1000.0)} L (${"%.0f".format(objectron3DBox!!.widthMeters * 100)}×${"%.0f".format(objectron3DBox!!.heightMeters * 100)}×${"%.0f".format(objectron3DBox!!.depthMeters * 100)}cm)" to Icons.Rounded.ViewInAr
                                     autoDetectedType == "AREA" && capturedPoints.size >= 3 ->
                                         "面積: ${viewModel.formatArea(area, selectedUnit)}" to Icons.Rounded.SquareFoot
                                     autoDetectedType == "HEIGHT" && capturedPoints.size >= 2 ->
@@ -1237,7 +1445,7 @@ fun ModernArCameraView(
                                 Icon(
                                     badgeIcon,
                                     contentDescription = null,
-                                    tint = colorPrimary,
+                                    tint = if (isObjectronMode) Color(0xFF00E5FF) else colorPrimary,
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Text(
@@ -1249,25 +1457,70 @@ fun ModernArCameraView(
                             }
                         }
                     } else {
-                        // Guidance Pill
+                        // Guidance Pill (Specialized for MobileSAM & Objectron if active)
                         Surface(
                             color = Color.Black.copy(alpha = 0.65f),
                             shape = RoundedCornerShape(18.dp),
-                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
-                            modifier = Modifier.shadow(4.dp, RoundedCornerShape(18.dp))
+                            border = BorderStroke(
+                                1.dp,
+                                when {
+                                    isMobileSamMode -> Color(0xFF00E676).copy(alpha = 0.6f)
+                                    isObjectronMode -> Color(0xFF00E5FF).copy(alpha = 0.5f)
+                                    else -> Color.White.copy(alpha = 0.15f)
+                                }
+                            ),
+                            modifier = Modifier
+                                .shadow(4.dp, RoundedCornerShape(18.dp))
+                                .then(
+                                    if (isMobileSamMode && segmentedObject != null) {
+                                        Modifier.clickable {
+                                            viewModel.applySegmentedObjectCorners()
+                                        }
+                                    } else if (isObjectronMode && objectron3DBox != null) {
+                                        Modifier.clickable {
+                                            viewModel.applyObjectronBoxCorners()
+                                        }
+                                    } else Modifier
+                                )
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Icon(Icons.Rounded.TouchApp, null, tint = colorPrimary, modifier = Modifier.size(16.dp))
-                                Text(
-                                    text = "對準目標表面，點擊 ＋ 標定測量起點",
-                                    color = Color.White,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
+                                if (isMobileSamMode && segmentedObject != null) {
+                                    Icon(Icons.Rounded.AutoAwesomeMosaic, null, tint = Color(0xFF00E676), modifier = Modifier.size(16.dp))
+                                    Text(
+                                        text = "SAM ${segmentedObject!!.label}: ${"%.2f".format(segmentedObject!!.areaM2)} m² (輕觸一鍵鎖定)",
+                                        color = Color(0xFF00E676),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                } else if (isMobileSamMode) {
+                                    Icon(Icons.Rounded.TouchApp, null, tint = Color(0xFF00E676), modifier = Modifier.size(16.dp))
+                                    Text(
+                                        text = "輕觸畫面任意物件，即時分割邊界與面積",
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                } else if (isObjectronMode && objectron3DBox != null) {
+                                    Icon(Icons.Rounded.ViewInAr, null, tint = Color(0xFF00E5FF), modifier = Modifier.size(16.dp))
+                                    Text(
+                                        text = "AI 3D方框: ${"%.0f".format(objectron3DBox!!.widthMeters * 100)}×${"%.0f".format(objectron3DBox!!.heightMeters * 100)}×${"%.0f".format(objectron3DBox!!.depthMeters * 100)} cm (輕觸鎖定)",
+                                        color = Color(0xFF00E5FF),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                } else {
+                                    Icon(Icons.Rounded.TouchApp, null, tint = colorPrimary, modifier = Modifier.size(16.dp))
+                                    Text(
+                                        text = "對準目標表面，點擊 ＋ 標定測量起點",
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
                             }
                         }
                     }
@@ -1513,6 +1766,8 @@ fun ModernArCameraView(
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("• MobileSAM 智慧邊緣分割：輕觸畫面任意物件，即時偵測邊界輪廓、估算面積並支援一鍵鎖定測量。")
+                    Text("• MediaPipe Objectron 3D AI：智慧 3D 物件包絡線與 8 頂點方框預測，即時計算長寬高與空間體積。")
                     Text("• 60 FPS 點雲渲染：相機即時偵測周圍環境的幾何特徵點與表面。")
                     Text("• 磁吸對齊功能：當準星靠近既有頂點時會自動吸附並震動提示，精準閉合多邊形。")
                     Text("• 多感應器融合校正：即時結合陀螺儀防抖、重力垂準、氣壓計高度、近接感應與雙鏡頭視差。")
@@ -1750,5 +2005,166 @@ fun ModernArCameraView(
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun GuidanceTipChip(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    text: String
+) {
+    Surface(
+        color = Color.White.copy(alpha = 0.08f),
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = Color(0xFF00E5FF),
+                modifier = Modifier.size(13.dp)
+            )
+            Text(
+                text = text,
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.9f),
+                fontWeight = FontWeight.Medium
+            )
+        }
+    }
+}
+
+@Composable
+fun PlaneDetectionInstructionOverlay(
+    trackingState: TrackingState,
+    trackingFailureReason: TrackingFailureReason,
+    planesCount: Int,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val isInitialized = trackingState == TrackingState.TRACKING && planesCount > 0
+
+    val infiniteTransition = rememberInfiniteTransition(label = "PlaneScanMotion")
+    val tiltAngle by infiniteTransition.animateFloat(
+        initialValue = -14f,
+        targetValue = 14f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "tiltAngle"
+    )
+
+    Surface(
+        color = Color(0xEB0D1B2A),
+        shape = RoundedCornerShape(22.dp),
+        border = BorderStroke(
+            1.dp,
+            if (isInitialized) Color(0xFF00E676).copy(alpha = 0.6f) else Color(0xFF00E5FF).copy(alpha = 0.35f)
+        ),
+        modifier = modifier
+            .fillMaxWidth()
+            .shadow(12.dp, RoundedCornerShape(22.dp))
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Animated phone icon inside a glowing radar box
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .background(
+                                if (isInitialized) Color(0xFF00E676).copy(alpha = 0.18f) else Color(0xFF00E5FF).copy(alpha = 0.15f),
+                                CircleShape
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isInitialized) {
+                            Icon(
+                                Icons.Rounded.CheckCircle,
+                                contentDescription = null,
+                                tint = Color(0xFF00E676),
+                                modifier = Modifier.size(24.dp)
+                            )
+                        } else {
+                            Icon(
+                                Icons.Rounded.ScreenRotation,
+                                contentDescription = null,
+                                tint = Color(0xFF00E5FF),
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .graphicsLayer {
+                                        rotationZ = tiltAngle
+                                    }
+                            )
+                        }
+                    }
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (isInitialized) "空間平面偵測完成 ✨" else "緩慢平移裝置以建立空間偵測",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = when {
+                                isInitialized -> "已成功辨識 $planesCount 處環境平面與特徵點，隨時可標定測量！"
+                                trackingFailureReason == TrackingFailureReason.EXCESSIVE_MOTION -> "移動速度過快，請放慢平移步調"
+                                trackingFailureReason == TrackingFailureReason.INSUFFICIENT_LIGHT -> "環境過暗，建議開啟手電筒補光"
+                                trackingFailureReason == TrackingFailureReason.INSUFFICIENT_FEATURES -> "表面缺少特徵，請朝向有紋理的地面"
+                                else -> "請將相機對準地面或桌面，緩慢左右平移以初始化 AR 空間"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isInitialized) Color(0xFF00E676) else Color.White.copy(alpha = 0.8f),
+                            lineHeight = 16.sp
+                        )
+                    }
+                }
+
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .size(30.dp)
+                        .background(Color.White.copy(alpha = 0.1f), CircleShape)
+                ) {
+                    Icon(
+                        Icons.Rounded.Close,
+                        contentDescription = "Dismiss",
+                        tint = Color.White.copy(alpha = 0.85f),
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+
+            if (!isInitialized) {
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    GuidanceTipChip(icon = Icons.Rounded.OpenWith, text = "左右平移")
+                    GuidanceTipChip(icon = Icons.Rounded.Straighten, text = "距離 0.5-3m")
+                    GuidanceTipChip(icon = Icons.Rounded.WbSunny, text = "均勻光線")
+                }
+            }
+        }
     }
 }

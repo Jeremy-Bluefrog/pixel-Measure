@@ -1,6 +1,5 @@
 package com.example.ui.components
 
-import android.os.Build
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke

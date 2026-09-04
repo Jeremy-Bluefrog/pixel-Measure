@@ -17,11 +17,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CameraAlt
-import androidx.compose.material.icons.rounded.GridView
-import androidx.compose.material.icons.rounded.History
-import androidx.compose.material.icons.rounded.Straighten
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
