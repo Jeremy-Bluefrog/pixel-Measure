@@ -48,7 +48,8 @@ data class ModernArFrame(
     val cameraYaw: Float,
     val isDepthAvailable: Boolean,
     val lightIntensity: Float,
-    val surfaceTypeAtCenter: String
+    val surfaceTypeAtCenter: String,
+    val stability: ArTrackingStability = ArTrackingStability.default()
 )
 
 /**
@@ -75,6 +76,10 @@ class ModernArEngine(private val context: Context) {
 
     private var frameCounter = 0
     private var cachedPlanes: List<DetectedPlaneInfo> = emptyList()
+    private var lastCameraPose: Pose? = null
+    private var lastFrameTimeNs: Long = 0L
+    private var smoothedSpeedMps: Float = 0.05f
+    private var smoothedConfidence: Float = 0.85f
 
     /**
      * Check device compatibility and create configured ARCore Session safely.
@@ -443,6 +448,105 @@ class ModernArEngine(private val context: Context) {
             else -> if (isDepthModeActive) "深度表面" else "空間特徵點"
         }
 
+        // 1. Feature points count from PointCloud
+        val ptCloud = try { frame.acquirePointCloud() } catch (e: Throwable) { null }
+        val featurePointsCount = try {
+            val buf = ptCloud?.points
+            if (buf != null) buf.remaining() / 4 else 0
+        } catch (e: Throwable) {
+            0
+        } finally {
+            try { ptCloud?.release() } catch (e: Throwable) {}
+        }
+
+        // 2. Camera panning velocity estimation (m/s)
+        val nowNs = frame.timestamp
+        val speed = if (lastCameraPose != null && lastFrameTimeNs > 0 && nowNs > lastFrameTimeNs) {
+            val dt = (nowNs - lastFrameTimeNs) / 1_000_000_000.0f
+            val dx = pose.tx() - lastCameraPose!!.tx()
+            val dy = pose.ty() - lastCameraPose!!.ty()
+            val dz = pose.tz() - lastCameraPose!!.tz()
+            val dist = kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
+            if (dt in 0.001f..0.5f) (dist / dt) else 0f
+        } else 0f
+        lastCameraPose = pose
+        lastFrameTimeNs = nowNs
+        smoothedSpeedMps = smoothedSpeedMps * 0.75f + speed * 0.25f
+
+        // 3. Multi-factor Stability & Confidence Calculation
+        val isTracking = camera.trackingState == TrackingState.TRACKING
+        val failureReason = camera.trackingFailureReason
+        val isMotionExcessive = failureReason == TrackingFailureReason.EXCESSIVE_MOTION || smoothedSpeedMps > 0.55f
+        val isFeatureDeficient = failureReason == TrackingFailureReason.INSUFFICIENT_FEATURES ||
+                (isTracking && featurePointsCount < 25 && cachedPlanes.isEmpty()) ||
+                (isTracking && featurePointsCount < 15)
+        val isLightingDeficient = failureReason == TrackingFailureReason.INSUFFICIENT_LIGHT || lightVal < 0.20f
+
+        var score = if (isTracking) 0.60f else 0.10f
+        val activePlanes = cachedPlanes.count { it.isTracking }
+        score += kotlin.math.min(0.20f, activePlanes * 0.08f)
+
+        score += when {
+            featurePointsCount >= 120 -> 0.15f
+            featurePointsCount >= 60 -> 0.10f
+            featurePointsCount >= 30 -> 0.05f
+            featurePointsCount < 15 -> -0.25f
+            featurePointsCount < 25 -> -0.15f
+            else -> 0.0f
+        }
+
+        score += when {
+            lightVal >= 0.40f -> 0.05f
+            lightVal < 0.18f -> -0.20f
+            lightVal < 0.28f -> -0.10f
+            else -> 0.0f
+        }
+
+        if (smoothedSpeedMps > 0.80f) {
+            score -= 0.35f
+        } else if (smoothedSpeedMps > 0.45f) {
+            score -= 0.18f
+        }
+
+        if (failureReason == TrackingFailureReason.EXCESSIVE_MOTION) score -= 0.30f
+        if (failureReason == TrackingFailureReason.INSUFFICIENT_FEATURES) score -= 0.35f
+        if (failureReason == TrackingFailureReason.INSUFFICIENT_LIGHT) score -= 0.25f
+
+        val clampedScore = score.coerceIn(0.05f, 0.99f)
+        smoothedConfidence = smoothedConfidence * 0.80f + clampedScore * 0.20f
+
+        val stabilityLevel = when {
+            smoothedConfidence >= 0.75f -> StabilityLevel.HIGH
+            smoothedConfidence >= 0.50f -> StabilityLevel.MODERATE
+            smoothedConfidence >= 0.25f -> StabilityLevel.LOW
+            else -> StabilityLevel.POOR
+        }
+
+        val isDriftRisk = !isTracking || isMotionExcessive || isFeatureDeficient ||
+                stabilityLevel == StabilityLevel.LOW || stabilityLevel == StabilityLevel.POOR
+
+        val warningMsg = when {
+            isFeatureDeficient -> "特徵點不足，請慢速平移相機"
+            isMotionExcessive -> "移動過快，請慢速平移相機"
+            isLightingDeficient -> "環境光線不足，建議開啟手電筒補光"
+            !isTracking -> "請將相機對準有紋理的地面，緩慢平移"
+            else -> null
+        }
+
+        val stabilityMetrics = ArTrackingStability(
+            confidenceScore = smoothedConfidence,
+            level = stabilityLevel,
+            featurePointsCount = featurePointsCount,
+            trackingPlanesCount = activePlanes,
+            cameraSpeedMps = smoothedSpeedMps,
+            lightIntensity = lightVal,
+            isMotionExcessive = isMotionExcessive,
+            isFeatureDeficient = isFeatureDeficient,
+            isLightingDeficient = isLightingDeficient,
+            isDriftRisk = isDriftRisk,
+            warningMessage = warningMsg
+        )
+
         return ModernArFrame(
             trackingState = camera.trackingState,
             trackingFailureReason = camera.trackingFailureReason,
@@ -457,7 +561,8 @@ class ModernArEngine(private val context: Context) {
             cameraYaw = yawDeg,
             isDepthAvailable = isDepthModeActive,
             lightIntensity = lightVal,
-            surfaceTypeAtCenter = surfaceLabel
+            surfaceTypeAtCenter = surfaceLabel,
+            stability = stabilityMetrics
         )
     }
 }

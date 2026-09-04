@@ -3,6 +3,8 @@
 package com.example.ui.components
 
 import android.Manifest
+import android.graphics.SurfaceTexture
+import android.view.TextureView
 import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -46,7 +48,10 @@ import com.example.logic.ai.Objectron3DBox
 import com.example.logic.ai.ObjectronEngine
 import com.example.logic.ai.SegmentedObject
 import com.example.logic.ar.ArMath
+import com.example.logic.ar.ArTrackingStability
 import com.example.logic.ar.ModernArGlView
+import com.example.logic.ar.StabilityLevel
+import com.example.logic.camera.HighSpeedCamera2Manager
 import com.example.ui.components.TileDetailBottomSheet
 import com.example.ui.viewmodel.MeasureViewModel
 import com.example.ui.viewmodel.Point3D
@@ -83,6 +88,7 @@ fun ModernArCameraView(
     // Observe ViewModel states
     val trackingState by viewModel.arTrackingState.collectAsState()
     val trackingFailureReason by viewModel.trackingFailureReason.collectAsState()
+    val trackingStability by viewModel.trackingStability.collectAsState()
     val isDepthAvailable by viewModel.isDepthAvailable.collectAsState()
     val planesCount by viewModel.arPlanesCount.collectAsState()
     val surfaceTypeAtCenter by viewModel.surfaceTypeAtCenter.collectAsState()
@@ -112,7 +118,9 @@ fun ModernArCameraView(
     // Dialogs & Guidance Overlay
     var showHelpDialog by remember { mutableStateOf(false) }
     var showSensorStatusDialog by remember { mutableStateOf(false) }
+    var showStabilityDiagnosticsDialog by remember { mutableStateOf(false) }
     var showPlaneGuidanceOverlay by remember { mutableStateOf(true) }
+    var showAiToolsMenu by remember { mutableStateOf(false) }
 
     // Lifecycle sync for ARCore
     DisposableEffect(lifecycleOwner) {
@@ -174,7 +182,11 @@ fun ModernArCameraView(
         label = "snapGlowAlphaAnimated"
     )
     val reticleColorAnimated by animateColorAsState(
-        targetValue = if (isSnapped) Color(0xFF00E5FF) else MaterialTheme.colorScheme.primary,
+        targetValue = when {
+            trackingStability.isDriftRisk -> Color(0xFFFF9800)
+            isSnapped -> Color(0xFF00E5FF)
+            else -> MaterialTheme.colorScheme.primary
+        },
         animationSpec = tween(150, easing = FastOutSlowInEasing),
         label = "reticleColorAnimated"
     )
@@ -296,82 +308,37 @@ fun ModernArCameraView(
                         }
                 )
             } else {
-                // High-Precision CameraX Fallback Live Feed (60Hz / 60 FPS Direct Hardware Surface Composition)
+                // High-Performance Camera2 High-Speed / 60 FPS Direct Hardware Surface Composition
+                // Step 1: ConstrainedHighSpeedCaptureSession (dedicated 60Hz HAL pipeline)
+                // Step 2: Optimal resolution downscaling (1080p/720p) to satisfy HAL bandwidth limits
+                // Step 3: Scene mode disabled & 16.6ms exposure clamp to prevent 30 FPS drop in dim conditions
                 AndroidView(
                     factory = { ctx ->
-                        val previewView = androidx.camera.view.PreviewView(ctx).apply {
-                            scaleType = androidx.camera.view.PreviewView.ScaleType.FILL_CENTER
-                            implementationMode = androidx.camera.view.PreviewView.ImplementationMode.PERFORMANCE
-                        }
-                        val cameraProviderFuture = androidx.camera.lifecycle.ProcessCameraProvider.getInstance(ctx)
-                        cameraProviderFuture.addListener({
-                            try {
-                                val cameraProvider = cameraProviderFuture.get()
-                                val previewBuilder = androidx.camera.core.Preview.Builder()
+                        val textureView = TextureView(ctx)
+                        val camera2Manager = HighSpeedCamera2Manager(ctx)
+                        viewModel.setHighSpeedCamera2Manager(camera2Manager)
 
-                                try {
-                                    val camera2Extender = androidx.camera.camera2.interop.Camera2Interop.Extender(previewBuilder)
-                                    val camManager = ctx.getSystemService(android.content.Context.CAMERA_SERVICE) as? android.hardware.camera2.CameraManager
-                                    val backCamId = camManager?.cameraIdList?.firstOrNull { id ->
-                                        camManager.getCameraCharacteristics(id).get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) ==
-                                                android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
-                                    } ?: camManager?.cameraIdList?.firstOrNull()
-
-                                    val characteristics = if (backCamId != null) camManager?.getCameraCharacteristics(backCamId) else null
-                                    val fpsRanges = characteristics?.get(android.hardware.camera2.CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
-                                    val target60FpsRange = fpsRanges?.firstOrNull { range ->
-                                        range.upper >= 60 && range.lower >= 30
-                                    } ?: android.util.Range(60, 60)
-
-                                    camera2Extender.setCaptureRequestOption(
-                                        android.hardware.camera2.CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
-                                        target60FpsRange
-                                    )
-                                    camera2Extender.setCaptureRequestOption(
-                                        android.hardware.camera2.CaptureRequest.CONTROL_MODE,
-                                        android.hardware.camera2.CaptureRequest.CONTROL_MODE_AUTO
-                                    )
-                                    // Clamp exposure time to max 1/60s (16.6ms) to maintain 60 FPS in dim environments
-                                    camera2Extender.setCaptureRequestOption(
-                                        android.hardware.camera2.CaptureRequest.SENSOR_EXPOSURE_TIME,
-                                        1_000_000_000L / 60L
-                                    )
-                                    camera2Extender.setCaptureRequestOption(
-                                        android.hardware.camera2.CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
-                                        android.hardware.camera2.CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON
-                                    )
-                                } catch (e: Throwable) {
-                                    android.util.Log.w("CameraX60Hz", "60 FPS request config: ${e.message}")
+                        textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                            override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+                                camera2Manager.openCameraAndStartSession(textureView) { isHighSpeed, size ->
+                                    android.util.Log.i("CameraView", "Session ready. HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
                                 }
-
-                                val preview = previewBuilder.build().also {
-                                    it.setSurfaceProvider(previewView.surfaceProvider)
-                                }
-                                val cameraSelector = if (cameraProvider.hasCamera(androidx.camera.core.CameraSelector.DEFAULT_BACK_CAMERA)) {
-                                    androidx.camera.core.CameraSelector.DEFAULT_BACK_CAMERA
-                                } else {
-                                    androidx.camera.core.CameraSelector.DEFAULT_FRONT_CAMERA
-                                }
-                                cameraProvider.unbindAll()
-                                val camera = try {
-                                    cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, preview)
-                                } catch (bindEx: Exception) {
-                                    android.util.Log.w("CameraXFallback", "High FPS binding fallback to standard: ${bindEx.message}")
-                                    val standardPreview = androidx.camera.core.Preview.Builder().build().also {
-                                        it.setSurfaceProvider(previewView.surfaceProvider)
-                                    }
-                                    cameraProvider.unbindAll()
-                                    cameraProvider.bindToLifecycle(lifecycleOwner, cameraSelector, standardPreview)
-                                }
-                                viewModel.setCameraControl(camera.cameraControl)
-                            } catch (e: Exception) {
-                                android.util.Log.e("CameraXFallback", "Camera binding failed: ${e.message}")
                             }
-                        }, androidx.core.content.ContextCompat.getMainExecutor(ctx))
-                        previewView
+
+                            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
+
+                            override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                                camera2Manager.closeCamera()
+                                return true
+                            }
+
+                            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+                        }
+
+                        textureView
                     },
                     onRelease = {
-                        viewModel.setCameraControl(null)
+                        viewModel.setHighSpeedCamera2Manager(null)
                     },
                     modifier = Modifier
                         .fillMaxSize()
@@ -1161,10 +1128,23 @@ fun ModernArCameraView(
                                 }
                             }
                         } else {
+                            val stabilityColor = when (trackingStability.level) {
+                                StabilityLevel.HIGH -> Color(0xFF00E676)
+                                StabilityLevel.MODERATE -> Color(0xFF00E5FF)
+                                StabilityLevel.LOW -> Color(0xFFFFB74D)
+                                StabilityLevel.POOR -> Color(0xFFFF5252)
+                            }
+
                             Surface(
-                                color = Color.Black.copy(alpha = 0.45f),
+                                color = Color.Black.copy(alpha = 0.55f),
                                 shape = RoundedCornerShape(20.dp),
-                                modifier = Modifier.shadow(2.dp, RoundedCornerShape(20.dp))
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (trackingStability.isDriftRisk) Color(0xFFFFB74D).copy(alpha = 0.6f) else Color.White.copy(alpha = 0.12f)
+                                ),
+                                modifier = Modifier
+                                    .shadow(2.dp, RoundedCornerShape(20.dp))
+                                    .clickable { showStabilityDiagnosticsDialog = true }
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
@@ -1173,41 +1153,27 @@ fun ModernArCameraView(
                                 ) {
                                     if (trackingState == TrackingState.TRACKING) {
                                         Surface(
-                                            color = if (sensorTelemetry.isMultiSampleLocked) Color(0xFF00E676) else colorPrimary,
+                                            color = stabilityColor,
                                             shape = CircleShape,
                                             modifier = Modifier.size(8.dp)
                                         ) {}
                                         Text(
-                                            text = if (sensorTelemetry.isMultiSampleLocked) "超精準鎖定" else "已就緒",
+                                            text = "${(trackingStability.confidenceScore * 100).toInt()}% 穩定",
                                             style = MaterialTheme.typography.labelMedium,
                                             fontWeight = FontWeight.SemiBold,
-                                            color = Color.White
+                                            color = if (trackingStability.isDriftRisk) Color(0xFFFFD54F) else Color.White
                                         )
-                                        // Precision uncertainty pill
-                                        Surface(
-                                            color = (if (sensorTelemetry.isMultiSampleLocked) Color(0xFF00E676) else Color(0xFF00E5FF)).copy(alpha = 0.22f),
-                                            shape = RoundedCornerShape(6.dp),
-                                            border = BorderStroke(1.dp, (if (sensorTelemetry.isMultiSampleLocked) Color(0xFF00E676) else Color(0xFF00E5FF)).copy(alpha = 0.5f))
-                                        ) {
-                                            Text(
-                                                text = "±${"%.1f".format(sensorTelemetry.estimatedErrorMm)}mm",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                fontWeight = FontWeight.Bold,
-                                                color = if (sensorTelemetry.isMultiSampleLocked) Color(0xFF00E676) else Color(0xFF00E5FF),
-                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                            )
-                                        }
-                                        if (sensorTelemetry.isOrthogonalSnapped) {
+                                        if (trackingStability.isFeatureDeficient) {
                                             Surface(
-                                                color = Color(0xFFFFD54F).copy(alpha = 0.25f),
+                                                color = Color(0xFFFFB74D).copy(alpha = 0.22f),
                                                 shape = RoundedCornerShape(6.dp),
-                                                border = BorderStroke(1.dp, Color(0xFFFFD54F).copy(alpha = 0.6f))
+                                                border = BorderStroke(1.dp, Color(0xFFFFB74D).copy(alpha = 0.6f))
                                             ) {
                                                 Text(
-                                                    text = "📐直角",
+                                                    text = "特徵少",
                                                     style = MaterialTheme.typography.labelSmall,
                                                     fontWeight = FontWeight.Bold,
-                                                    color = Color(0xFFFFD54F),
+                                                    color = Color(0xFFFFB74D),
                                                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                                                 )
                                             }
@@ -1245,49 +1211,96 @@ fun ModernArCameraView(
                     }
                 }
 
-                // Right: Essential Quick Actions (Objectron 3D AI, Torch, History, Settings)
+                // Right: Clean quick actions with AI tool menu
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // MobileSAM Segment Anything AI Mode Toggle Button
-                    IconButton(
-                        onClick = { viewModel.toggleMobileSamMode() },
-                        modifier = Modifier
-                            .size(40.dp)
-                            .background(
-                                if (isMobileSamMode) Color(0xFF00E676) else Color.Black.copy(alpha = 0.55f),
-                                CircleShape
+                    // Unified AI Smart Tools Anchor & Dropdown Menu
+                    Box {
+                        val isAnyAiActive = isMobileSamMode || isObjectronMode
+                        IconButton(
+                            onClick = { showAiToolsMenu = true },
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(
+                                    if (isAnyAiActive) Color(0xFF00E5FF) else Color.Black.copy(alpha = 0.55f),
+                                    CircleShape
+                                )
+                                .shadow(if (isAnyAiActive) 6.dp else 3.dp, CircleShape)
+                                .testTag("ai_tools_menu_button")
+                        ) {
+                            Icon(
+                                Icons.Rounded.AutoAwesome,
+                                contentDescription = "AI 智慧工具",
+                                tint = if (isAnyAiActive) Color(0xFF0D1B2A) else Color.White,
+                                modifier = Modifier.size(20.dp)
                             )
-                            .shadow(if (isMobileSamMode) 8.dp else 4.dp, CircleShape)
-                            .testTag("mobilesam_ai_button")
-                    ) {
-                        Icon(
-                            Icons.Rounded.AutoAwesomeMosaic,
-                            contentDescription = "MobileSAM AI",
-                            tint = if (isMobileSamMode) Color(0xFF0D1B2A) else Color.White,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
+                        }
 
-                    // MediaPipe Objectron 3D AI Mode Toggle Button
-                    IconButton(
-                        onClick = { viewModel.toggleObjectronMode() },
-                        modifier = Modifier
-                            .size(40.dp)
-                            .background(
-                                if (isObjectronMode) Color(0xFF00E5FF) else Color.Black.copy(alpha = 0.55f),
-                                CircleShape
+                        DropdownMenu(
+                            expanded = showAiToolsMenu,
+                            onDismissRequest = { showAiToolsMenu = false },
+                            modifier = Modifier.background(Color(0xFF1E293B))
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            "MobileSAM 邊界輪廓",
+                                            color = if (isMobileSamMode) Color(0xFF00E676) else Color.White,
+                                            fontWeight = if (isMobileSamMode) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                        if (isMobileSamMode) {
+                                            Text("● 開啟", color = Color(0xFF00E676), fontSize = 11.sp)
+                                        }
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Rounded.AutoAwesomeMosaic,
+                                        contentDescription = null,
+                                        tint = if (isMobileSamMode) Color(0xFF00E676) else Color.White.copy(alpha = 0.7f)
+                                    )
+                                },
+                                onClick = {
+                                    viewModel.toggleMobileSamMode()
+                                    showAiToolsMenu = false
+                                }
                             )
-                            .shadow(if (isObjectronMode) 8.dp else 4.dp, CircleShape)
-                            .testTag("objectron_ai_button")
-                    ) {
-                        Icon(
-                            Icons.Rounded.ViewInAr,
-                            contentDescription = "Objectron 3D AI",
-                            tint = if (isObjectronMode) Color(0xFF0D1B2A) else Color.White,
-                            modifier = Modifier.size(20.dp)
-                        )
+
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            "Objectron 3D 包絡方框",
+                                            color = if (isObjectronMode) Color(0xFF00E5FF) else Color.White,
+                                            fontWeight = if (isObjectronMode) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                        if (isObjectronMode) {
+                                            Text("● 開啟", color = Color(0xFF00E5FF), fontSize = 11.sp)
+                                        }
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Rounded.ViewInAr,
+                                        contentDescription = null,
+                                        tint = if (isObjectronMode) Color(0xFF00E5FF) else Color.White.copy(alpha = 0.7f)
+                                    )
+                                },
+                                onClick = {
+                                    viewModel.toggleObjectronMode()
+                                    showAiToolsMenu = false
+                                }
+                            )
+                        }
                     }
 
                     // Flashlight / Torch
@@ -1299,7 +1312,7 @@ fun ModernArCameraView(
                                 if (isTorchOn) Color(0xFFFFD54F) else Color.Black.copy(alpha = 0.55f),
                                 CircleShape
                             )
-                            .shadow(if (isTorchOn) 8.dp else 4.dp, CircleShape)
+                            .shadow(if (isTorchOn) 6.dp else 3.dp, CircleShape)
                             .testTag("flashlight_toggle_button")
                     ) {
                         Icon(
@@ -1316,7 +1329,7 @@ fun ModernArCameraView(
                         modifier = Modifier
                             .size(40.dp)
                             .background(Color.Black.copy(alpha = 0.55f), CircleShape)
-                            .shadow(4.dp, CircleShape)
+                            .shadow(3.dp, CircleShape)
                     ) {
                         Icon(
                             Icons.Rounded.History,
@@ -1332,7 +1345,7 @@ fun ModernArCameraView(
                         modifier = Modifier
                             .size(40.dp)
                             .background(Color.Black.copy(alpha = 0.55f), CircleShape)
-                            .shadow(4.dp, CircleShape)
+                            .shadow(3.dp, CircleShape)
                     ) {
                         Icon(
                             Icons.Rounded.Settings,
@@ -1345,9 +1358,32 @@ fun ModernArCameraView(
             }
         }
 
-            // 5B. Brief Instructional Overlay for Plane Detection Initialization
+            // 5B. Active Stability & Feature Point Warning Banner (Proactive Drift Prevention)
             androidx.compose.animation.AnimatedVisibility(
-                visible = showPlaneGuidanceOverlay && capturedPoints.isEmpty(),
+                visible = trackingStability.warningMessage != null,
+                enter = fadeIn(animationSpec = tween(220)) + slideInVertically(initialOffsetY = { -it / 2 }),
+                exit = fadeOut(animationSpec = tween(180)) + slideOutVertically(targetOffsetY = { -it / 2 }),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 74.dp)
+                    .padding(horizontal = 16.dp)
+            ) {
+                ActiveTrackingStabilityWarningBanner(
+                    stability = trackingStability,
+                    onActionClick = {
+                        if (trackingStability.isLightingDeficient) {
+                            viewModel.toggleTorch(context)
+                        } else {
+                            showStabilityDiagnosticsDialog = true
+                        }
+                    }
+                )
+            }
+
+            // Brief Instructional Overlay for Plane Detection Initialization (shown when no critical warning active)
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showPlaneGuidanceOverlay && capturedPoints.isEmpty() && trackingStability.warningMessage == null,
                 enter = fadeIn(animationSpec = tween(280)) + slideInVertically(initialOffsetY = { -it / 2 }),
                 exit = fadeOut(animationSpec = tween(240)) + slideOutVertically(targetOffsetY = { -it / 2 }),
                 modifier = Modifier
@@ -2006,6 +2042,14 @@ fun ModernArCameraView(
             }
         )
     }
+
+    // AR Stability & Confidence Diagnostics Dialog
+    if (showStabilityDiagnosticsDialog) {
+        ArStabilityDiagnosticsDialog(
+            stability = trackingStability,
+            onDismiss = { showStabilityDiagnosticsDialog = false }
+        )
+    }
 }
 
 @Composable
@@ -2167,4 +2211,292 @@ fun PlaneDetectionInstructionOverlay(
             }
         }
     }
+}
+
+/**
+ * Active Tracking Stability Warning Banner
+ * Proactively notifies the user when camera moves too fast or feature points are deficient
+ * (e.g. pure white wall/ceiling, dim lighting), preventing measurement drift.
+ */
+@Composable
+fun ActiveTrackingStabilityWarningBanner(
+    stability: ArTrackingStability,
+    onActionClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val bannerColor = if (stability.level == StabilityLevel.POOR) Color(0xFFFF5252) else Color(0xFFFF9800)
+
+    Surface(
+        color = Color(0xF518120C),
+        shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.5.dp, bannerColor.copy(alpha = 0.85f)),
+        modifier = modifier
+            .fillMaxWidth()
+            .shadow(12.dp, RoundedCornerShape(20.dp))
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .background(bannerColor.copy(alpha = 0.18f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = when {
+                        stability.isFeatureDeficient -> Icons.Rounded.Grain
+                        stability.isMotionExcessive -> Icons.Rounded.Speed
+                        stability.isLightingDeficient -> Icons.Rounded.WbSunny
+                        else -> Icons.Rounded.WarningAmber
+                    },
+                    contentDescription = null,
+                    tint = bannerColor,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stability.warningMessage ?: "特徵點不足，請慢速平移相機",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = when {
+                        stability.isFeatureDeficient -> "請對準有紋理邊緣並慢速平移，避免點位偏移"
+                        stability.isMotionExcessive -> "目前平移速度 ${"%.2f".format(stability.cameraSpeedMps)}m/s，請放慢以確保精準"
+                        stability.isLightingDeficient -> "環境偏暗可能引起空間漂移，建議補光"
+                        else -> "慢速平移能建立穩固特徵點，防止測量偏移"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.84f),
+                    lineHeight = 15.sp
+                )
+            }
+
+            Surface(
+                color = bannerColor.copy(alpha = 0.25f),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, bannerColor.copy(alpha = 0.6f)),
+                modifier = Modifier.clickable { onActionClick() }
+            ) {
+                Text(
+                    text = if (stability.isLightingDeficient) "補光" else "診斷",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * AR Stability & Confidence Diagnostics Dialog
+ * Detailed telemetry inspection: confidence score, feature points, speed, illumination and drift protection guide.
+ */
+@Composable
+fun ArStabilityDiagnosticsDialog(
+    stability: ArTrackingStability,
+    onDismiss: () -> Unit
+) {
+    val levelColor = when (stability.level) {
+        StabilityLevel.HIGH -> Color(0xFF00E676)
+        StabilityLevel.MODERATE -> Color(0xFF00E5FF)
+        StabilityLevel.LOW -> Color(0xFFFFB74D)
+        StabilityLevel.POOR -> Color(0xFFFF5252)
+    }
+
+    val levelText = when (stability.level) {
+        StabilityLevel.HIGH -> "🎯 極佳 (穩定鎖定，空間無偏移)"
+        StabilityLevel.MODERATE -> "✨ 良好 (適宜正常測量)"
+        StabilityLevel.LOW -> "⚠️ 特徵偏少 (慢速平移警告)"
+        StabilityLevel.POOR -> "🔴 極低 (特徵匱乏，高偏移風險)"
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.Speed, null, tint = levelColor)
+                Spacer(Modifier.width(8.dp))
+                Text("AR 空間追蹤與置信度診斷", fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                // Confidence Score Gauge
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, levelColor.copy(alpha = 0.4f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "即時置信指數 (Confidence)",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = "${(stability.confidenceScore * 100).toInt()}%",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = levelColor
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        LinearProgressIndicator(
+                            progress = { stability.confidenceScore },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(8.dp)
+                                .clip(CircleShape),
+                            color = levelColor,
+                            trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+                        )
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        Text(
+                            text = "狀態：$levelText",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Medium,
+                            color = levelColor
+                        )
+                    }
+                }
+
+                // Environment Telemetry Breakdown
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Feature Points
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Rounded.Grain, null, tint = if (stability.isFeatureDeficient) Color(0xFFFFB74D) else Color(0xFF00E5FF), modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("空間特徵點數量", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Text(
+                            "${stability.featurePointsCount} 個 (${if (stability.isFeatureDeficient) "⚠️ 偏少" else "充足"})",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = if (stability.isFeatureDeficient) Color(0xFFFFB74D) else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    // Camera Panning Speed
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Rounded.Speed, null, tint = if (stability.isMotionExcessive) Color(0xFFFF5252) else Color(0xFF00E676), modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("相機平移速度", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Text(
+                            "${"%.2f".format(stability.cameraSpeedMps)} m/s (${if (stability.isMotionExcessive) "⚠️ 過快" else "慢速穩定"})",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = if (stability.isMotionExcessive) Color(0xFFFF5252) else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    // Tracked Planes
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Rounded.Layers, null, tint = Color(0xFF00E5FF), modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("環境辨識平面", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Text(
+                            "${stability.trackingPlanesCount} 處平面",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+
+                    // Environmental Lighting
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Rounded.WbSunny, null, tint = if (stability.isLightingDeficient) Color(0xFFFFB74D) else Color(0xFFFFD54F), modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("環境照度指標", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Text(
+                            "${"%.2f".format(stability.lightIntensity)} (${if (stability.isLightingDeficient) "⚠️ 偏暗" else "充足"})",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = if (stability.isLightingDeficient) Color(0xFFFFB74D) else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
+                // Anti-Drift Guidance Tips
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        "🛡️ 空間防偏移最佳實務：",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        "• 慢速勻速平移：轉換角度時請維持慢速平移，避免劇烈手震晃動導致空間錨點漂移。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp
+                    )
+                    Text(
+                        "• 避開純色無紋理表面：純白牆面或暗光下缺乏幾何特徵點，請對準接縫或紋理邊緣以鎖定坐標。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("確定")
+            }
+        }
+    )
 }

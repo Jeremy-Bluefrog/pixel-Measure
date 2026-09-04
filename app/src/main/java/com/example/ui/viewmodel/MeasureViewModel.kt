@@ -106,6 +106,10 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     private val _trackingFailureReason = MutableStateFlow(TrackingFailureReason.NONE)
     val trackingFailureReason: StateFlow<TrackingFailureReason> = _trackingFailureReason.asStateFlow()
 
+    // Real-time AR Plane & Spatial Tracking Stability (Confidence Score & Feature Point Health)
+    private val _trackingStability = MutableStateFlow(ArTrackingStability.default())
+    val trackingStability: StateFlow<ArTrackingStability> = _trackingStability.asStateFlow()
+
     private val _isDepthAvailable = MutableStateFlow(false)
     val isDepthAvailable: StateFlow<Boolean> = _isDepthAvailable.asStateFlow()
 
@@ -740,6 +744,7 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         }
         if (_surfaceTypeAtCenter.value != data.surfaceTypeAtCenter) _surfaceTypeAtCenter.value = data.surfaceTypeAtCenter
         _lightIntensity.value = data.lightIntensity
+        _trackingStability.value = data.stability
 
         // Update active anchor positions to eliminate world drift
         if (capturedPoints.isNotEmpty() && data.trackingState == TrackingState.TRACKING) {
@@ -825,6 +830,13 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     fun requestHitTest(pixelX: Float? = null, pixelY: Float? = null) {
         val x = pixelX ?: (displayWidth / 2f)
         val y = pixelY ?: (displayHeight / 2f)
+
+        // Proactive warning when AR tracking feature points are deficient or camera moves too fast
+        val stability = _trackingStability.value
+        if (stability.isDriftRisk) {
+            val warn = stability.warningMessage ?: "特徵點不足，請慢速平移相機"
+            _toastMessage.tryEmit("⚠️ $warn（避免測量偏移）")
+        }
         
         if (modernArEngine.session != null) {
             pendingHitTestQueue.set(Pair(x, y))
@@ -876,6 +888,8 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
 
     // Active CameraX camera control reference (when in CameraX mode)
     private var cameraControl: androidx.camera.core.CameraControl? = null
+    // Active High-Speed Camera2 Manager reference (when in Direct Camera2 High-Speed mode)
+    private var highSpeedCamera2Manager: com.example.logic.camera.HighSpeedCamera2Manager? = null
 
     fun setCameraControl(control: androidx.camera.core.CameraControl?) {
         cameraControl = control
@@ -888,7 +902,14 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    // Toggle Torch (Flashlight) with multi-engine support (ARCore, CameraX, CameraManager)
+    fun setHighSpeedCamera2Manager(manager: com.example.logic.camera.HighSpeedCamera2Manager?) {
+        highSpeedCamera2Manager = manager
+        if (_isTorchOn.value && manager != null) {
+            manager.toggleTorch(true)
+        }
+    }
+
+    // Toggle Torch (Flashlight) with multi-engine support (ARCore, Camera2 High-Speed, CameraX, CameraManager)
     fun toggleTorch(context: Context) {
         val newState = !_isTorchOn.value
         var success = false
@@ -901,7 +922,17 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
             }
         }
 
-        // 2. If CameraX is active and controlling the camera
+        // 2. If Direct HighSpeedCamera2Manager is active
+        if (!success && highSpeedCamera2Manager != null) {
+            try {
+                highSpeedCamera2Manager?.toggleTorch(newState)
+                success = true
+            } catch (e: Exception) {
+                Log.w("MeasureViewModel", "HighSpeedCamera2Manager toggleTorch error: ${e.message}")
+            }
+        }
+
+        // 3. If CameraX is active and controlling the camera
         if (!success && cameraControl != null) {
             try {
                 cameraControl?.enableTorch(newState)

@@ -14,6 +14,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         
+        // Step 3: Unlock Window display refresh rate (60Hz / 120Hz) on Android R (API 30+)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            val params = window.attributes
+            // Request high refresh rate to prevent Window/TextureView 30Hz display clamp
+            val displayModes = display?.supportedModes
+            val has120Hz = displayModes?.any { it.refreshRate >= 119f } == true
+            params.preferredRefreshRate = if (has120Hz) 120f else 60f
+            window.attributes = params
+        }
+        
         // Initialize the measuring tool viewmodel
         viewModel = ViewModelProvider(this)[MeasureViewModel::class.java]
         
