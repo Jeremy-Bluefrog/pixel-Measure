@@ -1138,10 +1138,6 @@ fun ModernArCameraView(
                             Surface(
                                 color = Color.Black.copy(alpha = 0.55f),
                                 shape = RoundedCornerShape(20.dp),
-                                border = BorderStroke(
-                                    1.dp,
-                                    if (trackingStability.isDriftRisk) Color(0xFFFFB74D).copy(alpha = 0.6f) else Color.White.copy(alpha = 0.12f)
-                                ),
                                 modifier = Modifier
                                     .shadow(2.dp, RoundedCornerShape(20.dp))
                                     .clickable { showStabilityDiagnosticsDialog = true }
@@ -1166,29 +1162,13 @@ fun ModernArCameraView(
                                         if (trackingStability.isFeatureDeficient) {
                                             Surface(
                                                 color = Color(0xFFFFB74D).copy(alpha = 0.22f),
-                                                shape = RoundedCornerShape(6.dp),
-                                                border = BorderStroke(1.dp, Color(0xFFFFB74D).copy(alpha = 0.6f))
+                                                shape = RoundedCornerShape(6.dp)
                                             ) {
                                                 Text(
                                                     text = "特徵少",
                                                     style = MaterialTheme.typography.labelSmall,
                                                     fontWeight = FontWeight.Bold,
                                                     color = Color(0xFFFFB74D),
-                                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                                )
-                                            }
-                                        }
-                                        if (highFpsModeEnabled) {
-                                            Surface(
-                                                color = colorPrimary.copy(alpha = 0.25f),
-                                                shape = RoundedCornerShape(6.dp),
-                                                border = BorderStroke(1.dp, colorPrimary.copy(alpha = 0.6f))
-                                            ) {
-                                                Text(
-                                                    text = "60Hz",
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    fontWeight = FontWeight.ExtraBold,
-                                                    color = colorPrimary,
                                                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                                                 )
                                             }
@@ -1358,32 +1338,9 @@ fun ModernArCameraView(
             }
         }
 
-            // 5B. Active Stability & Feature Point Warning Banner (Proactive Drift Prevention)
+            // Brief Instructional Overlay for Plane Detection Initialization
             androidx.compose.animation.AnimatedVisibility(
-                visible = trackingStability.warningMessage != null,
-                enter = fadeIn(animationSpec = tween(220)) + slideInVertically(initialOffsetY = { -it / 2 }),
-                exit = fadeOut(animationSpec = tween(180)) + slideOutVertically(targetOffsetY = { -it / 2 }),
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(top = 74.dp)
-                    .padding(horizontal = 16.dp)
-            ) {
-                ActiveTrackingStabilityWarningBanner(
-                    stability = trackingStability,
-                    onActionClick = {
-                        if (trackingStability.isLightingDeficient) {
-                            viewModel.toggleTorch(context)
-                        } else {
-                            showStabilityDiagnosticsDialog = true
-                        }
-                    }
-                )
-            }
-
-            // Brief Instructional Overlay for Plane Detection Initialization (shown when no critical warning active)
-            androidx.compose.animation.AnimatedVisibility(
-                visible = showPlaneGuidanceOverlay && capturedPoints.isEmpty() && trackingStability.warningMessage == null,
+                visible = showPlaneGuidanceOverlay && capturedPoints.isEmpty(),
                 enter = fadeIn(animationSpec = tween(280)) + slideInVertically(initialOffsetY = { -it / 2 }),
                 exit = fadeOut(animationSpec = tween(240)) + slideOutVertically(targetOffsetY = { -it / 2 }),
                 modifier = Modifier
