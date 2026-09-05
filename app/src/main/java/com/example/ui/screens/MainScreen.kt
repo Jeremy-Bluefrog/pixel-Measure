@@ -152,7 +152,7 @@ fun MainScreen(viewModel: MeasureViewModel) {
                                 Icon(
                                     if (isTorchOn) Icons.Rounded.FlashlightOn else Icons.Rounded.FlashlightOff,
                                     contentDescription = "手電筒",
-                                    tint = if (isTorchOn) Color(0xFFFFB300) else MaterialTheme.colorScheme.onSurface
+                                    tint = if (isTorchOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                                 )
                             }
 
@@ -1005,3 +1005,4 @@ fun RecordDetailDialog(
         }
     )
 }
+

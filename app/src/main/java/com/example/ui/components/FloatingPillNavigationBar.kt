@@ -78,7 +78,7 @@ fun FloatingPillNavigationBar(
                 elevation = 6.dp,
                 shape = CircleShape,
                 ambientColor = Color.Black.copy(alpha = 0.08f),
-                spotColor = Color(0xFF1E293B).copy(alpha = 0.16f)
+                spotColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)
             ),
         shape = CircleShape,
         color = containerBg,

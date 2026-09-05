@@ -619,8 +619,10 @@ object ShareUtility {
                     isAntiAlias = true
                 }
                 
-                // Connect lines
-                for (i in 0 until mappedPoints.size - 1) {
+                // Connect lines (兩點成一線，不共用點)
+                val isAreaRecord = record.type == "AREA"
+                val stepCount = if (isAreaRecord) 1 else 2
+                for (i in 0 until mappedPoints.size - 1 step stepCount) {
                     val p1 = mappedPoints[i]
                     val p2 = mappedPoints[i + 1]
                     canvas.drawLine(p1.x, p1.y, p2.x, p2.y, linePaint)

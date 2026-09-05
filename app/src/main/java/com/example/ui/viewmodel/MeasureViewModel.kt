@@ -323,7 +323,7 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     }
 
     // AI Core Tile Recognition & One-Tap Measurement State
-    private val _isAiTileMode = MutableStateFlow(false)
+    private val _isAiTileMode = MutableStateFlow(true)
     val isAiTileMode: StateFlow<Boolean> = _isAiTileMode.asStateFlow()
 
     private val _isAiTileAnalyzing = MutableStateFlow(false)
@@ -391,21 +391,43 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
             try {
                 val center = _liveTargetPoint.value ?: Point3D(0.0, -0.4, -1.2, isArPrecision = true)
                 val tiles = if (bitmap != null) {
-                    val geminiTiles = AiTileDetector.analyzeTilesWithGemini(bitmap)
-                    geminiTiles.map { t ->
+                    val detected = AiTileDetector.analyzeTilesWithGemini(bitmap)
+                    detected.map { t ->
                         if (t.worldCorners.isEmpty()) {
                             t.copy(worldCorners = AiTileDetector.createTileCorners(center, t.estimatedWidthCm / 100.0, t.estimatedHeightCm / 100.0))
                         } else t
                     }
                 } else {
-                    AiTileDetector.generateLocalVisionTiles(displayWidth, displayHeight, center)
+                    emptyList()
                 }
                 _detectedTiles.value = tiles
-                triggerHapticFeedback()
-                _toastMessage.tryEmit("AI Core 已識別 ${tiles.size} 處磁磚結構，輕觸即可自動測量")
+                if (tiles.isNotEmpty()) {
+                    triggerHapticFeedback()
+                    _toastMessage.tryEmit("已成功辨識 ${tiles.size} 處磁磚結構")
+                } else {
+                    _toastMessage.tryEmit("未偵測到磁磚接縫或格網，請將相機對準磁磚地面")
+                }
             } catch (e: Exception) {
+                _detectedTiles.value = emptyList()
+            } finally {
+                _isAiTileAnalyzing.value = false
+            }
+        }
+    }
+
+    /**
+     * Continuous Computer Vision frame analyzer for real-time tile detection
+     */
+    fun processFrameForTiles(bitmap: Bitmap) {
+        if (_isAiTileAnalyzing.value) return
+        viewModelScope.launch(Dispatchers.Default) {
+            _isAiTileAnalyzing.value = true
+            try {
                 val center = _liveTargetPoint.value ?: Point3D(0.0, -0.4, -1.2, isArPrecision = true)
-                _detectedTiles.value = AiTileDetector.generateLocalVisionTiles(displayWidth, displayHeight, center)
+                val tiles = AiTileDetector.detectTilesFromBitmap(bitmap, _activeTilePreset.value, center)
+                _detectedTiles.value = tiles
+            } catch (e: Exception) {
+                // Ignore transient frame analysis errors
             } finally {
                 _isAiTileAnalyzing.value = false
             }
@@ -539,15 +561,11 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun measureTileUnderReticle() {
-        val preset = _activeTilePreset.value
-        val detected = _detectedTiles.value.firstOrNull() ?: DetectedTile(
-            label = "鎖定磁磚 (${preset.widthCm.toInt()}×${preset.heightCm.toInt()} cm)",
-            material = preset.defaultMaterial,
-            estimatedWidthCm = preset.widthCm,
-            estimatedHeightCm = preset.heightCm,
-            areaM2 = preset.singleTileAreaM2,
-            groutWidthMm = preset.defaultGroutMm
-        )
+        val detected = _detectedTiles.value.firstOrNull()
+        if (detected == null) {
+            _toastMessage.tryEmit("尚未偵測到磁磚，請將相機對準磁磚地面")
+            return
+        }
         measureTileOneTap(detected)
     }
 
@@ -614,7 +632,9 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
             val smoothedPoint = ArMath.filterJitterEMA(_liveTargetPoint.value, sensorCorrectedPoint)
 
             // 3. Gravity-aligned orthogonal leveling & 45/90-deg snapping
-            val orthogonalAdjustedPoint = if (capturedPoints.isNotEmpty() && (_cameraSubMode.value == 0 || _cameraSubMode.value == 1)) {
+            // 兩點成一線，不共用點：只有在繪製該線段終點（capturedPoints 奇數個點）時，才對起點進行正交對齊校正
+            val isActivelyDrawingLine = capturedPoints.size % 2 == 1
+            val orthogonalAdjustedPoint = if (isActivelyDrawingLine && (_cameraSubMode.value == 0 || _cameraSubMode.value == 1)) {
                 sensorCorrectionEngine.correctOrthogonalAlignment(capturedPoints.last(), smoothedPoint)
             } else {
                 smoothedPoint
@@ -638,7 +658,8 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
             _liveTargetPoint.value = finalTargetPoint
 
             // 5. Calculate live real-time distance with stability & Dual-Camera Stereo Parallax scale calibration
-            if (capturedPoints.isNotEmpty()) {
+            // 兩點成一線：若處於線段繪製中（奇數個點），量測最後一個起點至準心即時距離；若已成線或無點，則顯示相機至表面雷達景深
+            if (isActivelyDrawingLine) {
                 val lastPoint = capturedPoints.last()
                 val dist = if (_cameraSubMode.value == 2) {
                     sensorCorrectionEngine.correctVerticalHeightWithGravity(lastPoint, finalTargetPoint)
@@ -675,16 +696,28 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
             } else {
                 planarP
             }
-            val correctedP = if (capturedPoints.isNotEmpty() && (_cameraSubMode.value == 0 || _cameraSubMode.value == 1)) {
+            val isActivelyDrawingLine = capturedPoints.size % 2 == 1
+            val correctedP = if (isActivelyDrawingLine && (_cameraSubMode.value == 0 || _cameraSubMode.value == 1)) {
                 sensorCorrectionEngine.correctOrthogonalAlignment(capturedPoints.last(), baseP)
             } else {
                 baseP
             }
 
+            val nextIndex = capturedPoints.size
+            val lineNum = (nextIndex / 2) + 1
+            val role = if (nextIndex % 2 == 0) "起點" else "終點"
+            val charCode = ('A'.code + nextIndex).toChar()
+            val namedP = correctedP.copy(label = "線段$lineNum $role $charCode")
+
             android.os.Handler(android.os.Looper.getMainLooper()).post {
                 saveUndoState()
-                capturedPoints.add(correctedP)
-                triggerHapticFeedback(HapticType.HEAVY)
+                capturedPoints.add(namedP)
+                triggerHapticFeedback(if (isActivelyDrawingLine) HapticType.HEAVY else HapticType.CLICK)
+                if (isActivelyDrawingLine) {
+                    _toastMessage.tryEmit("線段 $lineNum 完成（兩點成一線）")
+                } else {
+                    _toastMessage.tryEmit("已設定線段 $lineNum 起點 ($charCode)，請瞄準終點")
+                }
                 updateAutoDetectedGeometry()
                 if (_isObjectronMode.value) {
                     updateObjectron3DBox()
@@ -725,28 +758,9 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
                     _autoDetectedType.value = "DISTANCE"
                 }
             }
-            3 -> {
-                // Check if closing loop or distance
-                val pFirst = capturedPoints.first()
-                val pLast = capturedPoints.last()
-                val closeDist = ArMath.distance(pFirst, pLast)
-                if (closeDist < 0.12) {
-                    _autoDetectedType.value = "AREA"
-                } else {
-                    _autoDetectedType.value = "DISTANCE"
-                }
-            }
             else -> {
-                // >= 4 points: check if closed polygon
-                val pFirst = capturedPoints.first()
-                val pLast = capturedPoints.last()
-                val closeDist = ArMath.distance(pFirst, pLast)
-                val totalLen = ArMath.polylineLength(capturedPoints)
-                if (closeDist < 0.25 || (totalLen > 0 && closeDist / totalLen < 0.2)) {
-                    _autoDetectedType.value = "AREA"
-                } else {
-                    _autoDetectedType.value = "DISTANCE"
-                }
+                // 兩點成一線，不要有共用的點：預設距離模式下保持為獨立線段
+                _autoDetectedType.value = "DISTANCE"
             }
         }
     }
@@ -861,9 +875,21 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
             pendingHitTestQueue.set(Pair(x, y))
         } else {
             val target = _liveTargetPoint.value ?: Point3D(0.0, 0.0, -1.2, isArPrecision = true)
+            val isActivelyDrawingLine = capturedPoints.size % 2 == 1
+            val nextIndex = capturedPoints.size
+            val lineNum = (nextIndex / 2) + 1
+            val role = if (nextIndex % 2 == 0) "起點" else "終點"
+            val charCode = ('A'.code + nextIndex).toChar()
+            val namedP = target.copy(label = "線段$lineNum $role $charCode")
+
             saveUndoState()
-            capturedPoints.add(target)
-            triggerHapticFeedback()
+            capturedPoints.add(namedP)
+            triggerHapticFeedback(if (isActivelyDrawingLine) HapticType.HEAVY else HapticType.CLICK)
+            if (isActivelyDrawingLine) {
+                _toastMessage.tryEmit("線段 $lineNum 完成（兩點成一線）")
+            } else {
+                _toastMessage.tryEmit("已設定線段 $lineNum 起點 ($charCode)，請瞄準終點")
+            }
             updateAutoDetectedGeometry()
         }
     }
@@ -1055,9 +1081,13 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    // Measurement Calculations
+    // Measurement Calculations (兩點成一線，不共用點)
     fun calculateTotalDistance(): Double {
-        val raw = ArMath.polylineLength(capturedPoints)
+        if (capturedPoints.size < 2) return 0.0
+        var raw = 0.0
+        for (i in 0 until capturedPoints.size - 1 step 2) {
+            raw += ArMath.distance(capturedPoints[i], capturedPoints[i + 1])
+        }
         return sensorCorrectionEngine.correctDistanceWithStereoParallax(raw)
     }
 
@@ -1236,7 +1266,13 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
                 }
                 else -> {
                     val dist = calculateTotalDistance()
-                    Triple(dist, "CAM", "AR 測量距離 (${formatLength(dist, unit)}) · $timeStr")
+                    val lineCount = capturedPoints.size / 2
+                    val titleDesc = if (lineCount > 1) {
+                        "AR 測量 ($lineCount 條獨立線段 · 總長 ${formatLength(dist, unit)}) · $timeStr"
+                    } else {
+                        "AR 兩點測量線段 (${formatLength(dist, unit)}) · $timeStr"
+                    }
+                    Triple(dist, "CAM", titleDesc)
                 }
             }
 

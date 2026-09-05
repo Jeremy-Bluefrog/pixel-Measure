@@ -17,6 +17,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -30,6 +31,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
@@ -66,6 +69,8 @@ import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
 import com.google.accompanist.permissions.shouldShowRationale
 import com.google.ar.core.TrackingFailureReason
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import com.google.ar.core.TrackingState
 import kotlinx.coroutines.launch
 import java.text.DecimalFormat
@@ -119,6 +124,38 @@ fun ModernArCameraView(
     val objectron3DBox by viewModel.objectron3DBox.collectAsState()
     val isMobileSamMode by viewModel.isMobileSamMode.collectAsState()
     val segmentedObject by viewModel.segmentedObject.collectAsState()
+    val isAiTileMode by viewModel.isAiTileMode.collectAsState()
+    val isAiTileAnalyzing by viewModel.isAiTileAnalyzing.collectAsState()
+    val detectedTiles by viewModel.detectedTiles.collectAsState()
+    val activeTilePreset by viewModel.activeTilePreset.collectAsState()
+    val selectedTileForDetail by viewModel.selectedTileForDetail.collectAsState()
+    var showTileDetailSheet by remember { mutableStateOf(false) }
+    val revealedTileIds = remember { mutableStateMapOf<String, Boolean>() }
+    var textureViewRef by remember { mutableStateOf<TextureView?>(null) }
+
+    // AR Measurement Video Recorder (Tap photo, Long-press video recording)
+    val videoRecorder = remember { com.example.logic.camera.ArVideoRecorder(context) }
+    val isRecordingVideo by videoRecorder.isRecording.collectAsState()
+    val recordingSeconds by videoRecorder.recordingSeconds.collectAsState()
+
+    // Real-time background frame analyzer: processes live camera feed for genuine tile edges/grids
+    LaunchedEffect(isAiTileMode) {
+        if (!isAiTileMode) return@LaunchedEffect
+        while (isActive) {
+            delay(1000)
+            val currentTv = textureViewRef
+            if (currentTv != null && currentTv.isAvailable) {
+                try {
+                    val bmp = currentTv.bitmap
+                    if (bmp != null) {
+                        viewModel.processFrameForTiles(bmp)
+                    }
+                } catch (e: Throwable) {
+                    // Ignore transient frame capture errors
+                }
+            }
+        }
+    }
 
     // Touch ripple visual pings
     val pings = remember { mutableStateListOf<Pair<Offset, Animatable<Float, AnimationVector1D>>>() }
@@ -144,6 +181,9 @@ fun ModernArCameraView(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             viewModel.onPause()
+            if (videoRecorder.isRecording.value) {
+                videoRecorder.stopRecording { _, _, _ -> }
+            }
         }
     }
 
@@ -214,17 +254,6 @@ fun ModernArCameraView(
         animationSpec = tween(180, easing = FastOutSlowInEasing),
         label = "snapGlowAlphaAnimated"
     )
-    val reticleColorAnimated by animateColorAsState(
-        targetValue = when {
-            trackingStability.isDriftRisk -> Color(0xFFFF9800)
-            isSnapped -> Color(0xFF00E5FF)
-            else -> MaterialTheme.colorScheme.primary
-        },
-        animationSpec = tween(150, easing = FastOutSlowInEasing),
-        label = "reticleColorAnimated"
-    )
-
-    // Dynamic Material 3 Color Tokens
     val colorPrimary = MaterialTheme.colorScheme.primary
     val colorOnPrimary = MaterialTheme.colorScheme.onPrimary
     val colorPrimaryContainer = MaterialTheme.colorScheme.primaryContainer
@@ -232,10 +261,28 @@ fun ModernArCameraView(
     val colorSecondary = MaterialTheme.colorScheme.secondary
     val colorOnSecondary = MaterialTheme.colorScheme.onSecondary
     val colorTertiary = MaterialTheme.colorScheme.tertiary
+    val colorOnTertiary = MaterialTheme.colorScheme.onTertiary
     val colorSurface = MaterialTheme.colorScheme.surface
+    val colorSurfaceContainer = MaterialTheme.colorScheme.surfaceContainer
+    val colorSurfaceContainerHigh = MaterialTheme.colorScheme.surfaceContainerHigh
+    val colorSurfaceContainerHighest = MaterialTheme.colorScheme.surfaceContainerHighest
     val colorOnSurface = MaterialTheme.colorScheme.onSurface
     val colorSurfaceVariant = MaterialTheme.colorScheme.surfaceVariant
     val colorOnSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
+    val colorOutline = MaterialTheme.colorScheme.outline
+    val colorOutlineVariant = MaterialTheme.colorScheme.outlineVariant
+    val colorError = MaterialTheme.colorScheme.error
+    val colorOnError = MaterialTheme.colorScheme.onError
+
+    val reticleColorAnimated by animateColorAsState(
+        targetValue = when {
+            trackingStability.isDriftRisk -> colorError
+            isSnapped -> colorTertiary
+            else -> colorPrimary
+        },
+        animationSpec = tween(150, easing = FastOutSlowInEasing),
+        label = "reticleColorAnimated"
+    )
 
     if (!cameraPermissionState.status.isGranted) {
         // Permission Request UI
@@ -353,6 +400,7 @@ fun ModernArCameraView(
                 AndroidView(
                     factory = { ctx ->
                         val textureView = TextureView(ctx)
+                        textureViewRef = textureView
                         val camera2Manager = HighSpeedCamera2Manager(ctx)
                         viewModel.setHighSpeedCamera2Manager(camera2Manager)
 
@@ -383,6 +431,7 @@ fun ModernArCameraView(
                         textureView
                     },
                     onRelease = { view ->
+                        textureViewRef = null
                         viewModel.setHighSpeedCamera2Manager(null)
                     },
                     modifier = Modifier
@@ -433,8 +482,11 @@ fun ModernArCameraView(
                 }
 
                 // 2B. Draw confirmed connecting 3D virtual lines
+                // 兩點成一線，不要有共用的點：每兩點獨立成一線段 (step = 2)
+                val isAreaMode = subMode == 1 || (subMode == 0 && autoDetectedType == "AREA")
+                val stepVal = if (isAreaMode) 1 else 2
                 if (projectedPoints.size >= 2) {
-                    for (i in 0 until projectedPoints.size - 1) {
+                    for (i in 0 until projectedPoints.size - 1 step stepVal) {
                         val p1 = projectedPoints[i]
                         val p2 = projectedPoints[i + 1]
                         if (p1 != null && p2 != null) {
@@ -532,7 +584,9 @@ fun ModernArCameraView(
                 }
 
                 // 2C. Draw active dynamic virtual line from last anchor point to current center reticle
-                if (projectedPoints.isNotEmpty()) {
+                // 兩點成一線：僅在奇數個點（正在延伸該線段的終點）時繪製動態虛線
+                val isActivelyDrawingLine = projectedPoints.size % 2 == 1
+                if (isActivelyDrawingLine && projectedPoints.isNotEmpty()) {
                     val lastPt = projectedPoints.last()
                     if (lastPt != null) {
                         val startOffset = Offset(lastPt.first, lastPt.second)
@@ -621,8 +675,8 @@ fun ModernArCameraView(
                         ArMath.projectWorldToScreen(cornerPt, viewMatrix, projectionMatrix, screenW, screenH)
                     }
 
-                    val boxCyan = Color(0xFF00E5FF)
-                    val boxAmber = Color(0xFFFFD54F)
+                    val boxCyan = colorPrimary
+                    val boxAmber = colorTertiary
 
                     // Draw 12 Wireframe Edges
                     ObjectronEngine.WIREFRAME_EDGES.forEach { (i1, i2) ->
@@ -694,8 +748,8 @@ fun ModernArCameraView(
                             }
                             close()
                         }
-                        val samEmerald = Color(0xFF00E676)
-                        val samCyan = Color(0xFF00E5FF)
+                        val samEmerald = colorPrimary
+                        val samCyan = colorSecondary
 
                         // Translucent radial gradient fill mask
                         drawPath(
@@ -737,6 +791,78 @@ fun ModernArCameraView(
                             radius = (14.dp * reticlePulseScale).toPx(),
                             style = Stroke(width = 2.dp.toPx())
                         )
+                    }
+                }
+
+                // 2F. Draw AI Detected Tiles AR Bounding Frame (Only if tiles are genuinely detected)
+                if (detectedTiles.isNotEmpty()) {
+                    val tilesToDraw = detectedTiles
+
+                    val tileGold = colorPrimary
+                    val tileCyan = colorSecondary
+
+                    tilesToDraw.forEach { tile ->
+                        val leftPx = tile.leftNorm * screenW
+                        val topPx = tile.topNorm * screenH
+                        val rightPx = tile.rightNorm * screenW
+                        val bottomPx = tile.bottomNorm * screenH
+
+                        val tWidth = rightPx - leftPx
+                        val tHeight = bottomPx - topPx
+                        val isRevealed = revealedTileIds[tile.id] == true
+
+                        if (tWidth > 30f && tHeight > 30f) {
+                            if (isRevealed) {
+                                // Translucent Surface Fill when revealed
+                                drawRoundRect(
+                                    color = tileGold.copy(alpha = 0.16f),
+                                    topLeft = Offset(leftPx, topPx),
+                                    size = androidx.compose.ui.geometry.Size(tWidth, tHeight),
+                                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(16f, 16f)
+                                )
+
+                                // Glowing Dashed Border when revealed
+                                drawRoundRect(
+                                    color = tileGold,
+                                    topLeft = Offset(leftPx, topPx),
+                                    size = androidx.compose.ui.geometry.Size(tWidth, tHeight),
+                                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(16f, 16f),
+                                    style = Stroke(
+                                        width = 3.dp.toPx(),
+                                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(20f, 10f), 0f)
+                                    )
+                                )
+                            } else {
+                                // Subtle boundary guide before clicking
+                                drawRoundRect(
+                                    color = Color.White.copy(alpha = 0.28f),
+                                    topLeft = Offset(leftPx, topPx),
+                                    size = androidx.compose.ui.geometry.Size(tWidth, tHeight),
+                                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(16f, 16f),
+                                    style = Stroke(
+                                        width = 1.5.dp.toPx(),
+                                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 12f), 0f)
+                                    )
+                                )
+                            }
+
+                            // Corner L-Brackets
+                            val bracketLen = minOf(tWidth, tHeight) * 0.20f
+                            val bracketColor = if (isRevealed) tileCyan else Color.White.copy(alpha = 0.65f)
+                            val bracketStroke = if (isRevealed) 3.5.dp.toPx() else 2.dp.toPx()
+                            // Top-Left
+                            drawLine(bracketColor, Offset(leftPx, topPx), Offset(leftPx + bracketLen, topPx), bracketStroke, StrokeCap.Round)
+                            drawLine(bracketColor, Offset(leftPx, topPx), Offset(leftPx, topPx + bracketLen), bracketStroke, StrokeCap.Round)
+                            // Top-Right
+                            drawLine(bracketColor, Offset(rightPx, topPx), Offset(rightPx - bracketLen, topPx), bracketStroke, StrokeCap.Round)
+                            drawLine(bracketColor, Offset(rightPx, topPx), Offset(rightPx, topPx + bracketLen), bracketStroke, StrokeCap.Round)
+                            // Bottom-Left
+                            drawLine(bracketColor, Offset(leftPx, bottomPx), Offset(leftPx + bracketLen, bottomPx), bracketStroke, StrokeCap.Round)
+                            drawLine(bracketColor, Offset(leftPx, bottomPx), Offset(leftPx, bottomPx - bracketLen), bracketStroke, StrokeCap.Round)
+                            // Bottom-Right
+                            drawLine(bracketColor, Offset(rightPx, bottomPx), Offset(rightPx - bracketLen, bottomPx), bracketStroke, StrokeCap.Round)
+                            drawLine(bracketColor, Offset(rightPx, bottomPx), Offset(rightPx, bottomPx - bracketLen), bracketStroke, StrokeCap.Round)
+                        }
                     }
                 }
 
@@ -793,28 +919,37 @@ fun ModernArCameraView(
                     ArMath.projectWorldToScreen(pt, viewMatrix, projectionMatrix, screenW, screenH)
                 }
 
-                // 3A. Floating Node Badges (起點 A, 終點 B, 節點 C...)
+                // 3A. Floating Node Badges (線段1 起點 A, 線段1 終點 B, 線段2 起點 C, 線段2 終點 D...)
+                val isArea = subMode == 1 || (subMode == 0 && autoDetectedType == "AREA")
                 projectedNodePoints.forEachIndexed { index, proj ->
                     if (proj != null) {
-                        val isStartNode = index == 0
-                        val isLastNode = index == capturedPoints.size - 1 && capturedPoints.size > 1
+                        val lineIndex = (index / 2) + 1
+                        val isStartNode = if (isArea) index == 0 else (index % 2 == 0)
+                        val isLastNode = if (isArea) (index == capturedPoints.size - 1 && capturedPoints.size > 1) else (index % 2 == 1)
                         val charLabel = ('A'.code + index).toChar()
 
-                        val labelText = when {
-                            isStartNode -> "起點 $charLabel"
-                            isLastNode -> "終點 $charLabel"
-                            else -> "節點 $charLabel"
+                        val labelText = if (isArea) {
+                            when {
+                                index == 0 -> "起點 $charLabel"
+                                index == capturedPoints.size - 1 -> "終點 $charLabel"
+                                else -> "頂點 $charLabel"
+                            }
+                        } else {
+                            if (isStartNode) "線段$lineIndex 起點 $charLabel" else "線段$lineIndex 終點 $charLabel"
                         }
 
+                        val badgeBg = if (isStartNode) colorPrimary else colorSecondary
+                        val badgeFg = if (isStartNode) colorOnPrimary else colorOnSecondary
+
                         Surface(
-                            color = if (isStartNode) colorPrimary else if (isLastNode) colorSecondary else colorSurfaceVariant,
-                            contentColor = if (isStartNode) colorOnPrimary else if (isLastNode) colorOnSecondary else colorOnSurfaceVariant,
+                            color = badgeBg,
+                            contentColor = badgeFg,
                             shape = RoundedCornerShape(12.dp),
                             shadowElevation = 6.dp,
                             modifier = Modifier
                                 .offset {
                                     androidx.compose.ui.unit.IntOffset(
-                                        (proj.first - 42.dp.toPx()).toInt(),
+                                        (proj.first - 48.dp.toPx()).toInt(),
                                         (proj.second - 48.dp.toPx()).toInt()
                                     )
                                 }
@@ -825,7 +960,7 @@ fun ModernArCameraView(
                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 Icon(
-                                    imageVector = if (isStartNode) Icons.Rounded.Flag else if (isLastNode) Icons.Rounded.SportsScore else Icons.Rounded.LocationOn,
+                                    imageVector = if (isStartNode) Icons.Rounded.Flag else Icons.Rounded.SportsScore,
                                     contentDescription = null,
                                     modifier = Modifier.size(13.dp)
                                 )
@@ -839,31 +974,33 @@ fun ModernArCameraView(
                     }
                 }
 
-                // 3B. Live Endpoint Preview Badge (When user has placed Start Point and is aiming for End Point)
-                if (capturedPoints.size == 1) {
-                    val nextChar = 'B'
+                // 3B. Live Endpoint Preview Badge (When user has placed Start Point and is aiming for End Point of current line)
+                if (capturedPoints.size % 2 == 1) {
+                    val currentLineNum = (capturedPoints.size / 2) + 1
+                    val nextChar = ('A'.code + capturedPoints.size).toChar()
                     Surface(
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
                         contentColor = MaterialTheme.colorScheme.onSurface,
-                        shape = RoundedCornerShape(12.dp),
-                        shadowElevation = 4.dp,
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, colorPrimary.copy(alpha = 0.6f)),
+                        shadowElevation = 6.dp,
                         modifier = Modifier
                             .align(Alignment.Center)
                             .offset(y = (-45).dp)
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
                         ) {
                             Icon(
                                 Icons.Rounded.AddLocationAlt,
                                 contentDescription = null,
                                 tint = colorPrimary,
-                                modifier = Modifier.size(14.dp)
+                                modifier = Modifier.size(15.dp)
                             )
                             Text(
-                                text = "終點 $nextChar (點擊定位)",
+                                text = "線段 $currentLineNum 終點 $nextChar (點擊定位)",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold
                             )
@@ -871,9 +1008,10 @@ fun ModernArCameraView(
                     }
                 }
 
-                // 3C. Capsules for confirmed line segments
+                // 3C. Capsules for confirmed line segments (兩點成一線，不共用點)
+                val stepVal = if (isArea) 1 else 2
                 if (capturedPoints.size >= 2) {
-                    for (i in 0 until capturedPoints.size - 1) {
+                    for (i in 0 until capturedPoints.size - 1 step stepVal) {
                         val mid3D = ArMath.midpoint(capturedPoints[i], capturedPoints[i + 1])
                         val midProj = ArMath.projectWorldToScreen(mid3D, viewMatrix, projectionMatrix, screenW, screenH)
                         if (midProj != null) {
@@ -883,6 +1021,7 @@ fun ModernArCameraView(
                             Surface(
                                 color = colorPrimaryContainer,
                                 shape = RoundedCornerShape(percent = 50),
+                                border = BorderStroke(1.dp, colorPrimary.copy(alpha = 0.5f)),
                                 shadowElevation = 6.dp,
                                 modifier = Modifier
                                     .offset {
@@ -905,7 +1044,9 @@ fun ModernArCameraView(
                 }
 
                 // 3D. Active dynamic measurement capsule positioned along the live line
-                if (capturedPoints.isNotEmpty()) {
+                // 兩點成一線：僅在奇數個點時（正延伸某條線段中），才在動態虛線上顯示即時距離膠囊
+                val isActivelyDrawingSegment = capturedPoints.size % 2 == 1
+                if (isActivelyDrawingSegment && capturedPoints.isNotEmpty()) {
                     val lastPt = capturedPoints.last()
                     val liveTarget = liveTargetPoint
 
@@ -937,6 +1078,203 @@ fun ModernArCameraView(
                         }
                     }
                 }
+
+                // 3E. AI Tile Pill Button with Blur Effect & Length/Width Reveal (藥丸狀模糊按鈕，點擊顯示長寬)
+                // 只有在真正偵測到磁磚時才顯示
+                if (detectedTiles.isNotEmpty()) {
+                    val tilesToDisplay = detectedTiles
+
+                    tilesToDisplay.forEach { tile ->
+                        val leftPx = tile.leftNorm * screenW
+                        val topPx = tile.topNorm * screenH
+                        val rightPx = tile.rightNorm * screenW
+                        val bottomPx = tile.bottomNorm * screenH
+
+                        val centerX = (leftPx + rightPx) / 2f
+                        val centerY = (topPx + bottomPx) / 2f
+
+                        val widthCmVal = tile.estimatedWidthCm
+                        val heightCmVal = tile.estimatedHeightCm
+
+                        val wMeters = widthCmVal / 100.0
+                        val hMeters = heightCmVal / 100.0
+
+                        val widthFormatted = viewModel.formatLength(wMeters, selectedUnit)
+                        val heightFormatted = viewModel.formatLength(hMeters, selectedUnit)
+                        val isRevealed = revealedTileIds[tile.id] == true
+
+                        // Top & Left Edge dimension badges are shown only after user taps the pill button
+                        if (isRevealed) {
+                            // 1. Top Edge Badge: 長 (Length)
+                            Surface(
+                                color = colorSurfaceContainerHighest.copy(alpha = 0.92f),
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, colorPrimary),
+                                shadowElevation = 6.dp,
+                                modifier = Modifier.offset {
+                                    androidx.compose.ui.unit.IntOffset(
+                                        (centerX - 48.dp.toPx()).toInt(),
+                                        (topPx - 34.dp.toPx()).toInt().coerceAtLeast(60)
+                                    )
+                                }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.Straighten,
+                                        contentDescription = null,
+                                        tint = colorPrimary,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Text(
+                                        text = "長 $widthFormatted",
+                                        color = colorOnSurface,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.ExtraBold
+                                    )
+                                }
+                            }
+
+                            // 2. Left Edge Badge: 寬 (Width)
+                            Surface(
+                                color = colorSurfaceContainerHighest.copy(alpha = 0.92f),
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, colorSecondary),
+                                shadowElevation = 6.dp,
+                                modifier = Modifier.offset {
+                                    androidx.compose.ui.unit.IntOffset(
+                                        (leftPx - 80.dp.toPx()).toInt().coerceAtLeast(10),
+                                        (centerY - 15.dp.toPx()).toInt()
+                                    )
+                                }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.Height,
+                                        contentDescription = null,
+                                        tint = colorSecondary,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Text(
+                                        text = "寬 $heightFormatted",
+                                        color = colorOnSurface,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.ExtraBold
+                                    )
+                                }
+                            }
+                        }
+
+                        // 3. Centered Pill Button with Blur Effect (藥丸狀模糊按鈕)
+                        Box(
+                            modifier = Modifier
+                                .offset {
+                                    androidx.compose.ui.unit.IntOffset(
+                                        (centerX - if (isRevealed) 110.dp.toPx() else 85.dp.toPx()).toInt(),
+                                        (centerY - 22.dp.toPx()).toInt()
+                                    )
+                                }
+                                .wrapContentSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            // Frosted Glass Blur Backdrop Layer (模糊效果背景)
+                            Box(
+                                modifier = Modifier
+                                    .matchParentSize()
+                                    .clip(RoundedCornerShape(50))
+                                    .blur(radius = 16.dp, edgeTreatment = BlurredEdgeTreatment.Unbounded)
+                                    .background(
+                                        brush = Brush.verticalGradient(
+                                            colors = listOf(
+                                                Color.White.copy(alpha = 0.35f),
+                                                colorSurfaceContainerHighest.copy(alpha = 0.60f)
+                                            )
+                                        )
+                                    )
+                            )
+
+                            // Interactive Pill Button Surface
+                            Surface(
+                                onClick = {
+                                    val nowRevealed = !(revealedTileIds[tile.id] ?: false)
+                                    revealedTileIds[tile.id] = nowRevealed
+                                    viewModel.triggerHapticFeedback()
+                                    if (nowRevealed) {
+                                        viewModel.selectTileForDetail(tile)
+                                    }
+                                },
+                                shape = RoundedCornerShape(50),
+                                color = if (isRevealed) colorPrimaryContainer.copy(alpha = 0.92f) else colorSurfaceContainerHighest.copy(alpha = 0.85f),
+                                contentColor = if (isRevealed) colorOnPrimaryContainer else colorOnSurface,
+                                border = BorderStroke(
+                                    1.5.dp,
+                                    if (isRevealed) colorPrimary else colorOutlineVariant.copy(alpha = 0.8f)
+                                ),
+                                shadowElevation = 10.dp,
+                                modifier = Modifier.testTag("tile_pill_button_${tile.id}")
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .padding(horizontal = 16.dp, vertical = 9.dp)
+                                        .animateContentSize(spring(dampingRatio = 0.8f, stiffness = 400f)),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    if (!isRevealed) {
+                                        // Before press: Pill button prompting to reveal dimensions
+                                        Icon(
+                                            imageVector = Icons.Rounded.GridOn,
+                                            contentDescription = "磁磚",
+                                            tint = colorPrimary,
+                                            modifier = Modifier.size(17.dp)
+                                        )
+                                        Text(
+                                            text = "磁磚 (點擊顯示長寬)",
+                                            color = colorOnSurface,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    } else {
+                                        // Pressed: Shows length and width!
+                                        Icon(
+                                            imageVector = Icons.Rounded.Straighten,
+                                            contentDescription = "尺寸",
+                                            tint = colorPrimary,
+                                            modifier = Modifier.size(17.dp)
+                                        )
+                                        Text(
+                                            text = "長 $widthFormatted × 寬 $heightFormatted",
+                                            color = colorOnPrimaryContainer,
+                                            fontSize = 13.5.sp,
+                                            fontWeight = FontWeight.ExtraBold
+                                        )
+                                        // Quick apply / lock measurement
+                                        IconButton(
+                                            onClick = {
+                                                viewModel.measureTileOneTap(tile)
+                                            },
+                                            modifier = Modifier.size(22.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.CheckCircle,
+                                                contentDescription = "鎖定測量",
+                                                tint = colorPrimary,
+                                                modifier = Modifier.size(17.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // 4. Redesigned Futuristic AR Target Reticle (Spring Snap Aura + Rotating Crosshair Ticks + Center Laser Pinpoint)
@@ -952,12 +1290,12 @@ fun ModernArCameraView(
                     // 1. Snapped Target Lock Radial Aura Glow
                     if (isSnapped) {
                         drawCircle(
-                            color = Color(0xFF00E5FF).copy(alpha = snapGlowAlphaAnimated * 0.45f),
+                            color = colorPrimary.copy(alpha = snapGlowAlphaAnimated * 0.45f),
                             center = center,
                             radius = currentRadius * 1.6f
                         )
                         drawCircle(
-                            color = Color(0xFF00E5FF).copy(alpha = snapGlowAlphaAnimated * 0.25f),
+                            color = colorPrimary.copy(alpha = snapGlowAlphaAnimated * 0.25f),
                             center = center,
                             radius = currentRadius * 2.2f
                         )
@@ -985,7 +1323,7 @@ fun ModernArCameraView(
                     if (sensorTelemetry.multiSampleProgress > 0f) {
                         val arcRadius = currentRadius + 5.dp.toPx()
                         drawArc(
-                            color = if (sensorTelemetry.isMultiSampleLocked) Color(0xFF00E676) else Color(0xFF00E5FF),
+                            color = if (sensorTelemetry.isMultiSampleLocked) colorTertiary else colorPrimary,
                             startAngle = -90f,
                             sweepAngle = sensorTelemetry.multiSampleProgress * 360f,
                             useCenter = false,
@@ -999,7 +1337,7 @@ fun ModernArCameraView(
                     val crossHairOffsetInner = currentRadius + 3.dp.toPx()
                     val crossHairLen = if (isSnapped) 10.dp.toPx() else 6.dp.toPx()
                     val crossHairStroke = if (isSnapped) 2.2.dp.toPx() else 1.6.dp.toPx()
-                    val tickColor = if (isSnapped) Color(0xFF00E5FF) else Color.White.copy(alpha = 0.9f)
+                    val tickColor = if (isSnapped) colorPrimary else Color.White.copy(alpha = 0.9f)
 
                     // Top Hairline
                     drawLine(
@@ -1064,7 +1402,7 @@ fun ModernArCameraView(
                             val pAlpha = ((sineVal + 1f) / 2f).coerceIn(0.25f, 0.9f)
 
                             drawCircle(
-                                color = Color(0xFF00E5FF).copy(alpha = pAlpha),
+                                color = colorPrimary.copy(alpha = pAlpha),
                                 center = Offset(px, py),
                                 radius = 2f * density
                             )
@@ -1174,10 +1512,10 @@ fun ModernArCameraView(
                             }
                         } else {
                             val stabilityColor = when (trackingStability.level) {
-                                StabilityLevel.HIGH -> Color(0xFF00E676)
-                                StabilityLevel.MODERATE -> Color(0xFF00E5FF)
-                                StabilityLevel.LOW -> Color(0xFFFFB74D)
-                                StabilityLevel.POOR -> Color(0xFFFF5252)
+                                StabilityLevel.HIGH -> colorTertiary
+                                StabilityLevel.MODERATE -> colorPrimary
+                                StabilityLevel.LOW -> colorSecondary
+                                StabilityLevel.POOR -> colorError
                             }
 
                             Surface(
@@ -1202,18 +1540,18 @@ fun ModernArCameraView(
                                             text = "${(trackingStability.confidenceScore * 100).toInt()}% 穩定",
                                             style = MaterialTheme.typography.labelMedium,
                                             fontWeight = FontWeight.SemiBold,
-                                            color = if (trackingStability.isDriftRisk) Color(0xFFFFD54F) else Color.White
+                                            color = if (trackingStability.isDriftRisk) colorError else Color.White
                                         )
                                         if (trackingStability.isFeatureDeficient) {
                                             Surface(
-                                                color = Color(0xFFFFB74D).copy(alpha = 0.22f),
+                                                color = colorError.copy(alpha = 0.22f),
                                                 shape = RoundedCornerShape(6.dp)
                                             ) {
                                                 Text(
                                                     text = "特徵少",
                                                     style = MaterialTheme.typography.labelSmall,
                                                     fontWeight = FontWeight.Bold,
-                                                    color = Color(0xFFFFB74D),
+                                                    color = colorError,
                                                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                                                 )
                                             }
@@ -1243,13 +1581,13 @@ fun ModernArCameraView(
                 ) {
                     // Unified AI Smart Tools Anchor & Dropdown Menu
                     Box {
-                        val isAnyAiActive = isMobileSamMode || isObjectronMode
+                        val isAnyAiActive = isMobileSamMode || isObjectronMode || isAiTileMode
                         IconButton(
                             onClick = { showAiToolsMenu = true },
                             modifier = Modifier
                                 .size(40.dp)
                                 .background(
-                                    if (isAnyAiActive) Color(0xFF00E5FF) else Color.Black.copy(alpha = 0.55f),
+                                    if (isAnyAiActive) colorPrimary else Color.Black.copy(alpha = 0.55f),
                                     CircleShape
                                 )
                                 .shadow(if (isAnyAiActive) 6.dp else 3.dp, CircleShape)
@@ -1258,7 +1596,7 @@ fun ModernArCameraView(
                             Icon(
                                 Icons.Rounded.AutoAwesome,
                                 contentDescription = "AI 智慧工具",
-                                tint = if (isAnyAiActive) Color(0xFF0D1B2A) else Color.White,
+                                tint = if (isAnyAiActive) colorOnPrimary else Color.White,
                                 modifier = Modifier.size(20.dp)
                             )
                         }
@@ -1266,7 +1604,7 @@ fun ModernArCameraView(
                         DropdownMenu(
                             expanded = showAiToolsMenu,
                             onDismissRequest = { showAiToolsMenu = false },
-                            modifier = Modifier.background(Color(0xFF1E293B))
+                            modifier = Modifier.background(colorSurfaceContainer)
                         ) {
                             DropdownMenuItem(
                                 text = {
@@ -1275,12 +1613,75 @@ fun ModernArCameraView(
                                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
                                         Text(
+                                            "磁磚規格: ${activeTilePreset.widthCm.toInt()}×${activeTilePreset.heightCm.toInt()} cm",
+                                            color = colorPrimary,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text("● 自動偵測中", color = colorPrimary, fontSize = 11.sp)
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Rounded.GridOn,
+                                        contentDescription = null,
+                                        tint = colorPrimary
+                                    )
+                                },
+                                onClick = {
+                                    // Cycle through tile presets: 60x60 -> 30x60 -> 80x80 -> 120x60 -> 30x30
+                                    val nextPreset = when (activeTilePreset) {
+                                        com.example.logic.ai.AiTilePreset.PRESET_60X60 -> com.example.logic.ai.AiTilePreset.PRESET_30X60
+                                        com.example.logic.ai.AiTilePreset.PRESET_30X60 -> com.example.logic.ai.AiTilePreset.PRESET_80X80
+                                        com.example.logic.ai.AiTilePreset.PRESET_80X80 -> com.example.logic.ai.AiTilePreset.PRESET_60X120
+                                        com.example.logic.ai.AiTilePreset.PRESET_60X120 -> com.example.logic.ai.AiTilePreset.PRESET_30X30
+                                        else -> com.example.logic.ai.AiTilePreset.PRESET_60X60
+                                    }
+                                    viewModel.setTilePreset(nextPreset)
+                                    val currentTv = textureViewRef
+                                    if (currentTv != null && currentTv.isAvailable) {
+                                        val bmp = currentTv.bitmap
+                                        if (bmp != null) viewModel.processFrameForTiles(bmp)
+                                    }
+                                    showAiToolsMenu = false
+                                }
+                            )
+
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "立即分析畫面磁磚",
+                                        color = colorOnSurface,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Rounded.CenterFocusStrong,
+                                        contentDescription = null,
+                                        tint = colorPrimary
+                                    )
+                                },
+                                onClick = {
+                                    val currentTv = textureViewRef
+                                    val bmp = if (currentTv != null && currentTv.isAvailable) currentTv.bitmap else null
+                                    viewModel.triggerAiTileDetection(bmp)
+                                    showAiToolsMenu = false
+                                }
+                            )
+
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
                                             "MobileSAM 邊界輪廓",
-                                            color = if (isMobileSamMode) Color(0xFF00E676) else Color.White,
+                                            color = if (isMobileSamMode) colorTertiary else colorOnSurface,
                                             fontWeight = if (isMobileSamMode) FontWeight.Bold else FontWeight.Normal
                                         )
                                         if (isMobileSamMode) {
-                                            Text("● 開啟", color = Color(0xFF00E676), fontSize = 11.sp)
+                                            Text("● 開啟", color = colorTertiary, fontSize = 11.sp)
                                         }
                                     }
                                 },
@@ -1288,7 +1689,7 @@ fun ModernArCameraView(
                                     Icon(
                                         Icons.Rounded.AutoAwesomeMosaic,
                                         contentDescription = null,
-                                        tint = if (isMobileSamMode) Color(0xFF00E676) else Color.White.copy(alpha = 0.7f)
+                                        tint = if (isMobileSamMode) colorTertiary else colorOnSurfaceVariant
                                     )
                                 },
                                 onClick = {
@@ -1305,11 +1706,11 @@ fun ModernArCameraView(
                                     ) {
                                         Text(
                                             "Objectron 3D 包絡方框",
-                                            color = if (isObjectronMode) Color(0xFF00E5FF) else Color.White,
+                                            color = if (isObjectronMode) colorSecondary else colorOnSurface,
                                             fontWeight = if (isObjectronMode) FontWeight.Bold else FontWeight.Normal
                                         )
                                         if (isObjectronMode) {
-                                            Text("● 開啟", color = Color(0xFF00E5FF), fontSize = 11.sp)
+                                            Text("● 開啟", color = colorSecondary, fontSize = 11.sp)
                                         }
                                     }
                                 },
@@ -1317,7 +1718,7 @@ fun ModernArCameraView(
                                     Icon(
                                         Icons.Rounded.ViewInAr,
                                         contentDescription = null,
-                                        tint = if (isObjectronMode) Color(0xFF00E5FF) else Color.White.copy(alpha = 0.7f)
+                                        tint = if (isObjectronMode) colorSecondary else colorOnSurfaceVariant
                                     )
                                 },
                                 onClick = {
@@ -1342,7 +1743,7 @@ fun ModernArCameraView(
                             modifier = Modifier
                                 .size(40.dp)
                                 .background(
-                                    if (isTorchOn) Color(0xFFFFD54F) else Color.Black.copy(alpha = 0.55f),
+                                    if (isTorchOn) colorPrimary else Color.Black.copy(alpha = 0.55f),
                                     CircleShape
                                 )
                                 .shadow(if (isTorchOn) 6.dp else 3.dp, CircleShape)
@@ -1351,7 +1752,7 @@ fun ModernArCameraView(
                             Icon(
                                 if (isTorchOn) Icons.Rounded.FlashlightOn else Icons.Rounded.FlashlightOff,
                                 contentDescription = "手電筒補光",
-                                tint = if (isTorchOn) Color(0xFF212121) else Color.White,
+                                tint = if (isTorchOn) colorOnPrimary else Color.White,
                                 modifier = Modifier.size(20.dp)
                             )
                         }
@@ -1361,7 +1762,7 @@ fun ModernArCameraView(
                             expanded = showTorchBrightnessMenu,
                             onDismissRequest = { showTorchBrightnessMenu = false },
                             modifier = Modifier
-                                .background(Color(0xFF1E293B))
+                                .background(colorSurfaceContainer)
                                 .widthIn(min = 220.dp)
                                 .padding(horizontal = 8.dp, vertical = 6.dp)
                         ) {
@@ -1381,19 +1782,19 @@ fun ModernArCameraView(
                                         Icon(
                                             Icons.Rounded.LightMode,
                                             contentDescription = null,
-                                            tint = Color(0xFFFFD54F),
+                                            tint = colorPrimary,
                                             modifier = Modifier.size(16.dp)
                                         )
                                         Text(
                                             "手電筒亮度",
-                                            color = Color.White,
+                                            color = colorOnSurface,
                                             fontSize = 13.sp,
                                             fontWeight = FontWeight.Bold
                                         )
                                     }
                                     Text(
                                         "${(torchBrightness * 100).toInt()}%",
-                                        color = Color(0xFFFFD54F),
+                                        color = colorPrimary,
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold
                                     )
@@ -1408,9 +1809,9 @@ fun ModernArCameraView(
                                     valueRange = 0.2f..1.0f,
                                     steps = 3, // 20%, 40%, 60%, 80%, 100%
                                     colors = SliderDefaults.colors(
-                                        thumbColor = Color(0xFFFFD54F),
-                                        activeTrackColor = Color(0xFFFFD54F),
-                                        inactiveTrackColor = Color.White.copy(alpha = 0.24f)
+                                        thumbColor = colorPrimary,
+                                        activeTrackColor = colorPrimary,
+                                        inactiveTrackColor = colorSurfaceVariant
                                     ),
                                     modifier = Modifier.fillMaxWidth()
                                 )
@@ -1428,7 +1829,7 @@ fun ModernArCameraView(
                                     ).forEach { (level, label) ->
                                         val isSelected = kotlin.math.abs(torchBrightness - level) < 0.12f
                                         Surface(
-                                            color = if (isSelected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.12f),
+                                            color = if (isSelected) colorPrimary else colorSurfaceVariant,
                                             shape = RoundedCornerShape(8.dp),
                                             modifier = Modifier
                                                 .clickable {
@@ -1437,7 +1838,7 @@ fun ModernArCameraView(
                                         ) {
                                             Text(
                                                 text = label,
-                                                color = if (isSelected) Color(0xFF212121) else Color.White,
+                                                color = if (isSelected) colorOnPrimary else colorOnSurfaceVariant,
                                                 fontSize = 11.sp,
                                                 fontWeight = FontWeight.SemiBold,
                                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
@@ -1447,7 +1848,7 @@ fun ModernArCameraView(
                                 }
 
                                 HorizontalDivider(
-                                    color = Color.White.copy(alpha = 0.15f),
+                                    color = colorOutlineVariant.copy(alpha = 0.5f),
                                     modifier = Modifier.padding(vertical = 4.dp)
                                 )
 
@@ -1458,7 +1859,8 @@ fun ModernArCameraView(
                                         showTorchBrightnessMenu = false
                                     },
                                     colors = ButtonDefaults.buttonColors(
-                                        containerColor = Color(0xFFEF4444)
+                                        containerColor = colorError,
+                                        contentColor = colorOnError
                                     ),
                                     shape = RoundedCornerShape(10.dp),
                                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
@@ -1469,6 +1871,29 @@ fun ModernArCameraView(
                                     Text("關閉手電筒", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
+                        }
+                    }
+
+                    // Quick Unit Switcher Button
+                    Surface(
+                        onClick = {
+                            val units = listOf("cm", "m", "in", "ft", "yd")
+                            val nextIndex = (units.indexOf(selectedUnit) + 1) % units.size
+                            viewModel.setSelectedUnit(units[nextIndex])
+                            viewModel.triggerHapticFeedback(com.example.ui.viewmodel.HapticType.CLICK)
+                        },
+                        shape = CircleShape,
+                        color = Color.Black.copy(alpha = 0.55f),
+                        shadowElevation = 3.dp,
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                text = selectedUnit.uppercase(),
+                                color = colorPrimary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
 
@@ -1506,6 +1931,57 @@ fun ModernArCameraView(
                 }
             }
         }
+
+            // 5B. Video Recording Active Top HUD & Screen Border (When recording video via long-press shutter)
+            if (isRecordingVideo) {
+                // Outer glowing recording border
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .border(width = 3.dp, color = Color(0xFFE53935).copy(alpha = 0.9f))
+                )
+
+                // Recording Time & REC Badge Pill
+                Surface(
+                    color = Color.Black.copy(alpha = 0.82f),
+                    contentColor = Color.White,
+                    shape = RoundedCornerShape(24.dp),
+                    border = BorderStroke(1.5.dp, Color(0xFFE53935)),
+                    shadowElevation = 10.dp,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .statusBarsPadding()
+                        .padding(top = 58.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Pulsing Red Dot
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .background(Color(0xFFE53935), CircleShape)
+                        )
+                        val mins = recordingSeconds / 60
+                        val secs = recordingSeconds % 60
+                        Text(
+                            text = String.format("REC %02d:%02d", mins, secs),
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
+                        Text(
+                            text = "· 點擊快門停止",
+                            color = Color.White.copy(alpha = 0.85f),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
 
             // 6. Bottom Dynamic Control Deck (+ / ✓ Button & Camera Shutter)
             var isShutterFlash by remember { mutableStateOf(false) }
@@ -1574,21 +2050,35 @@ fun ModernArCameraView(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
+                                val isArea = autoDetectedType == "AREA" && capturedPoints.size >= 3
+                                val isHeight = autoDetectedType == "HEIGHT" && capturedPoints.size >= 2
+                                val completedLinesCount = capturedPoints.size / 2
+                                val isOddPoint = capturedPoints.size % 2 == 1
+
                                 val (badgeText, badgeIcon) = when {
                                     isObjectronMode && objectron3DBox != null ->
                                         "3D體積: ${"%.1f".format(objectron3DBox!!.volumeM3 * 1000.0)} L (${"%.0f".format(objectron3DBox!!.widthMeters * 100)}×${"%.0f".format(objectron3DBox!!.heightMeters * 100)}×${"%.0f".format(objectron3DBox!!.depthMeters * 100)}cm)" to Icons.Rounded.ViewInAr
-                                    autoDetectedType == "AREA" && capturedPoints.size >= 3 ->
+                                    isArea ->
                                         "面積: ${viewModel.formatArea(area, selectedUnit)}" to Icons.Rounded.SquareFoot
-                                    autoDetectedType == "HEIGHT" && capturedPoints.size >= 2 ->
+                                    isHeight ->
                                         "高度: ${viewModel.formatLength(height, selectedUnit)}" to Icons.Rounded.Height
+                                    isOddPoint -> {
+                                        val curDist = liveDistanceMeters ?: 0.0
+                                        val curStr = if (curDist > 0.0) viewModel.formatLength(curDist, selectedUnit) else "..."
+                                        "繪製線段 ${completedLinesCount + 1}: $curStr" to Icons.Rounded.Straighten
+                                    }
+                                    completedLinesCount == 1 ->
+                                        "長度: ${viewModel.formatLength(totalLen, selectedUnit)}" to Icons.Rounded.Straighten
+                                    completedLinesCount > 1 ->
+                                        "$completedLinesCount 條線段 (總長: ${viewModel.formatLength(totalLen, selectedUnit)})" to Icons.Rounded.Straighten
                                     else ->
-                                        "總長: ${viewModel.formatLength(totalLen, selectedUnit)}" to Icons.Rounded.Straighten
+                                        "長度: ${viewModel.formatLength(totalLen, selectedUnit)}" to Icons.Rounded.Straighten
                                 }
 
                                 Icon(
                                     badgeIcon,
                                     contentDescription = null,
-                                    tint = if (isObjectronMode) Color(0xFF00E5FF) else colorPrimary,
+                                    tint = if (isObjectronMode) colorSecondary else colorPrimary,
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Text(
@@ -1607,8 +2097,8 @@ fun ModernArCameraView(
                             border = BorderStroke(
                                 1.dp,
                                 when {
-                                    isMobileSamMode -> Color(0xFF00E676).copy(alpha = 0.6f)
-                                    isObjectronMode -> Color(0xFF00E5FF).copy(alpha = 0.5f)
+                                    isMobileSamMode -> colorTertiary.copy(alpha = 0.6f)
+                                    isObjectronMode -> colorSecondary.copy(alpha = 0.5f)
                                     else -> Color.White.copy(alpha = 0.15f)
                                 }
                             ),
@@ -1632,15 +2122,15 @@ fun ModernArCameraView(
                                 horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 if (isMobileSamMode && segmentedObject != null) {
-                                    Icon(Icons.Rounded.AutoAwesomeMosaic, null, tint = Color(0xFF00E676), modifier = Modifier.size(16.dp))
+                                    Icon(Icons.Rounded.AutoAwesomeMosaic, null, tint = colorTertiary, modifier = Modifier.size(16.dp))
                                     Text(
                                         text = "SAM ${segmentedObject!!.label}: ${"%.2f".format(segmentedObject!!.areaM2)} m² (輕觸一鍵鎖定)",
-                                        color = Color(0xFF00E676),
+                                        color = colorTertiary,
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold
                                     )
                                 } else if (isMobileSamMode) {
-                                    Icon(Icons.Rounded.TouchApp, null, tint = Color(0xFF00E676), modifier = Modifier.size(16.dp))
+                                    Icon(Icons.Rounded.TouchApp, null, tint = colorTertiary, modifier = Modifier.size(16.dp))
                                     Text(
                                         text = "輕觸畫面任意物件，即時分割邊界與面積",
                                         color = Color.White,
@@ -1648,10 +2138,10 @@ fun ModernArCameraView(
                                         fontWeight = FontWeight.Medium
                                     )
                                 } else if (isObjectronMode && objectron3DBox != null) {
-                                    Icon(Icons.Rounded.ViewInAr, null, tint = Color(0xFF00E5FF), modifier = Modifier.size(16.dp))
+                                    Icon(Icons.Rounded.ViewInAr, null, tint = colorSecondary, modifier = Modifier.size(16.dp))
                                     Text(
                                         text = "AI 3D方框: ${"%.0f".format(objectron3DBox!!.widthMeters * 100)}×${"%.0f".format(objectron3DBox!!.heightMeters * 100)}×${"%.0f".format(objectron3DBox!!.depthMeters * 100)} cm (輕觸鎖定)",
-                                        color = Color(0xFF00E5FF),
+                                        color = colorSecondary,
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold
                                     )
@@ -1730,7 +2220,7 @@ fun ModernArCameraView(
                                     Icon(
                                         Icons.Rounded.DeleteSweep,
                                         contentDescription = "Clear",
-                                        tint = Color(0xFFFF8A80),
+                                        tint = colorError,
                                         modifier = Modifier.size(20.dp)
                                     )
                                 }
@@ -1861,18 +2351,41 @@ fun ModernArCameraView(
                                 }
                             }
 
-                            // Camera Shutter Button (Pixel Camera Style)
+                            // Camera Shutter Button (Pixel Camera Style: Tap to take Photo, Long-Press to Record Video)
                             PixelShutterButton(
                                 size = 52.dp,
+                                isRecording = isRecordingVideo,
                                 onClick = {
                                     haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                    isShutterFlash = true
-                                    coroutineScope.launch {
-                                        kotlinx.coroutines.delay(100)
-                                        isShutterFlash = false
+                                    if (isRecordingVideo) {
+                                        // Stop Video Recording
+                                        videoRecorder.stopRecording { videoPath, thumbPath, durationSec ->
+                                            Toast.makeText(context, "🎬 已完成測量錄影並儲存至相簿 (${durationSec}秒)", Toast.LENGTH_LONG).show()
+                                            if (videoPath != null) {
+                                                viewModel.saveMeasurementRecord(
+                                                    imagePath = thumbPath ?: videoPath,
+                                                    customNotes = "AR 測量錄影 (${durationSec}秒): $videoPath"
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        // Capture Photo Snapshot
+                                        isShutterFlash = true
+                                        coroutineScope.launch {
+                                            kotlinx.coroutines.delay(100)
+                                            isShutterFlash = false
+                                        }
+                                        ShareUtility.captureViewSnapshot(localView) { path ->
+                                            viewModel.saveMeasurementRecord(imagePath = path)
+                                        }
                                     }
-                                    ShareUtility.captureViewSnapshot(localView) { path ->
-                                        viewModel.saveMeasurementRecord(imagePath = path)
+                                },
+                                onLongClick = {
+                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                    if (!isRecordingVideo) {
+                                        videoRecorder.startRecording(localView) {
+                                            Toast.makeText(context, "🔴 開始 AR 測量錄影 (點擊快門鍵停止)", Toast.LENGTH_SHORT).show()
+                                        }
                                     }
                                 },
                                 modifier = Modifier.padding(end = 16.dp),
@@ -1883,6 +2396,19 @@ fun ModernArCameraView(
                 }
             }
         }
+    }
+
+    // Tile Detail Bottom Sheet (Only show if a genuine tile is selected or detected)
+    val tileForDetail = selectedTileForDetail ?: if (showTileDetailSheet) detectedTiles.firstOrNull() else null
+    if (tileForDetail != null) {
+        TileDetailBottomSheet(
+            tile = tileForDetail,
+            viewModel = viewModel,
+            onDismiss = {
+                showTileDetailSheet = false
+                viewModel.selectTileForDetail(null)
+            }
+        )
     }
 
     // Help Dialog
@@ -2166,13 +2692,13 @@ private fun GuidanceTipChip(
             Icon(
                 icon,
                 contentDescription = null,
-                tint = Color(0xFF00E5FF),
+                tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(13.dp)
             )
             Text(
                 text = text,
                 style = MaterialTheme.typography.labelSmall,
-                color = Color.White.copy(alpha = 0.9f),
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f),
                 fontWeight = FontWeight.Medium
             )
         }
@@ -2200,12 +2726,15 @@ fun PlaneDetectionInstructionOverlay(
         label = "tiltAngle"
     )
 
+    val surfaceColor = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.94f)
+    val accentColor = if (isInitialized) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary
+
     Surface(
-        color = Color(0xEB0D1B2A),
+        color = surfaceColor,
         shape = RoundedCornerShape(22.dp),
         border = BorderStroke(
             1.dp,
-            if (isInitialized) Color(0xFF00E676).copy(alpha = 0.6f) else Color(0xFF00E5FF).copy(alpha = 0.35f)
+            accentColor.copy(alpha = if (isInitialized) 0.6f else 0.35f)
         ),
         modifier = modifier
             .fillMaxWidth()
@@ -2229,7 +2758,7 @@ fun PlaneDetectionInstructionOverlay(
                         modifier = Modifier
                             .size(42.dp)
                             .background(
-                                if (isInitialized) Color(0xFF00E676).copy(alpha = 0.18f) else Color(0xFF00E5FF).copy(alpha = 0.15f),
+                                accentColor.copy(alpha = if (isInitialized) 0.18f else 0.15f),
                                 CircleShape
                             ),
                         contentAlignment = Alignment.Center
@@ -2238,14 +2767,14 @@ fun PlaneDetectionInstructionOverlay(
                             Icon(
                                 Icons.Rounded.CheckCircle,
                                 contentDescription = null,
-                                tint = Color(0xFF00E676),
+                                tint = accentColor,
                                 modifier = Modifier.size(24.dp)
                             )
                         } else {
                             Icon(
                                 Icons.Rounded.ScreenRotation,
                                 contentDescription = null,
-                                tint = Color(0xFF00E5FF),
+                                tint = accentColor,
                                 modifier = Modifier
                                     .size(24.dp)
                                     .graphicsLayer {
@@ -2260,7 +2789,7 @@ fun PlaneDetectionInstructionOverlay(
                             text = if (isInitialized) "空間平面偵測完成 ✨" else "緩慢平移裝置以建立空間偵測",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
-                            color = Color.White
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
@@ -2272,7 +2801,7 @@ fun PlaneDetectionInstructionOverlay(
                                 else -> "請將相機對準地面或桌面，緩慢左右平移以初始化 AR 空間"
                             },
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (isInitialized) Color(0xFF00E676) else Color.White.copy(alpha = 0.8f),
+                            color = if (isInitialized) accentColor else MaterialTheme.colorScheme.onSurfaceVariant,
                             lineHeight = 16.sp
                         )
                     }
@@ -2320,10 +2849,11 @@ fun ActiveTrackingStabilityWarningBanner(
     onActionClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val bannerColor = if (stability.level == StabilityLevel.POOR) Color(0xFFFF5252) else Color(0xFFFF9800)
+    val bannerColor = if (stability.level == StabilityLevel.POOR) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.errorContainer
+    val bannerTextColor = if (stability.level == StabilityLevel.POOR) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onErrorContainer
 
     Surface(
-        color = Color(0xF518120C),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.95f),
         shape = RoundedCornerShape(20.dp),
         border = BorderStroke(1.5.dp, bannerColor.copy(alpha = 0.85f)),
         modifier = modifier
@@ -2361,7 +2891,7 @@ fun ActiveTrackingStabilityWarningBanner(
                     text = stability.warningMessage ?: "特徵點不足，請慢速平移相機",
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White
+                    color = MaterialTheme.colorScheme.onSurface
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
@@ -2372,7 +2902,7 @@ fun ActiveTrackingStabilityWarningBanner(
                         else -> "慢速平移能建立穩固特徵點，防止測量偏移"
                     },
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.84f),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     lineHeight = 15.sp
                 )
             }
@@ -2387,7 +2917,7 @@ fun ActiveTrackingStabilityWarningBanner(
                     text = if (stability.isLightingDeficient) "補光" else "診斷",
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
                 )
             }
@@ -2405,10 +2935,10 @@ fun ArStabilityDiagnosticsDialog(
     onDismiss: () -> Unit
 ) {
     val levelColor = when (stability.level) {
-        StabilityLevel.HIGH -> Color(0xFF00E676)
-        StabilityLevel.MODERATE -> Color(0xFF00E5FF)
-        StabilityLevel.LOW -> Color(0xFFFFB74D)
-        StabilityLevel.POOR -> Color(0xFFFF5252)
+        StabilityLevel.HIGH -> MaterialTheme.colorScheme.tertiary
+        StabilityLevel.MODERATE -> MaterialTheme.colorScheme.primary
+        StabilityLevel.LOW -> MaterialTheme.colorScheme.secondary
+        StabilityLevel.POOR -> MaterialTheme.colorScheme.error
     }
 
     val levelText = when (stability.level) {
@@ -2496,7 +3026,7 @@ fun ArStabilityDiagnosticsDialog(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Rounded.Grain, null, tint = if (stability.isFeatureDeficient) Color(0xFFFFB74D) else Color(0xFF00E5FF), modifier = Modifier.size(16.dp))
+                            Icon(Icons.Rounded.Grain, null, tint = if (stability.isFeatureDeficient) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
                             Text("空間特徵點數量", style = MaterialTheme.typography.bodySmall)
                         }
@@ -2504,7 +3034,7 @@ fun ArStabilityDiagnosticsDialog(
                             "${stability.featurePointsCount} 個 (${if (stability.isFeatureDeficient) "⚠️ 偏少" else "充足"})",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
-                            color = if (stability.isFeatureDeficient) Color(0xFFFFB74D) else MaterialTheme.colorScheme.onSurface
+                            color = if (stability.isFeatureDeficient) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
                         )
                     }
 
@@ -2515,7 +3045,7 @@ fun ArStabilityDiagnosticsDialog(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Rounded.Speed, null, tint = if (stability.isMotionExcessive) Color(0xFFFF5252) else Color(0xFF00E676), modifier = Modifier.size(16.dp))
+                            Icon(Icons.Rounded.Speed, null, tint = if (stability.isMotionExcessive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
                             Text("相機平移速度", style = MaterialTheme.typography.bodySmall)
                         }
@@ -2523,7 +3053,7 @@ fun ArStabilityDiagnosticsDialog(
                             "${"%.2f".format(stability.cameraSpeedMps)} m/s (${if (stability.isMotionExcessive) "⚠️ 過快" else "慢速穩定"})",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
-                            color = if (stability.isMotionExcessive) Color(0xFFFF5252) else MaterialTheme.colorScheme.onSurface
+                            color = if (stability.isMotionExcessive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
                         )
                     }
 
@@ -2534,7 +3064,7 @@ fun ArStabilityDiagnosticsDialog(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Rounded.Layers, null, tint = Color(0xFF00E5FF), modifier = Modifier.size(16.dp))
+                            Icon(Icons.Rounded.Layers, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
                             Text("環境辨識平面", style = MaterialTheme.typography.bodySmall)
                         }
@@ -2553,7 +3083,7 @@ fun ArStabilityDiagnosticsDialog(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Rounded.WbSunny, null, tint = if (stability.isLightingDeficient) Color(0xFFFFB74D) else Color(0xFFFFD54F), modifier = Modifier.size(16.dp))
+                            Icon(Icons.Rounded.WbSunny, null, tint = if (stability.isLightingDeficient) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
                             Text("環境照度指標", style = MaterialTheme.typography.bodySmall)
                         }
@@ -2561,7 +3091,7 @@ fun ArStabilityDiagnosticsDialog(
                             "${"%.2f".format(stability.lightIntensity)} (${if (stability.isLightingDeficient) "⚠️ 偏暗" else "充足"})",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
-                            color = if (stability.isLightingDeficient) Color(0xFFFFB74D) else MaterialTheme.colorScheme.onSurface
+                            color = if (stability.isLightingDeficient) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
                         )
                     }
                 }
