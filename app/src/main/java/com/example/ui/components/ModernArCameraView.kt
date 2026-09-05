@@ -124,8 +124,9 @@ fun ModernArCameraView(
     var showPlaneGuidanceOverlay by remember { mutableStateOf(true) }
     var showAiToolsMenu by remember { mutableStateOf(false) }
 
-    // Lifecycle sync for ARCore
+    // Lifecycle sync for ARCore & Camera
     DisposableEffect(lifecycleOwner) {
+        viewModel.onResume()
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_RESUME -> viewModel.onResume()
@@ -136,6 +137,7 @@ fun ModernArCameraView(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+            viewModel.onPause()
         }
     }
 
@@ -278,7 +280,12 @@ fun ModernArCameraView(
                             session = session,
                             modernArEngine = viewModel.modernArEngine,
                             viewModel = viewModel
-                        )
+                        ).apply {
+                            onResume()
+                        }
+                    },
+                    update = { view ->
+                        (view as? ModernArGlView)?.onResume()
                     },
                     onRelease = { view ->
                         (view as? android.opengl.GLSurfaceView)?.onPause()
@@ -337,9 +344,16 @@ fun ModernArCameraView(
                             override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
                         }
 
+                        // If SurfaceTexture is already available immediately on creation/reattachment
+                        if (textureView.isAvailable) {
+                            camera2Manager.openCameraAndStartSession(textureView) { isHighSpeed, size ->
+                                android.util.Log.i("CameraView", "Session ready (immediate). HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
+                            }
+                        }
+
                         textureView
                     },
-                    onRelease = {
+                    onRelease = { view ->
                         viewModel.setHighSpeedCamera2Manager(null)
                     },
                     modifier = Modifier

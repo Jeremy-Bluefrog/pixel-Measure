@@ -8,6 +8,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
@@ -39,7 +40,7 @@ fun RulerComponent(
 
     val textPaint = remember(colorOnSurface) {
         android.graphics.Paint().apply {
-            color = android.graphics.Color.argb(180, 100, 116, 139)
+            color = colorOnSurface.copy(alpha = 0.8f).toArgb()
             textSize = 28f
             isAntiAlias = true
             textAlign = android.graphics.Paint.Align.RIGHT

@@ -231,43 +231,43 @@ fun MainScreen(viewModel: MeasureViewModel) {
                     if (targetState > initialState) {
                         // Forward transition: Camera AR -> Ruler (Slide from right with scale and fade)
                         (slideInHorizontally(
-                            initialOffsetX = { fullWidth -> (fullWidth * 0.2f).toInt() },
-                            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
+                            initialOffsetX = { fullWidth -> (fullWidth * 0.15f).toInt() },
+                            animationSpec = spring(dampingRatio = 0.85f, stiffness = 420f)
                         ) + fadeIn(
-                            animationSpec = tween(300, easing = FastOutSlowInEasing)
+                            animationSpec = tween(220, easing = LinearOutSlowInEasing)
                         ) + scaleIn(
-                            initialScale = 0.96f,
-                            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
+                            initialScale = 0.98f,
+                            animationSpec = spring(dampingRatio = 0.85f, stiffness = 420f)
                         )).togetherWith(
                             slideOutHorizontally(
-                                targetOffsetX = { fullWidth -> (-fullWidth * 0.2f).toInt() },
-                                animationSpec = tween(220, easing = FastOutSlowInEasing)
+                                targetOffsetX = { fullWidth -> (-fullWidth * 0.15f).toInt() },
+                                animationSpec = tween(180, easing = FastOutLinearInEasing)
                             ) + fadeOut(
-                                animationSpec = tween(200, easing = FastOutSlowInEasing)
+                                animationSpec = tween(150, easing = FastOutLinearInEasing)
                             ) + scaleOut(
-                                targetScale = 0.96f,
-                                animationSpec = tween(200, easing = FastOutSlowInEasing)
+                                targetScale = 0.98f,
+                                animationSpec = tween(180, easing = FastOutLinearInEasing)
                             )
                         )
                     } else {
                         // Backward transition: Ruler -> Camera AR (Slide from left with scale and fade)
                         (slideInHorizontally(
-                            initialOffsetX = { fullWidth -> (-fullWidth * 0.2f).toInt() },
-                            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
+                            initialOffsetX = { fullWidth -> (-fullWidth * 0.15f).toInt() },
+                            animationSpec = spring(dampingRatio = 0.85f, stiffness = 420f)
                         ) + fadeIn(
-                            animationSpec = tween(300, easing = FastOutSlowInEasing)
+                            animationSpec = tween(220, easing = LinearOutSlowInEasing)
                         ) + scaleIn(
-                            initialScale = 0.96f,
-                            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
+                            initialScale = 0.98f,
+                            animationSpec = spring(dampingRatio = 0.85f, stiffness = 420f)
                         )).togetherWith(
                             slideOutHorizontally(
-                                targetOffsetX = { fullWidth -> (fullWidth * 0.2f).toInt() },
-                                animationSpec = tween(220, easing = FastOutSlowInEasing)
+                                targetOffsetX = { fullWidth -> (fullWidth * 0.15f).toInt() },
+                                animationSpec = tween(180, easing = FastOutLinearInEasing)
                             ) + fadeOut(
-                                animationSpec = tween(200, easing = FastOutSlowInEasing)
+                                animationSpec = tween(150, easing = FastOutLinearInEasing)
                             ) + scaleOut(
-                                targetScale = 0.96f,
-                                animationSpec = tween(200, easing = FastOutSlowInEasing)
+                                targetScale = 0.98f,
+                                animationSpec = tween(180, easing = FastOutLinearInEasing)
                             )
                         )
                     }

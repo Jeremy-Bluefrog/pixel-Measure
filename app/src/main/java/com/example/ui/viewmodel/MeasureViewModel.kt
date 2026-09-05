@@ -224,11 +224,18 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     val scaleCalibrationFactor = MutableStateFlow(prefs.getFloat("scale_calibration_factor", 1.0000f))
 
     val highFpsModeEnabled = MutableStateFlow(prefs.getBoolean("high_fps_mode_enabled", true))
+    val highDefinitionQualityEnabled = MutableStateFlow(prefs.getBoolean("high_definition_quality_enabled", true))
 
     fun setHighFpsModeEnabled(enabled: Boolean) {
         highFpsModeEnabled.value = enabled
         prefs.edit().putBoolean("high_fps_mode_enabled", enabled).apply()
         _toastMessage.tryEmit(if (enabled) "已啟用 60Hz 高幀率相機預覽" else "已切換至標準幀率")
+    }
+
+    fun setHighDefinitionQualityEnabled(enabled: Boolean) {
+        highDefinitionQualityEnabled.value = enabled
+        prefs.edit().putBoolean("high_definition_quality_enabled", enabled).apply()
+        _toastMessage.tryEmit(if (enabled) "已啟用 Full HD/4K 超高畫質模式" else "已切換至標準畫質模式")
     }
 
     fun setSensorCorrectionEnabled(enabled: Boolean) {

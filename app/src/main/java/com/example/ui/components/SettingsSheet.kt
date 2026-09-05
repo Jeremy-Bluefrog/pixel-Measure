@@ -39,6 +39,7 @@ fun SettingsSheet(
     val showPointCloud by viewModel.showPointCloud.collectAsState()
     val selectedUnit by viewModel.selectedUnit.collectAsState()
     val highFpsModeEnabled by viewModel.highFpsModeEnabled.collectAsState()
+    val highDefinitionQualityEnabled by viewModel.highDefinitionQualityEnabled.collectAsState()
     val sensorCorrectionEnabled by viewModel.sensorCorrectionEnabled.collectAsState()
     val torchBrightness by viewModel.torchBrightness.collectAsState()
 
@@ -153,6 +154,21 @@ fun SettingsSheet(
                             }
                         }
                     }
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 12.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                    )
+
+                    // High Definition Quality
+                    SettingsSwitchRow(
+                        icon = Icons.Rounded.Hd,
+                        title = "超高清晰度畫質 (Ultra HD / 1080p+)",
+                        subtitle = "開啟最高解像度感測器採樣與降噪銳化演算法",
+                        checked = highDefinitionQualityEnabled,
+                        onCheckedChange = { viewModel.setHighDefinitionQualityEnabled(it) },
+                        testTag = "switch_high_definition"
+                    )
 
                     HorizontalDivider(
                         modifier = Modifier.padding(vertical = 12.dp),

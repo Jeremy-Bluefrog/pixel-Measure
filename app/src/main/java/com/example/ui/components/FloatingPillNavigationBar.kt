@@ -18,6 +18,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
@@ -63,12 +64,12 @@ fun FloatingPillNavigationBar(
 ) {
     val haptic = LocalHapticFeedback.current
 
-    // Colors matching user reference screenshot
-    val containerBg = Color.White.copy(alpha = 0.96f)
-    val borderColor = Color(0xFFCAD4DE)
-    val activePillBg = Color(0xFFD6E9F7)
-    val activeContentColor = Color(0xFF1E3A5F)
-    val inactiveIconColor = Color(0xFF2C445E)
+    // Dynamic Material 3 Color Scheme
+    val containerBg = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f)
+    val borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+    val activePillBg = MaterialTheme.colorScheme.primaryContainer
+    val activeContentColor = MaterialTheme.colorScheme.onPrimaryContainer
+    val inactiveIconColor = MaterialTheme.colorScheme.onSurfaceVariant
 
     Surface(
         modifier = modifier
@@ -95,30 +96,30 @@ fun FloatingPillNavigationBar(
 
                 val backgroundColor by animateColorAsState(
                     targetValue = if (isSelected) activePillBg else Color.Transparent,
-                    animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                    animationSpec = spring(stiffness = Spring.StiffnessMedium),
                     label = "pillBgColor"
                 )
 
                 val contentColor by animateColorAsState(
                     targetValue = if (isSelected) activeContentColor else inactiveIconColor,
-                    animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                    animationSpec = spring(stiffness = Spring.StiffnessMedium),
                     label = "pillContentColor"
                 )
 
                 val pillScale by animateFloatAsState(
-                    targetValue = if (isSelected) 1.04f else 0.95f,
+                    targetValue = if (isSelected) 1.02f else 0.98f,
                     animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessMediumLow
+                        dampingRatio = Spring.DampingRatioLowBouncy,
+                        stiffness = Spring.StiffnessMedium
                     ),
                     label = "pillScale"
                 )
 
                 val iconScale by animateFloatAsState(
-                    targetValue = if (isSelected) 1.12f else 1.0f,
+                    targetValue = if (isSelected) 1.08f else 1.0f,
                     animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessLow
+                        dampingRatio = Spring.DampingRatioLowBouncy,
+                        stiffness = Spring.StiffnessMedium
                     ),
                     label = "iconScale"
                 )
@@ -142,8 +143,8 @@ fun FloatingPillNavigationBar(
                         )
                         .animateContentSize(
                             animationSpec = spring(
-                                dampingRatio = Spring.DampingRatioMediumBouncy,
-                                stiffness = Spring.StiffnessMediumLow
+                                dampingRatio = Spring.DampingRatioLowBouncy,
+                                stiffness = Spring.StiffnessMedium
                             )
                         )
                         .minimumInteractiveComponentSize()

@@ -53,15 +53,15 @@ fun TileFloatingControlDeck(
         // Main Clean Glassmorphic Tile Hub Card
         Surface(
             shape = RoundedCornerShape(22.dp),
-            color = Color(0xF2121520),
+            color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.95f),
             shadowElevation = 12.dp,
             border = BorderStroke(
                 1.dp,
                 Brush.horizontalGradient(
                     colors = listOf(
-                        Color(0xFF80D8FF).copy(alpha = 0.7f),
-                        Color(0xFFBA68C8).copy(alpha = 0.6f),
-                        Color(0xFFFFD54F).copy(alpha = 0.7f)
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                        MaterialTheme.colorScheme.secondary.copy(alpha = 0.6f),
+                        MaterialTheme.colorScheme.tertiary.copy(alpha = 0.7f)
                     )
                 )
             ),
@@ -88,11 +88,10 @@ fun TileFloatingControlDeck(
                                 .background(
                                     Brush.sweepGradient(
                                         colors = listOf(
-                                            Color(0xFFFFB74D),
-                                            Color(0xFFFF4081),
-                                            Color(0xFF7C4DFF),
-                                            Color(0xFF00E5FF),
-                                            Color(0xFFFFB74D)
+                                            MaterialTheme.colorScheme.primary,
+                                            MaterialTheme.colorScheme.secondary,
+                                            MaterialTheme.colorScheme.tertiary,
+                                            MaterialTheme.colorScheme.primary
                                         )
                                     )
                                 ),
@@ -101,7 +100,7 @@ fun TileFloatingControlDeck(
                             Icon(
                                 imageVector = Icons.Rounded.SquareFoot,
                                 contentDescription = "Tile Measurement",
-                                tint = Color.White,
+                                tint = MaterialTheme.colorScheme.onPrimary,
                                 modifier = Modifier.size(20.dp)
                             )
                         }
@@ -109,12 +108,12 @@ fun TileFloatingControlDeck(
                         Column {
                             Text(
                                 text = "磁磚尺寸 (公分)",
-                                color = Color.White.copy(alpha = 0.7f),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontSize = 11.sp
                             )
                             Text(
                                 text = "${df.format(widthCm)} × ${df.format(heightCm)} cm",
-                                color = Color.White,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.Bold
                             )
@@ -123,9 +122,9 @@ fun TileFloatingControlDeck(
 
                     // Area Badge
                     Surface(
-                        color = Color(0xFF00E5FF).copy(alpha = 0.15f),
+                        color = MaterialTheme.colorScheme.secondaryContainer,
                         shape = RoundedCornerShape(12.dp),
-                        border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.35f))
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.5f))
                     ) {
                         Column(
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
@@ -133,12 +132,12 @@ fun TileFloatingControlDeck(
                         ) {
                             Text(
                                 text = "磁磚面積",
-                                color = Color.White.copy(alpha = 0.7f),
+                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f),
                                 fontSize = 10.sp
                             )
                             Text(
                                 text = "${df.format(areaCm2)} cm²",
-                                color = Color(0xFF80D8FF),
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.ExtraBold
                             )
@@ -146,7 +145,7 @@ fun TileFloatingControlDeck(
                     }
                 }
 
-                HorizontalDivider(color = Color.White.copy(alpha = 0.12f))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
                 // Bottom Row: Clean Action Controls (One-Tap Measure, View Details, Re-Scan)
                 Row(
@@ -180,9 +179,9 @@ fun TileFloatingControlDeck(
                     OutlinedButton(
                         onClick = onOpenDetailSheet,
                         colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = Color(0xFFFFD54F)
+                            contentColor = MaterialTheme.colorScheme.tertiary
                         ),
-                        border = BorderStroke(1.dp, Color(0xFFFFD54F).copy(alpha = 0.6f)),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.7f)),
                         shape = RoundedCornerShape(14.dp),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp),
                         modifier = Modifier.weight(1f)
@@ -198,9 +197,9 @@ fun TileFloatingControlDeck(
 
                     // 3. Rescan AI Core Button
                     Surface(
-                        color = Color.White.copy(alpha = 0.1f),
+                        color = MaterialTheme.colorScheme.surfaceContainer,
                         shape = RoundedCornerShape(14.dp),
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.15f)),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                         modifier = Modifier
                             .size(40.dp)
                             .clickable {
@@ -212,13 +211,13 @@ fun TileFloatingControlDeck(
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(16.dp),
                                     strokeWidth = 2.dp,
-                                    color = Color(0xFF80D8FF)
+                                    color = MaterialTheme.colorScheme.primary
                                 )
                             } else {
                                 Icon(
                                     Icons.Rounded.Refresh,
                                     contentDescription = "重新偵測",
-                                    tint = Color.White,
+                                    tint = MaterialTheme.colorScheme.onSurface,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }

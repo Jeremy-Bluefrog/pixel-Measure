@@ -151,22 +151,30 @@ class ModernArEngine(private val context: Context) {
             }
             session = sessionInstance
 
-            // Configure 60 FPS Target Camera if supported
+            // Configure High Resolution & 60 FPS Target Camera if supported
             try {
-                val filter = CameraConfigFilter(sessionInstance)
-                filter.setTargetFps(EnumSet.of(CameraConfig.TargetFps.TARGET_FPS_60))
-                val cameraConfigs = sessionInstance.getSupportedCameraConfigs(filter)
+                val filter60Fps = CameraConfigFilter(sessionInstance).apply {
+                    setTargetFps(EnumSet.of(CameraConfig.TargetFps.TARGET_FPS_60))
+                }
+                var cameraConfigs = sessionInstance.getSupportedCameraConfigs(filter60Fps)
+                if (cameraConfigs.isEmpty()) {
+                    val filterAll = CameraConfigFilter(sessionInstance)
+                    cameraConfigs = sessionInstance.getSupportedCameraConfigs(filterAll)
+                }
+
                 if (cameraConfigs.isNotEmpty()) {
-                    sessionInstance.setCameraConfig(cameraConfigs[0])
+                    // Pick the camera config with maximum resolution (width * height) for highest picture quality
+                    val bestConfig = cameraConfigs.maxByOrNull { it.textureSize.width * it.textureSize.height } ?: cameraConfigs[0]
+                    sessionInstance.setCameraConfig(bestConfig)
                     is60FpsActive = true
-                    Log.i("ModernArEngine", "ARCore configured for 60 FPS high-refresh mode.")
+                    Log.i("ModernArEngine", "ARCore configured for High Resolution (${bestConfig.textureSize.width}x${bestConfig.textureSize.height}) mode.")
                 } else {
                     is60FpsActive = false
-                    Log.i("ModernArEngine", "ARCore 60 FPS not supported on this device sensor, using default FPS config.")
+                    Log.i("ModernArEngine", "ARCore default camera config active.")
                 }
             } catch (e: Throwable) {
                 is60FpsActive = false
-                Log.w("ModernArEngine", "60 FPS config filter unavailable, using default camera config: ${e.message}")
+                Log.w("ModernArEngine", "60 FPS / High Res config filter unavailable: ${e.message}")
             }
 
             // Apply modern ARCore configuration

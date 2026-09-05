@@ -73,11 +73,10 @@ fun TileDetailBottomSheet(
                             .background(
                                 Brush.sweepGradient(
                                     colors = listOf(
-                                        Color(0xFFFFB74D),
-                                        Color(0xFFFF4081),
-                                        Color(0xFF7C4DFF),
-                                        Color(0xFF00E5FF),
-                                        Color(0xFFFFB74D)
+                                        MaterialTheme.colorScheme.primary,
+                                        MaterialTheme.colorScheme.secondary,
+                                        MaterialTheme.colorScheme.tertiary,
+                                        MaterialTheme.colorScheme.primary
                                     )
                                 )
                             ),
@@ -86,7 +85,7 @@ fun TileDetailBottomSheet(
                         Icon(
                             Icons.Rounded.SquareFoot,
                             contentDescription = null,
-                            tint = Color.White,
+                            tint = MaterialTheme.colorScheme.onPrimary,
                             modifier = Modifier.size(24.dp)
                         )
                     }

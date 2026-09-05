@@ -132,7 +132,7 @@ class ModernArGlView(
 
         val bgFragCode = """
             #extension GL_OES_EGL_image_external : require
-            precision mediump float;
+            precision highp float;
             varying vec2 v_TexCoord;
             uniform samplerExternalOES sTexture;
             void main() {
@@ -224,12 +224,14 @@ class ModernArGlView(
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
         GLES20.glViewport(0, 0, width, height)
-        val activity = context as? android.app.Activity
-        activity?.let {
-            val display = it.windowManager.defaultDisplay
-            modernArEngine.setDisplayGeometry(display.rotation, width, height)
-            viewModel.updateDisplayGeometry(display.rotation, width, height)
+        val rotation = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            context.display?.rotation ?: android.view.Surface.ROTATION_0
+        } else {
+            @Suppress("DEPRECATION")
+            (context as? android.app.Activity)?.windowManager?.defaultDisplay?.rotation ?: android.view.Surface.ROTATION_0
         }
+        modernArEngine.setDisplayGeometry(rotation, width, height)
+        viewModel.updateDisplayGeometry(rotation, width, height)
     }
 
     override fun onDrawFrame(gl: GL10?) {
@@ -291,7 +293,8 @@ class ModernArGlView(
                         GLES20.glVertexAttribPointer(pointPosAttrib, 4, GLES20.GL_FLOAT, false, 16, pointsBuf)
 
                         val numPoints = pointsBuf.remaining() / 4
-                        GLES20.glDrawArrays(GLES20.GL_POINTS, 0, numPoints)
+                        val drawPointsCount = kotlin.math.min(numPoints, 250)
+                        GLES20.glDrawArrays(GLES20.GL_POINTS, 0, drawPointsCount)
 
                         GLES20.glDisableVertexAttribArray(pointPosAttrib)
                     }
