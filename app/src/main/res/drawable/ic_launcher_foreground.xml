@@ -1,36 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    
-    <!-- Gold Ribbon Measuring Scale Tape (Diagonal) -->
-    <path
-        android:fillColor="#F59E0B"
-        android:pathData="M24,84 L84,24 c2.2,-2.2 5.8,-2.2 8,0 c2.2,2.2 2.2,5.8 0,8 L32,92 c-2.2,2.2 -5.8,2.2 -8,0 c-2.2,-2.2 -2.2,-5.8 0,-8 z" />
-    
-    <!-- Measuring Scale Tape Graduation Lines / Ticks -->
-    <path
-        android:strokeColor="#FFFFFF"
-        android:strokeWidth="1.2"
-        android:pathData="M34,74 L37,77 M40,68 L43,71 M46,62 L49,65 M52,56 L55,59 M58,50 L61,53 M64,44 L67,47 M70,38 L73,41 M76,32 L79,35" />
-
-    <!-- Electric Cyan Precision Outer Reticle Target Circle -->
-    <path
-        android:strokeColor="#0EA5E9"
-        android:strokeWidth="3.5"
-        android:fillColor="#00000000"
-        android:pathData="M54,54 m-24,0 a24,24 0 1,1 48,0 a24,24 0 1,1 -48,0" />
-
-    <!-- Center Cross dot locator -->
-    <path
-        android:fillColor="#10B981"
-        android:pathData="M54,54 m-5,0 a5,5 0 1,1 10,0 a5,5 0 1,1 -10,0" />
-
-    <!-- Reticle Wing Aligners -->
-    <path
-        android:strokeColor="#0EA5E9"
-        android:strokeWidth="2.5"
-        android:pathData="M22,54 L14,54 M86,54 L94,54 M54,22 L54,14 M54,86 L54,94" />
-</vector>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:width="70dp"
+        android:height="70dp"
+        android:drawable="@drawable/app_icon_symbol_1788592079746"
+        android:gravity="center" />
+</layer-list>

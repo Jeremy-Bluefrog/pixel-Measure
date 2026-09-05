@@ -1832,34 +1832,23 @@ fun ModernArCameraView(
                                 }
                             }
 
-                            // Camera Shutter Button
-                            Surface(
-                                color = Color.White.copy(alpha = 0.92f),
-                                shape = CircleShape,
-                                shadowElevation = 6.dp,
-                                modifier = Modifier
-                                    .size(46.dp)
-                                    .clickable {
-                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                        isShutterFlash = true
-                                        coroutineScope.launch {
-                                            kotlinx.coroutines.delay(100)
-                                            isShutterFlash = false
-                                        }
-                                        ShareUtility.captureViewSnapshot(localView) { path ->
-                                            viewModel.saveMeasurementRecord(imagePath = path)
-                                        }
+                            // Camera Shutter Button (Pixel Camera Style)
+                            PixelShutterButton(
+                                size = 52.dp,
+                                onClick = {
+                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                    isShutterFlash = true
+                                    coroutineScope.launch {
+                                        kotlinx.coroutines.delay(100)
+                                        isShutterFlash = false
                                     }
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        Icons.Rounded.PhotoCamera,
-                                        contentDescription = "Take Photo Snapshot",
-                                        tint = Color(0xFF1E293B),
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-                            }
+                                    ShareUtility.captureViewSnapshot(localView) { path ->
+                                        viewModel.saveMeasurementRecord(imagePath = path)
+                                    }
+                                },
+                                modifier = Modifier.padding(end = 16.dp),
+                                testTag = "camera_shutter_button"
+                            )
                         }
                     }
                 }
