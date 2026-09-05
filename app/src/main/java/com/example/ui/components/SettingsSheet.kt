@@ -16,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -39,6 +40,7 @@ fun SettingsSheet(
     val selectedUnit by viewModel.selectedUnit.collectAsState()
     val highFpsModeEnabled by viewModel.highFpsModeEnabled.collectAsState()
     val sensorCorrectionEnabled by viewModel.sensorCorrectionEnabled.collectAsState()
+    val torchBrightness by viewModel.torchBrightness.collectAsState()
 
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
@@ -211,6 +213,89 @@ fun SettingsSheet(
                         onCheckedChange = { viewModel.setShowPointCloud(it) },
                         testTag = "switch_point_cloud"
                     )
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 12.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                    )
+
+                    // Flashlight Brightness Setting
+                    val context = LocalContext.current
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                    modifier = Modifier.size(40.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            Icons.Rounded.LightMode,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                    }
+                                }
+                                Column {
+                                    Text(
+                                        text = "手電筒預設亮度",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "支援硬體多段調光與補光強度",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Text(
+                                text = "${(torchBrightness * 100).toInt()}%",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        Slider(
+                            value = torchBrightness,
+                            onValueChange = { viewModel.setTorchBrightness(context, it) },
+                            valueRange = 0.2f..1.0f,
+                            steps = 3,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            listOf(0.25f to "25%", 0.50f to "50%", 0.75f to "75%", 1.00f to "100%").forEach { (level, lbl) ->
+                                val isSelected = kotlin.math.abs(torchBrightness - level) < 0.12f
+                                FilterChip(
+                                    selected = isSelected,
+                                    onClick = { viewModel.setTorchBrightness(context, level) },
+                                    label = { Text(lbl, fontSize = 11.sp) },
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+                            }
+                        }
+                    }
                 }
             }
 

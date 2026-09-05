@@ -102,6 +102,8 @@ fun ModernArCameraView(
     val liveTargetPoint by viewModel.liveTargetPoint.collectAsState()
     val isSnapped by viewModel.isSnapped.collectAsState()
     val isTorchOn by viewModel.isTorchOn.collectAsState()
+    val torchBrightness by viewModel.torchBrightness.collectAsState()
+    var showTorchBrightnessMenu by remember { mutableStateOf(false) }
     val showPointCloud by viewModel.showPointCloud.collectAsState()
     val capturedPoints = viewModel.capturedPoints
     val sensorTelemetry by viewModel.sensorTelemetry.collectAsState()
@@ -1283,24 +1285,148 @@ fun ModernArCameraView(
                         }
                     }
 
-                    // Flashlight / Torch
-                    IconButton(
-                        onClick = { viewModel.toggleTorch(context) },
-                        modifier = Modifier
-                            .size(40.dp)
-                            .background(
-                                if (isTorchOn) Color(0xFFFFD54F) else Color.Black.copy(alpha = 0.55f),
-                                CircleShape
+                    // Flashlight / Torch with multi-level brightness adjustment
+                    Box {
+                        IconButton(
+                            onClick = {
+                                if (!isTorchOn) {
+                                    viewModel.toggleTorch(context)
+                                } else {
+                                    // If already on, click opens brightness selector or toggles
+                                    showTorchBrightnessMenu = !showTorchBrightnessMenu
+                                }
+                            },
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(
+                                    if (isTorchOn) Color(0xFFFFD54F) else Color.Black.copy(alpha = 0.55f),
+                                    CircleShape
+                                )
+                                .shadow(if (isTorchOn) 6.dp else 3.dp, CircleShape)
+                                .testTag("flashlight_toggle_button")
+                        ) {
+                            Icon(
+                                if (isTorchOn) Icons.Rounded.FlashlightOn else Icons.Rounded.FlashlightOff,
+                                contentDescription = "手電筒補光",
+                                tint = if (isTorchOn) Color(0xFF212121) else Color.White,
+                                modifier = Modifier.size(20.dp)
                             )
-                            .shadow(if (isTorchOn) 6.dp else 3.dp, CircleShape)
-                            .testTag("flashlight_toggle_button")
-                    ) {
-                        Icon(
-                            if (isTorchOn) Icons.Rounded.FlashlightOn else Icons.Rounded.FlashlightOff,
-                            contentDescription = "Flashlight",
-                            tint = if (isTorchOn) Color(0xFF212121) else Color.White,
-                            modifier = Modifier.size(20.dp)
-                        )
+                        }
+
+                        // Torch Brightness Popup Panel
+                        DropdownMenu(
+                            expanded = showTorchBrightnessMenu,
+                            onDismissRequest = { showTorchBrightnessMenu = false },
+                            modifier = Modifier
+                                .background(Color(0xFF1E293B))
+                                .widthIn(min = 220.dp)
+                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Rounded.LightMode,
+                                            contentDescription = null,
+                                            tint = Color(0xFFFFD54F),
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            "手電筒亮度",
+                                            color = Color.White,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                    Text(
+                                        "${(torchBrightness * 100).toInt()}%",
+                                        color = Color(0xFFFFD54F),
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+
+                                // Brightness Slider (20% ~ 100%)
+                                Slider(
+                                    value = torchBrightness,
+                                    onValueChange = { newVal ->
+                                        viewModel.setTorchBrightness(context, newVal)
+                                    },
+                                    valueRange = 0.2f..1.0f,
+                                    steps = 3, // 20%, 40%, 60%, 80%, 100%
+                                    colors = SliderDefaults.colors(
+                                        thumbColor = Color(0xFFFFD54F),
+                                        activeTrackColor = Color(0xFFFFD54F),
+                                        inactiveTrackColor = Color.White.copy(alpha = 0.24f)
+                                    ),
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+
+                                // Preset Level Chips
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    listOf(
+                                        0.25f to "25%",
+                                        0.50f to "50%",
+                                        0.75f to "75%",
+                                        1.00f to "100%"
+                                    ).forEach { (level, label) ->
+                                        val isSelected = kotlin.math.abs(torchBrightness - level) < 0.12f
+                                        Surface(
+                                            color = if (isSelected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.12f),
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier
+                                                .clickable {
+                                                    viewModel.setTorchBrightness(context, level)
+                                                }
+                                        ) {
+                                            Text(
+                                                text = label,
+                                                color = if (isSelected) Color(0xFF212121) else Color.White,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                HorizontalDivider(
+                                    color = Color.White.copy(alpha = 0.15f),
+                                    modifier = Modifier.padding(vertical = 4.dp)
+                                )
+
+                                // Turn off button inside menu
+                                Button(
+                                    onClick = {
+                                        viewModel.turnOffTorch(context)
+                                        showTorchBrightnessMenu = false
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFFEF4444)
+                                    ),
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Icon(Icons.Rounded.FlashlightOff, null, Modifier.size(16.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("關閉手電筒", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
                     }
 
                     // History
@@ -1337,25 +1463,6 @@ fun ModernArCameraView(
                 }
             }
         }
-
-            // Brief Instructional Overlay for Plane Detection Initialization
-            androidx.compose.animation.AnimatedVisibility(
-                visible = showPlaneGuidanceOverlay && capturedPoints.isEmpty(),
-                enter = fadeIn(animationSpec = tween(280)) + slideInVertically(initialOffsetY = { -it / 2 }),
-                exit = fadeOut(animationSpec = tween(240)) + slideOutVertically(targetOffsetY = { -it / 2 }),
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(top = 74.dp)
-                    .padding(horizontal = 16.dp)
-            ) {
-                PlaneDetectionInstructionOverlay(
-                    trackingState = trackingState,
-                    trackingFailureReason = trackingFailureReason,
-                    planesCount = planesCount,
-                    onDismiss = { showPlaneGuidanceOverlay = false }
-                )
-            }
 
             // 6. Bottom Dynamic Control Deck (+ / ✓ Button & Camera Shutter)
             var isShutterFlash by remember { mutableStateOf(false) }

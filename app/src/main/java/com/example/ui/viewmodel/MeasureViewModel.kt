@@ -156,9 +156,12 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     private val _isSnapped = MutableStateFlow(false)
     val isSnapped: StateFlow<Boolean> = _isSnapped.asStateFlow()
 
-    // Torch / Flashlight state
+    // Torch / Flashlight state & Brightness control
     private val _isTorchOn = MutableStateFlow(false)
     val isTorchOn: StateFlow<Boolean> = _isTorchOn.asStateFlow()
+
+    private val _torchBrightness = MutableStateFlow(prefs.getFloat("torch_brightness", 1.0f))
+    val torchBrightness: StateFlow<Float> = _torchBrightness.asStateFlow()
 
     // Toast / Feedback event channel
     private val _toastMessage = MutableSharedFlow<String>(extraBufferCapacity = 1)
@@ -909,20 +912,66 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    // Set Torch Brightness (0.1f ~ 1.0f) and apply to hardware if supported
+    fun setTorchBrightness(context: Context, brightness: Float) {
+        val clamped = brightness.coerceIn(0.1f, 1.0f)
+        _torchBrightness.value = clamped
+        prefs.edit().putFloat("torch_brightness", clamped).apply()
+
+        if (_isTorchOn.value) {
+            applyTorchWithBrightness(context, true, clamped)
+        }
+    }
+
     // Toggle Torch (Flashlight) with multi-engine support (ARCore, Camera2 High-Speed, CameraX, CameraManager)
     fun toggleTorch(context: Context) {
         val newState = !_isTorchOn.value
+        if (newState) {
+            applyTorchWithBrightness(context, true, _torchBrightness.value)
+        } else {
+            turnOffTorch(context)
+        }
+    }
+
+    private fun applyTorchWithBrightness(context: Context, newState: Boolean, brightness: Float) {
         var success = false
 
-        // 1. If ARCore session is running, configure flashMode via ARCore
-        if (modernArEngine.session != null) {
+        // 1. Android 13+ (API 33+) Hardware Torch Strength Level via CameraManager
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            try {
+                val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                val targetCameraId = cameraManager.cameraIdList.firstOrNull { id ->
+                    val chars = cameraManager.getCameraCharacteristics(id)
+                    val hasFlash = chars.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                    val isBack = chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+                    hasFlash && isBack
+                } ?: cameraManager.cameraIdList.firstOrNull { id ->
+                    cameraManager.getCameraCharacteristics(id).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                }
+
+                if (targetCameraId != null) {
+                    val chars = cameraManager.getCameraCharacteristics(targetCameraId)
+                    val maxLevel = chars.get(CameraCharacteristics.FLASH_INFO_STRENGTH_MAXIMUM_LEVEL) ?: 1
+                    if (maxLevel > 1) {
+                        val targetLevel = (brightness * maxLevel).toInt().coerceIn(1, maxLevel)
+                        cameraManager.turnOnTorchWithStrengthLevel(targetCameraId, targetLevel)
+                        success = true
+                    }
+                }
+            } catch (e: Throwable) {
+                Log.w("MeasureViewModel", "turnOnTorchWithStrengthLevel fallback: ${e.message}")
+            }
+        }
+
+        // 2. If ARCore session is running, configure flashMode via ARCore
+        if (!success && modernArEngine.session != null) {
             val arOk = modernArEngine.setTorchMode(newState)
             if (arOk) {
                 success = true
             }
         }
 
-        // 2. If Direct HighSpeedCamera2Manager is active
+        // 3. If Direct HighSpeedCamera2Manager is active
         if (!success && highSpeedCamera2Manager != null) {
             try {
                 highSpeedCamera2Manager?.toggleTorch(newState)
@@ -932,7 +981,7 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
             }
         }
 
-        // 3. If CameraX is active and controlling the camera
+        // 4. If CameraX is active and controlling the camera
         if (!success && cameraControl != null) {
             try {
                 cameraControl?.enableTorch(newState)
@@ -942,11 +991,10 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
             }
         }
 
-        // 3. Fallback: CameraManager (hardware flash when camera isn't locked by active camera session, or screen ruler mode)
+        // 5. Fallback: Standard CameraManager setTorchMode
         if (!success) {
             try {
                 val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-                // Find camera with flash unit (prefer rear camera)
                 val targetCameraId = cameraManager.cameraIdList.firstOrNull { id ->
                     val chars = cameraManager.getCameraCharacteristics(id)
                     val hasFlash = chars.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
@@ -965,17 +1013,10 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
             }
         }
 
-        if (success) {
-            _isTorchOn.value = newState
-            triggerHapticFeedback()
-            _toastMessage.tryEmit(if (newState) "已開啟手電筒補光" else "已關閉手電筒")
-        } else {
-            // Also notify modernArEngine state in case it is requested ahead of session
-            modernArEngine.setTorchMode(newState)
-            _isTorchOn.value = newState
-            triggerHapticFeedback()
-            _toastMessage.tryEmit(if (newState) "已開啟手電筒" else "已關閉手電筒")
-        }
+        _isTorchOn.value = newState
+        triggerHapticFeedback()
+        val percent = (brightness * 100).toInt()
+        _toastMessage.tryEmit(if (newState) "已開啟手電筒補光 (${percent}%)" else "已關閉手電筒")
     }
 
     fun turnOffTorch(context: Context? = null) {
