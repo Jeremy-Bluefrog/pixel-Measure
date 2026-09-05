@@ -3,9 +3,15 @@
 package com.example.ui.components
 
 import android.Manifest
+import android.content.Context
 import android.graphics.SurfaceTexture
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.view.TextureView
 import android.widget.Toast
+import com.example.ui.viewmodel.HapticType
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
@@ -138,6 +144,29 @@ fun ModernArCameraView(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             viewModel.onPause()
+        }
+    }
+
+    // Modern Refined Haptic Feedback Handler (Pure Android 12+ / Modern Device API)
+    LaunchedEffect(Unit) {
+        viewModel.hapticEvent.collect { type ->
+            val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
+            val vibrator = vibratorManager?.defaultVibrator
+            if (vibrator?.hasVibrator() == true) {
+                val effectId = when (type) {
+                    HapticType.SNAP -> VibrationEffect.EFFECT_TICK
+                    HapticType.CLICK -> VibrationEffect.EFFECT_CLICK
+                    HapticType.HEAVY -> VibrationEffect.EFFECT_HEAVY_CLICK
+                    HapticType.DOUBLE -> VibrationEffect.EFFECT_DOUBLE_CLICK
+                }
+                vibrator.vibrate(VibrationEffect.createPredefined(effectId))
+            } else {
+                val feedbackType = when (type) {
+                    HapticType.SNAP, HapticType.CLICK -> androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove
+                    HapticType.HEAVY, HapticType.DOUBLE -> androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress
+                }
+                haptic.performHapticFeedback(feedbackType)
+            }
         }
     }
 

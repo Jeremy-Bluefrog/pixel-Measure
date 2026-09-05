@@ -3,9 +3,11 @@ package com.example.ui.screens
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -420,14 +422,33 @@ fun HistorySheetContent(
     onClose: () -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
+    var selectedCategory by remember { mutableStateOf("ALL") }
     var showClearConfirm by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
-    val filteredRecords = remember(records, searchQuery) {
-        if (searchQuery.isBlank()) records
-        else records.filter {
-            it.title.contains(searchQuery, ignoreCase = true) ||
-            (it.notes?.contains(searchQuery, ignoreCase = true) == true)
+    val categories = remember {
+        listOf(
+            "ALL" to "全部",
+            "DISTANCE" to "距離",
+            "AREA" to "面積",
+            "HEIGHT" to "高度",
+            "VOLUME" to "體積",
+            "ANGLE" to "角度",
+            "RULER" to "螢幕尺"
+        )
+    }
+
+    val filteredRecords = remember(records, searchQuery, selectedCategory) {
+        records.filter { record ->
+            val matchesCategory = when (selectedCategory) {
+                "ALL" -> true
+                "DISTANCE" -> record.type != "AREA" && record.type != "HEIGHT" && record.type != "VOLUME" && record.type != "ANGLE" && record.type != "RULER"
+                else -> record.type == selectedCategory
+            }
+            val matchesSearch = searchQuery.isBlank() ||
+                record.title.contains(searchQuery, ignoreCase = true) ||
+                (record.notes?.contains(searchQuery, ignoreCase = true) == true)
+            matchesCategory && matchesSearch
         }
     }
 
@@ -450,30 +471,71 @@ fun HistorySheetContent(
             )
 
             if (records.isNotEmpty()) {
-                TextButton(
-                    onClick = { showClearConfirm = true },
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) {
-                    Icon(Icons.Rounded.DeleteSweep, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("全部清除")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = { ShareUtility.exportAllRecordsCsv(context, records) },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            Icons.Rounded.FileUpload,
+                            contentDescription = "匯出 CSV",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+
+                    TextButton(
+                        onClick = { showClearConfirm = true },
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Icon(Icons.Rounded.DeleteSweep, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("全部清除")
+                    }
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(10.dp))
 
+        // Search Bar
         OutlinedTextField(
             value = searchQuery,
             onValueChange = { searchQuery = it },
             placeholder = { Text("搜尋測量紀錄與備註...") },
             leadingIcon = { Icon(Icons.Rounded.Search, null) },
+            trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { searchQuery = "" }) {
+                        Icon(Icons.Rounded.Close, contentDescription = "清除搜尋")
+                    }
+                }
+            },
             singleLine = true,
             shape = RoundedCornerShape(16.dp),
             modifier = Modifier.fillMaxWidth()
         )
 
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Category Filter Chips Row
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+        ) {
+            categories.forEach { (code, label) ->
+                FilterChip(
+                    selected = selectedCategory == code,
+                    onClick = { selectedCategory = code },
+                    label = { Text(label, fontSize = 12.sp, fontWeight = FontWeight.Bold) },
+                    shape = RoundedCornerShape(20.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
 
         if (filteredRecords.isEmpty()) {
             Box(
@@ -482,10 +544,20 @@ fun HistorySheetContent(
                     .height(200.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = if (records.isEmpty()) "尚未儲存任何測量紀錄" else "找不到符合的紀錄",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        Icons.Rounded.HistoryToggleOff,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = if (records.isEmpty()) "尚未儲存任何測量紀錄" else "找不到符合的紀錄",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
             }
         } else {
             LazyColumn(
@@ -613,32 +685,46 @@ fun HistorySheetContent(
                                 )
                             }
 
-                            // Right Action: Quick Share & Delete
+                            // Right Action: Copy, Share & Delete
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
                                 IconButton(
+                                    onClick = {
+                                        ShareUtility.copyToClipboard(context, record)
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.ContentCopy,
+                                        contentDescription = "複製文字",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+
+                                IconButton(
                                     onClick = { ShareUtility.shareRecord(context, record) },
-                                    modifier = Modifier.size(36.dp)
+                                    modifier = Modifier.size(32.dp)
                                 ) {
                                     Icon(
                                         Icons.Rounded.Share,
                                         contentDescription = "分享",
                                         tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(20.dp)
+                                        modifier = Modifier.size(18.dp)
                                     )
                                 }
 
                                 IconButton(
                                     onClick = { viewModel.deleteRecord(record) },
-                                    modifier = Modifier.size(36.dp)
+                                    modifier = Modifier.size(32.dp)
                                 ) {
                                     Icon(
                                         Icons.Rounded.DeleteOutline,
                                         contentDescription = "刪除",
                                         tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
-                                        modifier = Modifier.size(20.dp)
+                                        modifier = Modifier.size(18.dp)
                                     )
                                 }
                             }

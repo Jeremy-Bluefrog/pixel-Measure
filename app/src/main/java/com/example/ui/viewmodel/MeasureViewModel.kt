@@ -35,6 +35,13 @@ import java.text.DecimalFormat
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.*
 
+enum class HapticType {
+    SNAP,   // Crisp light tick for magnetic snapping / 0° alignment
+    CLICK,  // Standard click for UI controls
+    HEAVY,  // Heavy click for point addition & shutter
+    DOUBLE  // Double pulse for save success
+}
+
 /**
  * Modern, clean ViewModel managing AR measurements, sensor fusion,
  * persistence, unit conversions, and UI state.
@@ -167,12 +174,14 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     private val _toastMessage = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val toastMessage = _toastMessage.asSharedFlow()
 
-    // Haptic feedback channel
-    private val _hapticEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    // Haptic feedback channel with HapticType
+    private val _hapticEvent = MutableSharedFlow<HapticType>(extraBufferCapacity = 1)
     val hapticEvent = _hapticEvent.asSharedFlow()
 
-    fun triggerHapticFeedback() {
-        _hapticEvent.tryEmit(Unit)
+    fun triggerHapticFeedback(type: HapticType = HapticType.CLICK) {
+        if (vibrateOnAlignment.value) {
+            _hapticEvent.tryEmit(type)
+        }
     }
 
     // Database records
@@ -619,7 +628,7 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
                 finalTargetPoint = snappedVertex
                 if (!_isSnapped.value) {
                     _isSnapped.value = true
-                    triggerHapticFeedback()
+                    triggerHapticFeedback(HapticType.SNAP)
                 }
             } else {
                 _isSnapped.value = false
@@ -675,7 +684,7 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
             android.os.Handler(android.os.Looper.getMainLooper()).post {
                 saveUndoState()
                 capturedPoints.add(correctedP)
-                triggerHapticFeedback()
+                triggerHapticFeedback(HapticType.HEAVY)
                 updateAutoDetectedGeometry()
                 if (_isObjectronMode.value) {
                     updateObjectron3DBox()

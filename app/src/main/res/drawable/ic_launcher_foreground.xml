@@ -1,8 +1,66 @@
 <?xml version="1.0" encoding="utf-8"?>
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item
-        android:width="70dp"
-        android:height="70dp"
-        android:drawable="@drawable/app_icon_symbol_1788592079746"
-        android:gravity="center" />
-</layer-list>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Refined Modern AR Measure Icon -->
+    <group>
+        <!-- Main Diagonal Measuring Tape Body (Gradient Rounded Pill Bar) -->
+        <path
+            android:pathData="M 32,76 C 27.6,76 24,72.4 24,68 L 68,24 C 72.4,24 76,27.6 76,32 L 32,76 Z"
+            android:fillType="nonZero">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:startX="24"
+                    android:startY="76"
+                    android:endX="76"
+                    android:endY="24"
+                    android:type="linear">
+                    <item android:color="#FF1D4ED8" android:offset="0.0" />
+                    <item android:color="#FF06B6D4" android:offset="0.5" />
+                    <item android:color="#FF8B5CF6" android:offset="1.0" />
+                </gradient>
+            </aapt:attr>
+        </path>
+
+        <!-- Ruler Graduation Ticks (White crisp ticks along tape) -->
+        <path
+            android:pathData="M 36,60 L 42,66 M 43,53 L 47,57 M 50,46 L 56,52 M 57,39 L 61,43 M 64,32 L 70,38"
+            android:strokeWidth="3"
+            android:strokeColor="#FFFFFF"
+            android:strokeLineCap="round" />
+
+        <!-- AR Laser Target Circle (Surrounding Reticle Ring) -->
+        <path
+            android:pathData="M 54,26 C 69.5,26 82,38.5 82,54 C 82,69.5 69.5,82 54,82 C 38.5,82 26,69.5 26,54 C 26,38.5 38.5,26 54,26 Z"
+            android:strokeWidth="4"
+            android:fillColor="#00000000"
+            android:strokeLineCap="round">
+            <aapt:attr name="android:strokeColor">
+                <gradient
+                    android:startX="26"
+                    android:startY="26"
+                    android:endX="82"
+                    android:endY="82"
+                    android:type="linear">
+                    <item android:color="#FF38BDF8" android:offset="0.0" />
+                    <item android:color="#FFA855F7" android:offset="1.0" />
+                </gradient>
+            </aapt:attr>
+        </path>
+
+        <!-- AR Reticle Laser Points (Floating Cyan/Purple Accent Orbs) -->
+        <path
+            android:pathData="M 54,20 L 54,15 M 54,93 L 54,88 M 20,54 L 15,54 M 93,54 L 88,54"
+            android:strokeWidth="3.5"
+            android:strokeColor="#FF0284C7"
+            android:strokeLineCap="round" />
+
+        <path
+            android:pathData="M 54,54 A 5,5 0 1,1 44,54 A 5,5 0 1,1 54,54 Z"
+            android:fillColor="#FFFFFF" />
+    </group>
+</vector>

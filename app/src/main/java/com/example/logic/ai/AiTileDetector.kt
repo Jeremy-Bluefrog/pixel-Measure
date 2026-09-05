@@ -59,11 +59,22 @@ object AiTileDetector {
     private const val TAG = "AiTileDetector"
 
     /**
-     * Convert Bitmap to Base64 JPEG string
+     * Convert Bitmap to Base64 JPEG string with dynamic dimension clamping to optimize memory & API latency
      */
-    fun bitmapToBase64(bitmap: Bitmap, quality: Int = 80): String {
+    fun bitmapToBase64(bitmap: Bitmap, maxDim: Int = 1024, quality: Int = 80): String {
+        val width = bitmap.width
+        val height = bitmap.height
+        val scaledBitmap = if (width > maxDim || height > maxDim) {
+            val scale = maxDim.toFloat() / maxOf(width, height)
+            Bitmap.createScaledBitmap(bitmap, (width * scale).toInt(), (height * scale).toInt(), true)
+        } else {
+            bitmap
+        }
         val outputStream = ByteArrayOutputStream()
-        bitmap.compress(Bitmap.CompressFormat.JPEG, quality, outputStream)
+        scaledBitmap.compress(Bitmap.CompressFormat.JPEG, quality, outputStream)
+        if (scaledBitmap != bitmap) {
+            scaledBitmap.recycle()
+        }
         return Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP)
     }
 
@@ -118,7 +129,11 @@ object AiTileDetector {
                 )
             )
 
-            val response = RetrofitClient.service.generateContent(apiKey, request)
+            val response = RetrofitClient.service.generateContent(
+                model = "gemini-2.5-flash",
+                apiKey = apiKey,
+                request = request
+            )
             val jsonText = response.candidates.firstOrNull()?.content?.parts?.firstOrNull()?.text ?: ""
             Log.d(TAG, "Gemini AI Core raw response: $jsonText")
 

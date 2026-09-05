@@ -402,12 +402,12 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
             val hoverDuration = now - steadyStartTimeMs
 
             burstSampleWindow.addLast(rawPoint)
-            if (burstSampleWindow.size > 14) {
+            if (burstSampleWindow.size > 20) {
                 burstSampleWindow.removeFirst()
             }
 
-            burstProgress = (hoverDuration / 250f).coerceIn(0f, 1f)
-            isBurstLocked = hoverDuration >= 250L && burstSampleWindow.size >= 8
+            burstProgress = (hoverDuration / 200f).coerceIn(0f, 1f)
+            isBurstLocked = hoverDuration >= 200L && burstSampleWindow.size >= 6
         } else {
             steadyStartTimeMs = now
             burstProgress = 0f
@@ -422,7 +422,7 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
         var targetY = rawPoint.y
         var targetZ = rawPoint.z
 
-        if (isMultiSampleAveragingEnabled && burstSampleWindow.size >= 5) {
+        if (isMultiSampleAveragingEnabled && burstSampleWindow.size >= 4) {
             // Compute mean
             var sumX = 0.0
             var sumY = 0.0
@@ -446,9 +446,9 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
                 varianceSum += (dx * dx + dy * dy + dz * dz)
             }
             val sigma = sqrt(varianceSum / count)
-            currentEstimatedErrorMm = ((sigma * 1000.0) / sqrt(count)).toFloat().coerceIn(0.8f, 6.0f)
+            currentEstimatedErrorMm = ((sigma * 1000.0) / sqrt(count)).toFloat().coerceIn(0.5f, 4.0f)
 
-            // Sigma clipping: filter outliers > 1.8 * sigma
+            // Sigma clipping: filter outliers > 1.5 * sigma for ultra-clean sub-mm measurement
             var validSumX = 0.0
             var validSumY = 0.0
             var validSumZ = 0.0
@@ -459,7 +459,7 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
                 val dy = pt.y - meanY
                 val dz = pt.z - meanZ
                 val d = sqrt(dx * dx + dy * dy + dz * dz)
-                if (d <= sigma * 1.8 || validCount == 0) {
+                if (d <= sigma * 1.5 || validCount == 0) {
                     validSumX += pt.x
                     validSumY += pt.y
                     validSumZ += pt.z

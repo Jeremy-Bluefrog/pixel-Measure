@@ -40,6 +40,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
 
     private var isClosed = false
     private var openRetryCount = 0
+    private var isHighSpeedForceDisabled = false
 
     fun startBackgroundThread() {
         if (backgroundThread == null) {
@@ -65,28 +66,29 @@ class HighSpeedCamera2Manager(private val context: Context) {
     fun selectOptimal60FpsSize(characteristics: CameraCharacteristics): Pair<Size, Boolean> {
         val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return Pair(Size(1920, 1080), false)
         
-        // Check High Speed Video Sizes for [60, 60]
-        try {
-            val highSpeedRanges = map.highSpeedVideoFpsRanges
-            val has60FpsHighSpeed = highSpeedRanges?.any { it.upper >= 60 && it.lower >= 30 } == true
-            if (has60FpsHighSpeed) {
-                val targetRange = highSpeedRanges.firstOrNull { it.lower == 60 && it.upper == 60 }
-                    ?: highSpeedRanges.firstOrNull { it.upper >= 60 }
-                if (targetRange != null) {
-                    val sizes = map.getHighSpeedVideoSizesFor(targetRange)
-                    if (!sizes.isNullOrEmpty()) {
-                        // Prefer maximum resolution available (4K 3840x2160, 1080p 1920x1080, etc.)
-                        val chosen = sizes.sortedByDescending { it.width * it.height }
-                            .firstOrNull { it.width >= 1920 }
-                            ?: sizes.maxByOrNull { it.width * it.height }
-                            ?: sizes.first()
-                        Log.i(TAG, "Found High-Speed 60 FPS Ultra HD/FHD Size: ${chosen.width}x${chosen.height} for range $targetRange")
-                        return Pair(chosen, true)
+        // Check High Speed Video Sizes for [60, 60] if not explicitly force disabled
+        if (!isHighSpeedForceDisabled) {
+            try {
+                val highSpeedRanges = map.highSpeedVideoFpsRanges
+                val has60FpsHighSpeed = highSpeedRanges?.any { it.upper >= 60 && it.lower >= 30 } == true
+                if (has60FpsHighSpeed) {
+                    val targetRange = highSpeedRanges.firstOrNull { it.lower == 60 && it.upper == 60 }
+                        ?: highSpeedRanges.firstOrNull { it.upper >= 60 }
+                    if (targetRange != null) {
+                        val sizes = map.getHighSpeedVideoSizesFor(targetRange)
+                        if (!sizes.isNullOrEmpty()) {
+                            val chosen = sizes.sortedByDescending { it.width * it.height }
+                                .firstOrNull { it.width >= 1920 }
+                                ?: sizes.maxByOrNull { it.width * it.height }
+                                ?: sizes.first()
+                            Log.i(TAG, "Found High-Speed 60 FPS Ultra HD/FHD Size: ${chosen.width}x${chosen.height} for range $targetRange")
+                            return Pair(chosen, true)
+                        }
                     }
                 }
+            } catch (e: Throwable) {
+                Log.w(TAG, "Error checking high speed video sizes: ${e.message}")
             }
-        } catch (e: Throwable) {
-            Log.w(TAG, "Error checking high speed video sizes: ${e.message}")
         }
 
         // Standard 60 FPS fallback: Pick highest resolution size from SurfaceTexture output sizes (4K / 1080p)
@@ -128,12 +130,12 @@ class HighSpeedCamera2Manager(private val context: Context) {
             cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
                     if (isClosed) {
-                        camera.close()
+                        try { camera.close() } catch (_: Exception) {}
                         return
                     }
                     cameraDevice = camera
                     openRetryCount = 0
-                    if (isHighSpeedSupported) {
+                    if (isHighSpeedSupported && !isHighSpeedForceDisabled) {
                         tryConfigureHighSpeedSession(camera, surface, optimalSize, characteristics, onSessionConfigured)
                     } else {
                         configureStandard60FpsSession(camera, surface, optimalSize, characteristics, onSessionConfigured)
@@ -141,22 +143,28 @@ class HighSpeedCamera2Manager(private val context: Context) {
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
-                    camera.close()
+                    try { camera.close() } catch (_: Exception) {}
                     cameraDevice = null
                 }
 
                 override fun onError(camera: CameraDevice, error: Int) {
                     Log.e(TAG, "Camera device error: $error (retry=$openRetryCount)")
-                    camera.close()
+                    try { camera.close() } catch (_: Exception) {}
                     cameraDevice = null
                     
-                    if (!isClosed && (error == ERROR_CAMERA_IN_USE || error == ERROR_MAX_CAMERAS_IN_USE || error == ERROR_CAMERA_DEVICE) && openRetryCount < 3) {
+                    if (error == ERROR_CAMERA_DEVICE) {
+                        // Device error occurred, force standard mode on retry
+                        isHighSpeedForceDisabled = true
+                    }
+
+                    if (!isClosed && openRetryCount < 3) {
                         openRetryCount++
+                        val backoffMs = 300L * openRetryCount
                         backgroundHandler?.postDelayed({
                             if (!isClosed && textureView.isAvailable) {
                                 openCameraAndStartSession(textureView, onSessionConfigured)
                             }
-                        }, 180)
+                        }, backoffMs)
                     }
                 }
             }, backgroundHandler)
@@ -262,8 +270,6 @@ class HighSpeedCamera2Manager(private val context: Context) {
                 // Disable scene mode / night mode auto-stretching exposure
                 set(CaptureRequest.CONTROL_SCENE_MODE, CaptureRequest.CONTROL_SCENE_MODE_DISABLED)
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                // Set exposure time clamp (16.6ms max) to ensure 60 FPS cadence
-                set(CaptureRequest.SENSOR_EXPOSURE_TIME, 1_000_000_000L / 60L)
 
                 // High Quality Processing Tuning
                 set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)

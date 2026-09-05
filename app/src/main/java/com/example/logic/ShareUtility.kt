@@ -228,6 +228,59 @@ object ShareUtility {
     }
 
     /**
+     * Exports all measurement records as a professional CSV file and opens the system share sheet.
+     */
+    fun exportAllRecordsCsv(context: Context, records: List<MeasureRecord>) {
+        if (records.isEmpty()) {
+            Toast.makeText(context, "沒有可匯出的歷史紀錄", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        try {
+            val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+            val fileDateFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
+            val fileName = "AR_Measure_Report_${fileDateFormat.format(Date())}.csv"
+
+            val csvDir = File(context.cacheDir, "csv_exports")
+            if (!csvDir.exists()) csvDir.mkdirs()
+            val csvFile = File(csvDir, fileName)
+
+            csvFile.bufferedWriter(Charsets.UTF_8).use { writer ->
+                // Write UTF-8 BOM for Microsoft Excel compatibility
+                writer.write("\uFEFF")
+                writer.write("ID,Title,Type,Value,Unit,Timestamp,Notes\n")
+                records.forEach { r ->
+                    val escapedTitle = "\"${r.title.replace("\"", "\"\"")}\""
+                    val escapedNotes = "\"${(r.notes ?: "").replace("\"", "\"\"")}\""
+                    val timeStr = dateFormat.format(Date(r.timestamp))
+                    writer.write("${r.id},$escapedTitle,${r.type},${r.value},${r.unit},$timeStr,$escapedNotes\n")
+                }
+            }
+
+            val csvUri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                csvFile
+            )
+
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/csv"
+                putExtra(Intent.EXTRA_SUBJECT, "【AR 測量彙整報表】共 ${records.size} 筆紀錄")
+                putExtra(Intent.EXTRA_TEXT, "隨信附上包含 ${records.size} 筆 AR 測量數據的 CSV 報表檔。")
+                putExtra(Intent.EXTRA_STREAM, csvUri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+
+            val chooser = Intent.createChooser(intent, "匯出 CSV 測量報表至...")
+            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(chooser)
+        } catch (e: Exception) {
+            Toast.makeText(context, "匯出失敗: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            e.printStackTrace()
+        }
+    }
+
+    /**
      * Captures a screenshot of the specified view (including SurfaceView like Camera Preview)
      * and saves it to the gallery.
      */
