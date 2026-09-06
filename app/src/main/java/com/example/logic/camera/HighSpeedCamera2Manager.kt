@@ -42,6 +42,26 @@ class HighSpeedCamera2Manager(private val context: Context) {
     private var openRetryCount = 0
     private var isHighSpeedForceDisabled = false
 
+    val lowLightBoostEngine = LowLightBoostEngine(context)
+    private var isLowLightBoostEnabled = true
+
+    fun setLowLightBoostEnabled(enabled: Boolean) {
+        isLowLightBoostEnabled = enabled
+        val session = captureSession ?: return
+        val builder = previewRequestBuilder ?: return
+        try {
+            lowLightBoostEngine.applyLowLightBoost(builder, enabled)
+            if (isHighSpeedSessionActive && session is CameraConstrainedHighSpeedCaptureSession) {
+                val list = session.createHighSpeedRequestList(builder.build())
+                session.setRepeatingBurst(list, null, backgroundHandler)
+            } else {
+                session.setRepeatingRequest(builder.build(), null, backgroundHandler)
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "Failed to apply Low Light Boost update: ${e.message}")
+        }
+    }
+
     fun startBackgroundThread() {
         if (backgroundThread == null) {
             backgroundThread = HandlerThread("HighSpeedCameraBackground").apply { start() }
@@ -185,6 +205,8 @@ class HighSpeedCamera2Manager(private val context: Context) {
         onSessionConfigured: ((Boolean, Size) -> Unit)?
     ) {
         try {
+            lowLightBoostEngine.checkHardwareSupport(characteristics)
+
             // High speed capture requests typically use TEMPLATE_RECORD
             val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 addTarget(surface)
@@ -201,6 +223,9 @@ class HighSpeedCamera2Manager(private val context: Context) {
                 set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
                 set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
                 set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_HIGH_QUALITY)
+
+                // Apply Low Light Boost if enabled
+                lowLightBoostEngine.applyLowLightBoost(this, isLowLightBoostEnabled)
             }
             previewRequestBuilder = requestBuilder
 
@@ -222,6 +247,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
                                         result: TotalCaptureResult
                                     ) {
                                         countFrameAndCalculateFps()
+                                        lowLightBoostEngine.onCaptureResult(result)
                                     }
                                 },
                                 backgroundHandler
@@ -258,6 +284,8 @@ class HighSpeedCamera2Manager(private val context: Context) {
         onSessionConfigured: ((Boolean, Size) -> Unit)?
     ) {
         try {
+            lowLightBoostEngine.checkHardwareSupport(characteristics)
+
             val fpsRanges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
             val selectedFpsRange = fpsRanges?.firstOrNull { it.lower == 60 && it.upper == 60 }
                 ?: fpsRanges?.firstOrNull { it.upper >= 60 && it.lower >= 30 }
@@ -275,6 +303,9 @@ class HighSpeedCamera2Manager(private val context: Context) {
                 set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
                 set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
                 set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_HIGH_QUALITY)
+
+                // Apply Low Light Boost if enabled
+                lowLightBoostEngine.applyLowLightBoost(this, isLowLightBoostEnabled)
             }
             previewRequestBuilder = requestBuilder
 
@@ -292,6 +323,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
                                     result: TotalCaptureResult
                                 ) {
                                     countFrameAndCalculateFps()
+                                    lowLightBoostEngine.onCaptureResult(result)
                                 }
                             },
                             backgroundHandler

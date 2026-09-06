@@ -119,6 +119,7 @@ fun ModernArCameraView(
     val sensorTelemetry by viewModel.sensorTelemetry.collectAsState()
     val sensorCorrectionEnabled by viewModel.sensorCorrectionEnabled.collectAsState()
     val highFpsModeEnabled by viewModel.highFpsModeEnabled.collectAsState()
+    val lowLightBoostEnabled by viewModel.lowLightBoostEnabled.collectAsState()
     val isObjectronMode by viewModel.isObjectronMode.collectAsState()
     val objectron3DBox by viewModel.objectron3DBox.collectAsState()
     val isMobileSamMode by viewModel.isMobileSamMode.collectAsState()
@@ -933,94 +934,7 @@ fun ModernArCameraView(
                     ArMath.projectWorldToScreen(pt, viewMatrix, projectionMatrix, screenW, screenH)
                 }
 
-                // 3A. Floating Node Badges (線段1 起點 A, 線段1 終點 B, 線段2 起點 C, 線段2 終點 D...)
                 val isArea = subMode == 1 || (subMode == 0 && autoDetectedType == "AREA")
-                projectedNodePoints.forEachIndexed { index, proj ->
-                    if (proj != null) {
-                        val lineIndex = (index / 2) + 1
-                        val isStartNode = if (isArea) index == 0 else (index % 2 == 0)
-                        val isLastNode = if (isArea) (index == capturedPoints.size - 1 && capturedPoints.size > 1) else (index % 2 == 1)
-                        val charLabel = ('A'.code + index).toChar()
-
-                        val labelText = if (isArea) {
-                            when {
-                                index == 0 -> "起點 $charLabel"
-                                index == capturedPoints.size - 1 -> "終點 $charLabel"
-                                else -> "頂點 $charLabel"
-                            }
-                        } else {
-                            if (isStartNode) "線段$lineIndex 起點 $charLabel" else "線段$lineIndex 終點 $charLabel"
-                        }
-
-                        val badgeBg = if (isStartNode) colorPrimary else colorSecondary
-                        val badgeFg = if (isStartNode) colorOnPrimary else colorOnSecondary
-
-                        Surface(
-                            color = badgeBg,
-                            contentColor = badgeFg,
-                            shape = RoundedCornerShape(12.dp),
-                            shadowElevation = 6.dp,
-                            modifier = Modifier
-                                .offset {
-                                    androidx.compose.ui.unit.IntOffset(
-                                        (proj.first - 48.dp.toPx()).toInt(),
-                                        (proj.second - 48.dp.toPx()).toInt()
-                                    )
-                                }
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Icon(
-                                    imageVector = if (isStartNode) Icons.Rounded.Flag else Icons.Rounded.SportsScore,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                Text(
-                                    text = labelText,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // 3B. Live Endpoint Preview Badge (When user has placed Start Point and is aiming for End Point of current line)
-                if (capturedPoints.size % 2 == 1) {
-                    val currentLineNum = (capturedPoints.size / 2) + 1
-                    val nextChar = ('A'.code + capturedPoints.size).toChar()
-                    Surface(
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-                        contentColor = MaterialTheme.colorScheme.onSurface,
-                        shape = RoundedCornerShape(14.dp),
-                        border = BorderStroke(1.dp, colorPrimary.copy(alpha = 0.6f)),
-                        shadowElevation = 6.dp,
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .offset(y = (-45).dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
-                        ) {
-                            Icon(
-                                Icons.Rounded.AddLocationAlt,
-                                contentDescription = null,
-                                tint = colorPrimary,
-                                modifier = Modifier.size(15.dp)
-                            )
-                            Text(
-                                text = "線段 $currentLineNum 終點 $nextChar (點擊定位)",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                }
 
                 // 3C. Capsules for confirmed line segments (兩點成一線，不共用點)
                 val stepVal = if (isArea) 1 else 2
@@ -1622,6 +1536,35 @@ fun ModernArCameraView(
                                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
                                         Text(
+                                            "Android 15 暗光增強",
+                                            color = if (lowLightBoostEnabled) colorPrimary else colorOnSurface,
+                                            fontWeight = if (lowLightBoostEnabled) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                        if (lowLightBoostEnabled) {
+                                            Text("● 開啟", color = colorPrimary, fontSize = 11.sp)
+                                        }
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Rounded.Nightlight,
+                                        contentDescription = null,
+                                        tint = if (lowLightBoostEnabled) colorPrimary else colorOnSurfaceVariant
+                                    )
+                                },
+                                onClick = {
+                                    viewModel.setLowLightBoostEnabled(!lowLightBoostEnabled)
+                                    showAiToolsMenu = false
+                                }
+                            )
+
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
                                             "MobileSAM 邊界輪廓",
                                             color = if (isMobileSamMode) colorTertiary else colorOnSurface,
                                             fontWeight = if (isMobileSamMode) FontWeight.Bold else FontWeight.Normal
@@ -1820,29 +1763,6 @@ fun ModernArCameraView(
                         }
                     }
 
-                    // Quick Unit Switcher Button
-                    Surface(
-                        onClick = {
-                            val units = listOf("cm", "m", "in", "ft", "yd")
-                            val nextIndex = (units.indexOf(selectedUnit) + 1) % units.size
-                            viewModel.setSelectedUnit(units[nextIndex])
-                            viewModel.triggerHapticFeedback(com.example.ui.viewmodel.HapticType.CLICK)
-                        },
-                        shape = CircleShape,
-                        color = Color.Black.copy(alpha = 0.55f),
-                        shadowElevation = 3.dp,
-                        modifier = Modifier.size(40.dp)
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Text(
-                                text = selectedUnit.uppercase(),
-                                color = colorPrimary,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-
                     // History
                     IconButton(
                         onClick = onShowHistoryClick,
@@ -2006,12 +1926,10 @@ fun ModernArCameraView(
                                     isOddPoint -> {
                                         val curDist = liveDistanceMeters ?: 0.0
                                         val curStr = if (curDist > 0.0) viewModel.formatLength(curDist, selectedUnit) else "..."
-                                        "繪製線段 ${completedLinesCount + 1}: $curStr" to Icons.Rounded.Straighten
+                                        "長度: $curStr" to Icons.Rounded.Straighten
                                     }
-                                    completedLinesCount == 1 ->
-                                        "長度: ${viewModel.formatLength(totalLen, selectedUnit)}" to Icons.Rounded.Straighten
                                     completedLinesCount > 1 ->
-                                        "$completedLinesCount 條線段 (總長: ${viewModel.formatLength(totalLen, selectedUnit)})" to Icons.Rounded.Straighten
+                                        "總長: ${viewModel.formatLength(totalLen, selectedUnit)}" to Icons.Rounded.Straighten
                                     else ->
                                         "長度: ${viewModel.formatLength(totalLen, selectedUnit)}" to Icons.Rounded.Straighten
                                 }

@@ -40,8 +40,12 @@ fun SettingsSheet(
     val selectedUnit by viewModel.selectedUnit.collectAsState()
     val highFpsModeEnabled by viewModel.highFpsModeEnabled.collectAsState()
     val highDefinitionQualityEnabled by viewModel.highDefinitionQualityEnabled.collectAsState()
+    val lowLightBoostEnabled by viewModel.lowLightBoostEnabled.collectAsState()
     val sensorCorrectionEnabled by viewModel.sensorCorrectionEnabled.collectAsState()
     val torchBrightness by viewModel.torchBrightness.collectAsState()
+    val isVulkanGraphicsEnabled by viewModel.isVulkanGraphicsEnabled.collectAsState()
+    val isVulkanAiEnabled by viewModel.isVulkanAiEnabled.collectAsState()
+    val vulkanAiMetrics by viewModel.vulkanAiMetrics.collectAsState()
 
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
@@ -190,6 +194,21 @@ fun SettingsSheet(
                         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
                     )
 
+                    // Low Light Boost (Android 15 暗光增強)
+                    SettingsSwitchRow(
+                        icon = Icons.Rounded.Nightlight,
+                        title = "Android 15 暗光即時增強 (Low Light Boost)",
+                        subtitle = "在微光或昏暗環境下自動提升預覽亮度與 SNR 噪訊比",
+                        checked = lowLightBoostEnabled,
+                        onCheckedChange = { viewModel.setLowLightBoostEnabled(it) },
+                        testTag = "switch_low_light_boost"
+                    )
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 12.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                    )
+
                     // Smart Sensor Fusion
                     SettingsSwitchRow(
                         icon = Icons.Rounded.AutoFixHigh,
@@ -308,6 +327,119 @@ fun SettingsSheet(
                                     onClick = { viewModel.setTorchBrightness(context, level) },
                                     label = { Text(lbl, fontSize = 11.sp) },
                                     shape = RoundedCornerShape(8.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // 1.5 Vulkan 硬體加速引擎 (Vulkan Graphics & AI Hardware Engine)
+            SettingsCategoryHeader(
+                title = "Vulkan 硬體加速引擎",
+                icon = Icons.Rounded.Speed,
+                tint = MaterialTheme.colorScheme.tertiary
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            ElevatedCard(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.elevatedCardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                ),
+                elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    // Vulkan 3D Graphics Pipeline Toggle
+                    SettingsSwitchRow(
+                        icon = Icons.Rounded.Layers,
+                        title = "Vulkan 3D 空間渲染架構",
+                        subtitle = "硬體光柵化 3D 空間網格、多邊形與抗鋸齒線段",
+                        checked = isVulkanGraphicsEnabled,
+                        onCheckedChange = { viewModel.setVulkanGraphicsEnabled(it) },
+                        testTag = "switch_vulkan_graphics"
+                    )
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 12.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                    )
+
+                    // Vulkan AI Inference Acceleration Toggle
+                    SettingsSwitchRow(
+                        icon = Icons.Rounded.Memory,
+                        title = "Vulkan AI 視覺推論加速",
+                        subtitle = "TFLite GPU Delegate 加速 MobileSAM 與 Objectron 3D",
+                        checked = isVulkanAiEnabled,
+                        onCheckedChange = { viewModel.setVulkanAiEnabled(it) },
+                        testTag = "switch_vulkan_ai"
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Vulkan Hardware Driver & Live Telemetry Badge
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.65f),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            MaterialTheme.colorScheme.tertiary.copy(alpha = 0.35f)
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = MaterialTheme.colorScheme.tertiary,
+                                    modifier = Modifier.size(8.dp)
+                                ) {}
+                                Text(
+                                    text = viewModel.vulkanGraphicsPipeline.deviceInfo.deviceName,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.tertiary
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "API 版本: ${viewModel.vulkanGraphicsPipeline.deviceInfo.apiVersion}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "GPU 推論耗時: ${"%.1f".format(vulkanAiMetrics.inferenceTimeMs)} ms",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "後端: SPIR-V Compute Kernel",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "管線幀率: ${vulkanAiMetrics.computeThroughputFps} FPS",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.tertiary
                                 )
                             }
                         }

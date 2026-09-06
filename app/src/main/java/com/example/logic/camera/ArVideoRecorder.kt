@@ -106,8 +106,10 @@ class ArVideoRecorder(private val context: Context) {
     private fun captureFrameInternal(view: View) {
         try {
             if (view.width <= 0 || view.height <= 0) return
-            val scaledW = (view.width / 2).coerceAtLeast(320)
-            val scaledH = (view.height / 2).coerceAtLeast(480)
+            val rawW = (view.width / 2).coerceAtLeast(320)
+            val rawH = (view.height / 2).coerceAtLeast(480)
+            val scaledW = (rawW / 16) * 16
+            val scaledH = (rawH / 16) * 16
             val bitmap = Bitmap.createBitmap(scaledW, scaledH, Bitmap.Config.ARGB_8888)
 
             val activity = findActivity(view.context)
@@ -231,24 +233,43 @@ class ArVideoRecorder(private val context: Context) {
             }
         }
 
-        val width = (frames.first().width / 2) * 2 // Must be even
-        val height = (frames.first().height / 2) * 2 // Must be even
+        val width = (frames.first().width / 16) * 16 // Must be multiple of 16 for HEVC/AV1 compatibility
+        val height = (frames.first().height / 16) * 16 // Must be multiple of 16
 
         var muxer: MediaMuxer? = null
         var encoder: MediaCodec? = null
 
         try {
-            val mimeType = "video/avc"
-            val format = MediaFormat.createVideoFormat(mimeType, width, height).apply {
-                setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
-                setInteger(MediaFormat.KEY_BIT_RATE, 2_000_000)
-                setInteger(MediaFormat.KEY_FRAME_RATE, 10)
-                setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            val mimeTypesToTry = listOf("video/av01", "video/hevc", "video/avc")
+            var configuredSuccessfully = false
+            
+            for (mime in mimeTypesToTry) {
+                try {
+                    val format = MediaFormat.createVideoFormat(mime, width, height).apply {
+                        setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
+                        setInteger(MediaFormat.KEY_BIT_RATE, 2_000_000)
+                        setInteger(MediaFormat.KEY_FRAME_RATE, 10)
+                        setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+                    }
+                    encoder = MediaCodec.createEncoderByType(mime)
+                    encoder?.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                    encoder?.start()
+                    Log.i(TAG, "Successfully initialized video encoder: $mime")
+                    configuredSuccessfully = true
+                    break
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to initialize encoder for $mime: ${e.message}")
+                    try {
+                        encoder?.release()
+                    } catch (e2: Exception) {}
+                    encoder = null
+                }
             }
 
-            encoder = MediaCodec.createEncoderByType(mimeType)
-            encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            encoder.start()
+            if (!configuredSuccessfully || encoder == null) {
+                Log.e(TAG, "Failed to initialize any video encoder")
+                return null
+            }
 
             muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             var trackIndex = -1
@@ -265,8 +286,11 @@ class ArVideoRecorder(private val context: Context) {
                 } else frameBitmap
 
                 val yuvBytes = convertBitmapToYuv420(scaled, width, height)
+                if (scaled != frameBitmap && !scaled.isRecycled) {
+                    scaled.recycle()
+                }
 
-                val inputIndex = encoder.dequeueInputBuffer(10000)
+                val inputIndex = encoder!!.dequeueInputBuffer(10000)
                 if (inputIndex >= 0) {
                     val inputBuffer = encoder.getInputBuffer(inputIndex)
                     inputBuffer?.clear()
@@ -332,6 +356,14 @@ class ArVideoRecorder(private val context: Context) {
                 }
             } catch (e: Exception) {
                 // Ignore cleanup errors
+            }
+            synchronized(capturedFrameBitmaps) {
+                capturedFrameBitmaps.forEach { bm ->
+                    if (!bm.isRecycled) {
+                        bm.recycle()
+                    }
+                }
+                capturedFrameBitmaps.clear()
             }
         }
 

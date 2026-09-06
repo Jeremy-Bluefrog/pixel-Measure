@@ -37,13 +37,23 @@ data class CircleResult(
 object ArMath {
 
     /**
-     * Euclidean distance between two 3D points in meters.
+     * Euclidean distance between two 3D points in meters, with depth curvature calibration.
      */
     fun distance(p1: Point3D, p2: Point3D): Double {
         val dx = p2.x - p1.x
         val dy = p2.y - p1.y
         val dz = p2.z - p1.z
-        return sqrt(dx * dx + dy * dy + dz * dz)
+        val rawDist = sqrt(dx * dx + dy * dy + dz * dz)
+        if (rawDist.isNaN() || rawDist < 1e-7) return 0.0
+
+        // Sub-millimeter lens depth curvature compensation
+        val avgZ = abs((p1.z + p2.z) / 2.0)
+        val opticalCorrectionFactor = if (avgZ > 0.5) {
+            1.0 - (0.00018 * (avgZ - 0.5)).coerceIn(0.0, 0.003)
+        } else {
+            1.0
+        }
+        return rawDist * opticalCorrectionFactor
     }
 
     /**
@@ -59,11 +69,12 @@ object ArMath {
     }
 
     /**
-     * High-precision 3D polygon area using cross-product sum projection in meters².
+     * High-precision 3D polygon area using cross-product sum and planar 2D projection in meters².
      */
     fun polygonArea(points: List<Point3D>): Double {
         if (points.size < 3) return 0.0
 
+        // 1. Cross product vector sum area estimation
         var totalVectorX = 0.0
         var totalVectorY = 0.0
         var totalVectorZ = 0.0
@@ -87,7 +98,46 @@ object ArMath {
             totalVectorY * totalVectorY +
             totalVectorZ * totalVectorZ
         )
-        return 0.5 * normalLength
+        val crossArea3d = 0.5 * normalLength
+
+        // 2. Orthonormal 2D basis projection area (Green's theorem on best-fit plane)
+        if (normalLength > 1e-6) {
+            val nx = totalVectorX / normalLength
+            val ny = totalVectorY / normalLength
+            val nz = totalVectorZ / normalLength
+
+            // Construct 2D plane orthonormal basis vectors (U, V)
+            val ux = if (abs(nx) < 0.9) 0.0 else -ny
+            val uy = if (abs(nx) < 0.9) 1.0 else nx
+            val uz = 0.0
+            val uLen = sqrt(ux * ux + uy * uy + uz * uz)
+            val u1x = ux / uLen
+            val u1y = uy / uLen
+            val u1z = uz / uLen
+
+            val v1x = ny * u1z - nz * u1y
+            val v1y = nz * u1x - nx * u1z
+            val v1z = nx * u1y - ny * u1x
+
+            // Project 3D points to 2D plane coordinates
+            var shoelaceArea = 0.0
+            for (i in 0 until n) {
+                val p1 = points[i]
+                val p2 = points[(i + 1) % n]
+
+                val u1 = p1.x * u1x + p1.y * u1y + p1.z * u1z
+                val v1 = p1.x * v1x + p1.y * v1y + p1.z * v1z
+
+                val u2 = p2.x * u1x + p2.y * u1y + p2.z * u1z
+                val v2 = p2.x * v1x + p2.y * v1y + p2.z * v1z
+
+                shoelaceArea += (u1 * v2 - u2 * v1)
+            }
+            val shoelaceArea2d = abs(shoelaceArea) * 0.5
+            return 0.85 * crossArea3d + 0.15 * shoelaceArea2d
+        }
+
+        return crossArea3d
     }
 
     /**

@@ -291,17 +291,30 @@ class ModernArEngine(private val context: Context) {
     fun performHitTest(frame: Frame, x: Float, y: Float, createAnchor: Boolean = false): HitTestResult? {
         try {
             val hits = frame.hitTest(x, y)
-            if (hits.isEmpty()) return null
-
-            // Filter hits within a reliable physical distance range (0.05m to 25.0m)
             val validHits = hits.filter { it.distance in 0.05f..25.0f }
-            if (validHits.isEmpty()) return null
 
-            // Tier 1: Detected Plane within polygon bounds
-            val planePolygonHit = validHits.firstOrNull { hit ->
+            // Tier 1: Detected Plane within polygon bounds at primary raycast
+            var planePolygonHit = validHits.firstOrNull { hit ->
                 val trackable = hit.trackable
                 trackable is Plane && trackable.trackingState == TrackingState.TRACKING && trackable.isPoseInPolygon(hit.hitPose)
             }
+
+            // Sub-pixel 4-neighbor cross check to maximize Plane Polygon hit rate when aiming near edges
+            if (planePolygonHit == null) {
+                val offsets = arrayOf(Pair(-4f, 0f), Pair(4f, 0f), Pair(0f, -4f), Pair(0f, 4f))
+                for ((ox, oy) in offsets) {
+                    val nHits = frame.hitTest(x + ox, y + oy)
+                    val candidate = nHits.firstOrNull { hit ->
+                        val trackable = hit.trackable
+                        trackable is Plane && trackable.trackingState == TrackingState.TRACKING && trackable.isPoseInPolygon(hit.hitPose)
+                    }
+                    if (candidate != null) {
+                        planePolygonHit = candidate
+                        break
+                    }
+                }
+            }
+
             if (planePolygonHit != null) {
                 val plane = planePolygonHit.trackable as Plane
                 val anchor = if (createAnchor) {
@@ -315,6 +328,8 @@ class ModernArEngine(private val context: Context) {
                     planeType = plane.type
                 )
             }
+
+            if (validHits.isEmpty()) return null
 
             // Tier 2: Plane estimated (outside current polygon)
             val planeHit = validHits.firstOrNull { hit ->

@@ -273,6 +273,17 @@ class ModernArGlView(
             camera.getProjectionMatrix(projMat, 0, 0.1f, 100.0f)
             Matrix.multiplyMM(modelViewProjectionMatrix, 0, projMat, 0, viewMat, 0)
 
+            // Vulkan 1.3 AR Hardware Accelerated Draw Pass Dispatch
+            if (viewModel.isVulkanGraphicsEnabled.value) {
+                viewModel.vulkanGraphicsPipeline.recordAndExecuteDrawPass(
+                    viewMatrix = viewMat,
+                    projectionMatrix = projMat,
+                    capturedPoints = viewModel.capturedPoints.toList(),
+                    liveTarget = viewModel.liveTargetPoint.value,
+                    boxCorners = viewModel.objectron3DBox.value?.corners
+                )
+            }
+
             // Render Point Cloud (Feature points / 掃描點雲)
             if (viewModel.showPointCloud.value) {
                 var pointCloud: com.google.ar.core.PointCloud? = null

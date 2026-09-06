@@ -25,6 +25,9 @@ import com.example.logic.ai.TilePatternType
 import com.example.logic.ar.*
 import com.example.logic.sensor.SensorCorrectionTelemetry
 import com.example.logic.sensor.SensorFusionCorrectionEngine
+import com.example.logic.vulkan.VulkanArGraphicsPipeline
+import com.example.logic.vulkan.VulkanAiInferenceBridge
+import com.example.logic.vulkan.VulkanAiMetrics
 import com.google.ar.core.*
 import android.graphics.Bitmap
 import kotlinx.coroutines.Dispatchers
@@ -234,6 +237,14 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
 
     val highFpsModeEnabled = MutableStateFlow(prefs.getBoolean("high_fps_mode_enabled", true))
     val highDefinitionQualityEnabled = MutableStateFlow(prefs.getBoolean("high_definition_quality_enabled", true))
+    val lowLightBoostEnabled = MutableStateFlow(prefs.getBoolean("low_light_boost_enabled", true))
+
+    fun setLowLightBoostEnabled(enabled: Boolean) {
+        lowLightBoostEnabled.value = enabled
+        prefs.edit().putBoolean("low_light_boost_enabled", enabled).apply()
+        highSpeedCamera2Manager?.setLowLightBoostEnabled(enabled)
+        _toastMessage.tryEmit(if (enabled) "✨ 已啟用 Android 15 暗光增強 (Low Light Boost)" else "已關閉暗光增強")
+    }
 
     fun setHighFpsModeEnabled(enabled: Boolean) {
         highFpsModeEnabled.value = enabled
@@ -245,6 +256,28 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         highDefinitionQualityEnabled.value = enabled
         prefs.edit().putBoolean("high_definition_quality_enabled", enabled).apply()
         _toastMessage.tryEmit(if (enabled) "已啟用 Full HD/4K 超高畫質模式" else "已切換至標準畫質模式")
+    }
+
+    // Vulkan 1.3 AR Hardware Accelerated Graphics & AI Inference Engine
+    val vulkanGraphicsPipeline = VulkanArGraphicsPipeline(application)
+    val vulkanAiBridge = VulkanAiInferenceBridge(application)
+
+    val isVulkanGraphicsEnabled = MutableStateFlow(prefs.getBoolean("vulkan_graphics_enabled", true))
+    val isVulkanAiEnabled = MutableStateFlow(prefs.getBoolean("vulkan_ai_enabled", true))
+
+    private val _vulkanAiMetrics = MutableStateFlow(vulkanAiBridge.metrics)
+    val vulkanAiMetrics: StateFlow<VulkanAiMetrics> = _vulkanAiMetrics.asStateFlow()
+
+    fun setVulkanGraphicsEnabled(enabled: Boolean) {
+        isVulkanGraphicsEnabled.value = enabled
+        prefs.edit().putBoolean("vulkan_graphics_enabled", enabled).apply()
+        _toastMessage.tryEmit(if (enabled) "🚀 已啟用 Vulkan 3D 空間網格與線段硬件加速渲染" else "已切換至 OpenGL ES 渲染管線")
+    }
+
+    fun setVulkanAiEnabled(enabled: Boolean) {
+        isVulkanAiEnabled.value = enabled
+        prefs.edit().putBoolean("vulkan_ai_enabled", enabled).apply()
+        _toastMessage.tryEmit(if (enabled) "⚡ 已啟用 Vulkan TFLite GPU 視覺推論加速 (MobileSAM / Objectron 3D)" else "已切換至標準 CPU 推論後端")
     }
 
     fun setSensorCorrectionEnabled(enabled: Boolean) {
@@ -485,14 +518,25 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         if (capturedPoints.isEmpty()) {
             val liveTarget = _liveTargetPoint.value
             if (liveTarget != null) {
-                // Generate instant 3D bounding box around live target
-                _objectron3DBox.value = ObjectronEngine.estimateBoxFromPlane(
-                    centerPoint = liveTarget,
-                    widthMeters = 0.30,
-                    heightMeters = 0.20,
-                    depthMeters = 0.25,
-                    category = "Object"
-                )
+                // Generate instant 3D bounding box around live target using Vulkan GPU Delegate if enabled
+                _objectron3DBox.value = if (isVulkanAiEnabled.value) {
+                    val box = vulkanAiBridge.dispatchObjectron3DVulkan(
+                        centerPoint = liveTarget,
+                        widthMeters = 0.30,
+                        heightMeters = 0.20,
+                        depthMeters = 0.25
+                    )
+                    _vulkanAiMetrics.value = vulkanAiBridge.metrics
+                    box
+                } else {
+                    ObjectronEngine.estimateBoxFromPlane(
+                        centerPoint = liveTarget,
+                        widthMeters = 0.30,
+                        heightMeters = 0.20,
+                        depthMeters = 0.25,
+                        category = "Object"
+                    )
+                }
             } else {
                 _objectron3DBox.value = null
             }
@@ -537,14 +581,27 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
         screenH: Float
     ) {
         val refPoint = _liveTargetPoint.value ?: capturedPoints.lastOrNull()
-        val segResult = MobileSamEngine.segmentAtPoint(
-            screenTap = screenTap,
-            screenWidth = screenW,
-            screenHeight = screenH,
-            reference3DPoint = refPoint,
-            viewMatrix = _viewMatrix.value,
-            projectionMatrix = _projectionMatrix.value
-        )
+        val segResult = if (isVulkanAiEnabled.value) {
+            val res = vulkanAiBridge.dispatchMobileSamVulkan(
+                promptPoint = screenTap,
+                screenWidth = screenW,
+                screenHeight = screenH,
+                referencePoint = refPoint,
+                viewMatrix = _viewMatrix.value,
+                projectionMatrix = _projectionMatrix.value
+            )
+            _vulkanAiMetrics.value = vulkanAiBridge.metrics
+            res
+        } else {
+            MobileSamEngine.segmentAtPoint(
+                screenTap = screenTap,
+                screenWidth = screenW,
+                screenHeight = screenH,
+                reference3DPoint = refPoint,
+                viewMatrix = _viewMatrix.value,
+                projectionMatrix = _projectionMatrix.value
+            )
+        }
         _segmentedObject.value = segResult
         triggerHapticFeedback()
         _toastMessage.tryEmit("✨ 已分割 ${segResult.label}（面積: ${"%.2f".format(segResult.areaM2)} m²）")
