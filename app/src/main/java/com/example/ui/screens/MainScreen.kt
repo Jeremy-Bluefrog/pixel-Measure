@@ -53,33 +53,9 @@ fun MainScreen(viewModel: MeasureViewModel) {
     val lastSavedRecord by viewModel.lastSavedRecord.collectAsState()
     val context = LocalContext.current
 
-    val snackbarHostState = remember { SnackbarHostState() }
-
-    LaunchedEffect(Unit) {
-        viewModel.toastMessage.collect { message ->
-            snackbarHostState.showSnackbar(
-                message = message,
-                duration = SnackbarDuration.Short
-            )
-        }
-    }
-
     val colorPrimary = MaterialTheme.colorScheme.primary
 
     Scaffold(
-        snackbarHost = {
-            SnackbarHost(
-                hostState = snackbarHostState,
-                snackbar = { data ->
-                    Snackbar(
-                        snackbarData = data,
-                        shape = RoundedCornerShape(16.dp),
-                        containerColor = MaterialTheme.colorScheme.inverseSurface,
-                        contentColor = MaterialTheme.colorScheme.inverseOnSurface
-                    )
-                }
-            )
-        },
         topBar = {
             AnimatedVisibility(
                 visible = currentMode == 1,

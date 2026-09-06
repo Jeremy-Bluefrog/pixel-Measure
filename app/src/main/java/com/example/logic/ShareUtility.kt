@@ -18,7 +18,6 @@ import android.provider.MediaStore
 import android.view.PixelCopy
 import android.view.View
 import android.view.Window
-import android.widget.Toast
 import androidx.core.content.FileProvider
 import com.example.data.model.MeasureRecord
 import com.example.ui.viewmodel.Point3D
@@ -174,7 +173,6 @@ object ShareUtility {
             chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(chooser)
         } catch (e: Exception) {
-            Toast.makeText(context, "分享失敗: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
             e.printStackTrace()
         }
     }
@@ -224,7 +222,6 @@ object ShareUtility {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val clip = ClipData.newPlainText("AR 測量紀錄", formatTextReport(record))
         clipboard.setPrimaryClip(clip)
-        Toast.makeText(context, "測量紀錄已複製到剪貼簿", Toast.LENGTH_SHORT).show()
     }
 
     /**
@@ -232,7 +229,6 @@ object ShareUtility {
      */
     fun exportAllRecordsCsv(context: Context, records: List<MeasureRecord>) {
         if (records.isEmpty()) {
-            Toast.makeText(context, "沒有可匯出的歷史紀錄", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -275,7 +271,6 @@ object ShareUtility {
             chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(chooser)
         } catch (e: Exception) {
-            Toast.makeText(context, "匯出失敗: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
             e.printStackTrace()
         }
     }
@@ -782,7 +777,6 @@ object ShareUtility {
             context.startActivity(Intent.createChooser(shareIntent, "分享 PDF 測量報告"))
             
         } catch (e: Exception) {
-            Toast.makeText(context, "產生 PDF 失敗: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
             e.printStackTrace()
         }
     }
@@ -802,7 +796,7 @@ object ShareUtility {
             out.flush()
             out.close()
             
-            // Try saving to public downloads so user can access directly (and display success path toast)
+            // Try saving to public downloads so user can access directly
             try {
                 val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
                 if (downloadsDir.exists() || downloadsDir.mkdirs()) {
@@ -811,7 +805,6 @@ object ShareUtility {
                     bitmap.compress(Bitmap.CompressFormat.JPEG, 95, pubOut)
                     pubOut.flush()
                     pubOut.close()
-                    Toast.makeText(context, "圖檔已自動匯出至下載目錄！\n${publicFile.name}", Toast.LENGTH_LONG).show()
                 }
             } catch (secError: Exception) {
                 // Ignore permission issues for writing to physical external public directories, share sheet fallback excels
@@ -833,7 +826,6 @@ object ShareUtility {
             context.startActivity(Intent.createChooser(shareIntent, "分享圖案佈置報告"))
             
         } catch (e: Exception) {
-            Toast.makeText(context, "產生圖檔失敗: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
             e.printStackTrace()
         }
     }
@@ -850,7 +842,7 @@ object ShareUtility {
             }
             context.startActivity(Intent.createChooser(shareIntent, title))
         } catch (e: Exception) {
-            Toast.makeText(context, "分享失敗: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            // Silently handled
         }
     }
 }

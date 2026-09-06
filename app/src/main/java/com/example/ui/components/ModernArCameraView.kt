@@ -10,7 +10,6 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.view.TextureView
-import android.widget.Toast
 import com.example.ui.viewmodel.HapticType
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -274,14 +273,29 @@ fun ModernArCameraView(
     val colorError = MaterialTheme.colorScheme.error
     val colorOnError = MaterialTheme.colorScheme.onError
 
+    val isMeasurementAvailable = trackingState == com.google.ar.core.TrackingState.TRACKING && liveTargetPoint != null
+
     val reticleColorAnimated by animateColorAsState(
         targetValue = when {
+            !isMeasurementAvailable -> Color(0xFF8E8E93)
             trackingStability.isDriftRisk -> colorError
             isSnapped -> colorTertiary
             else -> colorPrimary
         },
         animationSpec = tween(150, easing = FastOutSlowInEasing),
         label = "reticleColorAnimated"
+    )
+
+    val addFabContainerColor by animateColorAsState(
+        targetValue = if (isMeasurementAvailable) colorPrimary else Color(0xFF3C3C3E),
+        animationSpec = tween(200, easing = FastOutSlowInEasing),
+        label = "addFabContainerColor"
+    )
+
+    val addFabIconColor by animateColorAsState(
+        targetValue = if (isMeasurementAvailable) colorOnPrimary else Color(0xFF8E8E93),
+        animationSpec = tween(200, easing = FastOutSlowInEasing),
+        label = "addFabIconColor"
     )
 
     if (!cameraPermissionState.status.isGranted) {
@@ -1333,44 +1347,7 @@ fun ModernArCameraView(
                         )
                     }
 
-                    // 4. Precision Crosshair Hairlines (Top, Bottom, Left, Right Ticks)
-                    val crossHairOffsetInner = currentRadius + 3.dp.toPx()
-                    val crossHairLen = if (isSnapped) 10.dp.toPx() else 6.dp.toPx()
-                    val crossHairStroke = if (isSnapped) 2.2.dp.toPx() else 1.6.dp.toPx()
-                    val tickColor = if (isSnapped) colorPrimary else Color.White.copy(alpha = 0.9f)
 
-                    // Top Hairline
-                    drawLine(
-                        color = tickColor,
-                        start = Offset(center.x, center.y - crossHairOffsetInner),
-                        end = Offset(center.x, center.y - crossHairOffsetInner - crossHairLen),
-                        strokeWidth = crossHairStroke,
-                        cap = StrokeCap.Round
-                    )
-                    // Bottom Hairline
-                    drawLine(
-                        color = tickColor,
-                        start = Offset(center.x, center.y + crossHairOffsetInner),
-                        end = Offset(center.x, center.y + crossHairOffsetInner + crossHairLen),
-                        strokeWidth = crossHairStroke,
-                        cap = StrokeCap.Round
-                    )
-                    // Left Hairline
-                    drawLine(
-                        color = tickColor,
-                        start = Offset(center.x - crossHairOffsetInner, center.y),
-                        end = Offset(center.x - crossHairOffsetInner - crossHairLen, center.y),
-                        strokeWidth = crossHairStroke,
-                        cap = StrokeCap.Round
-                    )
-                    // Right Hairline
-                    drawLine(
-                        color = tickColor,
-                        start = Offset(center.x + crossHairOffsetInner, center.y),
-                        end = Offset(center.x + crossHairOffsetInner + crossHairLen, center.y),
-                        strokeWidth = crossHairStroke,
-                        cap = StrokeCap.Round
-                    )
 
                     // 5. Solid Center White & Accent Core Pinpoint Dot
                     drawCircle(
@@ -1479,37 +1456,6 @@ fun ModernArCameraView(
                                     )
                                 }
                             }
-
-                            // "清除" button
-                            Surface(
-                                color = Color.Black.copy(alpha = 0.55f),
-                                shape = RoundedCornerShape(20.dp),
-                                modifier = Modifier
-                                    .clickable {
-                                        viewModel.clearActivePoints()
-                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                    }
-                                    .shadow(4.dp, RoundedCornerShape(20.dp))
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        Icons.Rounded.DeleteOutline,
-                                        contentDescription = "Clear",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = "清除",
-                                        color = Color.White,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                }
-                            }
                         } else {
                             val stabilityColor = when (trackingStability.level) {
                                 StabilityLevel.HIGH -> colorTertiary
@@ -1537,7 +1483,7 @@ fun ModernArCameraView(
                                             modifier = Modifier.size(8.dp)
                                         ) {}
                                         Text(
-                                            text = "${(trackingStability.confidenceScore * 100).toInt()}% 穩定",
+                                            text = "穩定",
                                             style = MaterialTheme.typography.labelMedium,
                                             fontWeight = FontWeight.SemiBold,
                                             color = if (trackingStability.isDriftRisk) colorError else Color.White
@@ -2089,7 +2035,7 @@ fun ModernArCameraView(
                                 )
                             }
                         }
-                    } else {
+                    } else if (isMobileSamMode || isObjectronMode) {
                         // Guidance Pill (Specialized for MobileSAM & Objectron if active)
                         Surface(
                             color = Color.Black.copy(alpha = 0.65f),
@@ -2145,14 +2091,6 @@ fun ModernArCameraView(
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold
                                     )
-                                } else {
-                                    Icon(Icons.Rounded.TouchApp, null, tint = colorPrimary, modifier = Modifier.size(16.dp))
-                                    Text(
-                                        text = "對準目標表面，點擊 ＋ 標定測量起點",
-                                        color = Color.White,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
                                 }
                             }
                         }
@@ -2188,42 +2126,22 @@ fun ModernArCameraView(
                                 animationSpec = tween(180)
                             )
                         ) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                IconButton(
-                                    onClick = {
-                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
-                                        viewModel.undo()
-                                    },
-                                    modifier = Modifier
-                                        .size(46.dp)
-                                        .background(Color.Black.copy(alpha = 0.60f), CircleShape)
-                                        .shadow(4.dp, CircleShape)
-                                ) {
-                                    Icon(
-                                        Icons.Rounded.Undo,
-                                        contentDescription = "Undo",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-
-                                IconButton(
-                                    onClick = {
-                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
-                                        viewModel.clearActivePoints()
-                                    },
-                                    modifier = Modifier
-                                        .size(46.dp)
-                                        .background(Color.Black.copy(alpha = 0.60f), CircleShape)
-                                        .shadow(4.dp, CircleShape)
-                                ) {
-                                    Icon(
-                                        Icons.Rounded.DeleteSweep,
-                                        contentDescription = "Clear",
-                                        tint = colorError,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
+                            IconButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                    viewModel.undo()
+                                },
+                                modifier = Modifier
+                                    .size(46.dp)
+                                    .background(Color.Black.copy(alpha = 0.60f), CircleShape)
+                                    .shadow(4.dp, CircleShape)
+                            ) {
+                                Icon(
+                                    Icons.Rounded.Undo,
+                                    contentDescription = "Undo",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
                             }
                         }
                     }
@@ -2234,14 +2152,19 @@ fun ModernArCameraView(
                         modifier = Modifier.padding(horizontal = 8.dp)
                     ) {
                         Surface(
-                            color = colorPrimary,
+                            color = addFabContainerColor,
                             shape = CircleShape,
-                            shadowElevation = 8.dp,
+                            border = if (!isMeasurementAvailable) BorderStroke(1.5.dp, Color(0xFF5A5A5E)) else null,
+                            shadowElevation = if (isMeasurementAvailable) 8.dp else 2.dp,
                             modifier = Modifier
                                 .size(68.dp)
                                 .clickable {
-                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                    viewModel.requestHitTest()
+                                    if (isMeasurementAvailable) {
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                        viewModel.requestHitTest()
+                                    } else {
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                    }
                                 }
                                 .testTag("add_point_fab")
                         ) {
@@ -2249,7 +2172,7 @@ fun ModernArCameraView(
                                 Icon(
                                     Icons.Rounded.Add,
                                     contentDescription = "Add Point",
-                                    tint = colorOnPrimary,
+                                    tint = addFabIconColor,
                                     modifier = Modifier.size(34.dp)
                                 )
                             }
@@ -2286,7 +2209,7 @@ fun ModernArCameraView(
                         }
                     }
 
-                    // Right Slot (Balanced 1f weight): Save Result & Camera Shutter Button
+                    // Right Slot (Balanced 1f weight): Camera Shutter Button
                     Box(
                         modifier = Modifier.weight(1f),
                         contentAlignment = Alignment.CenterEnd
@@ -2295,62 +2218,6 @@ fun ModernArCameraView(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            // Save Result Button (Only shown when a valid measurement is completed)
-                            androidx.compose.animation.AnimatedVisibility(
-                                visible = capturedPoints.size >= 2,
-                                enter = scaleIn(
-                                    initialScale = 0.8f,
-                                    animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow)
-                                ) + fadeIn(animationSpec = tween(180)),
-                                exit = scaleOut(
-                                    targetScale = 0.8f,
-                                    animationSpec = tween(150)
-                                ) + fadeOut(animationSpec = tween(150))
-                            ) {
-                                Surface(
-                                    color = colorPrimary,
-                                    shape = RoundedCornerShape(24.dp),
-                                    shadowElevation = 6.dp,
-                                    modifier = Modifier
-                                        .clickable {
-                                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                            isShutterFlash = true
-                                            coroutineScope.launch {
-                                                kotlinx.coroutines.delay(100)
-                                                isShutterFlash = false
-                                            }
-                                            ShareUtility.captureAndSaveToGallery(localView) { uri ->
-                                                if (uri != null) {
-                                                    Toast.makeText(context, "已成功儲存至相簿", Toast.LENGTH_SHORT).show()
-                                                    viewModel.saveMeasurementRecord(imagePath = uri.toString())
-                                                } else {
-                                                    Toast.makeText(context, "儲存失敗，請重試", Toast.LENGTH_SHORT).show()
-                                                }
-                                            }
-                                        }
-                                        .testTag("save_result_button")
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Rounded.SaveAlt,
-                                            contentDescription = "儲存結果",
-                                            tint = colorOnPrimary,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Text(
-                                            text = "儲存",
-                                            color = colorOnPrimary,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-                            }
-
                             // Camera Shutter Button (Pixel Camera Style: Tap to take Photo, Long-Press to Record Video)
                             PixelShutterButton(
                                 size = 52.dp,
@@ -2360,7 +2227,6 @@ fun ModernArCameraView(
                                     if (isRecordingVideo) {
                                         // Stop Video Recording
                                         videoRecorder.stopRecording { videoPath, thumbPath, durationSec ->
-                                            Toast.makeText(context, "🎬 已完成測量錄影並儲存至相簿 (${durationSec}秒)", Toast.LENGTH_LONG).show()
                                             if (videoPath != null) {
                                                 viewModel.saveMeasurementRecord(
                                                     imagePath = thumbPath ?: videoPath,
@@ -2383,9 +2249,7 @@ fun ModernArCameraView(
                                 onLongClick = {
                                     haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                                     if (!isRecordingVideo) {
-                                        videoRecorder.startRecording(localView) {
-                                            Toast.makeText(context, "🔴 開始 AR 測量錄影 (點擊快門鍵停止)", Toast.LENGTH_SHORT).show()
-                                        }
+                                        videoRecorder.startRecording(localView)
                                     }
                                 },
                                 modifier = Modifier.padding(end = 16.dp),
