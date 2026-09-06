@@ -1941,20 +1941,15 @@ fun ModernArCameraView(
                 )
             }
 
-            // Bottom subtle vignette for camera control deck
-            Box(
+            // Bottom Gradient Blur Scrim for camera control deck (漸層模糊取代純黑漸層)
+            GradientBlurScrim(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(150.dp)
-                    .align(Alignment.BottomCenter)
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(
-                                Color.Transparent,
-                                Color.Black.copy(alpha = 0.42f)
-                            )
-                        )
-                    )
+                    .height(160.dp)
+                    .align(Alignment.BottomCenter),
+                isTop = false,
+                baseColor = Color.Black.copy(alpha = 0.35f),
+                blurRadius = 32.dp
             )
 
             Column(

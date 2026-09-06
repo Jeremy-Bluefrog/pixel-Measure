@@ -115,42 +115,51 @@ fun GradientBlurBottomBar(
 
 /**
  * Standalone decorative gradient blur scrim for overlaying on camera or canvas viewports.
+ * Uses progressive multi-layer frosted glass gradient blur to replace solid/heavy black gradients.
  */
 @Composable
 fun GradientBlurScrim(
     modifier: Modifier = Modifier,
     isTop: Boolean,
-    baseColor: Color = Color.Black,
-    blurRadius: Dp = 28.dp
+    baseColor: Color = Color.Black.copy(alpha = 0.35f),
+    blurRadius: Dp = 32.dp
 ) {
     val gradient = if (isTop) {
         Brush.verticalGradient(
-            0.0f to baseColor.copy(alpha = 0.75f),
-            0.4f to baseColor.copy(alpha = 0.40f),
-            0.8f to baseColor.copy(alpha = 0.10f),
+            0.0f to baseColor.copy(alpha = 0.50f),
+            0.35f to baseColor.copy(alpha = 0.28f),
+            0.70f to baseColor.copy(alpha = 0.10f),
             1.0f to Color.Transparent
         )
     } else {
         Brush.verticalGradient(
             0.0f to Color.Transparent,
-            0.2f to baseColor.copy(alpha = 0.10f),
-            0.6f to baseColor.copy(alpha = 0.40f),
-            1.0f to baseColor.copy(alpha = 0.75f)
+            0.30f to baseColor.copy(alpha = 0.10f),
+            0.65f to baseColor.copy(alpha = 0.28f),
+            1.0f to baseColor.copy(alpha = 0.50f)
         )
     }
 
     Box(modifier = modifier) {
+        // Deep progressive blur layer
         Box(
             modifier = Modifier
                 .matchParentSize()
                 .blur(blurRadius, edgeTreatment = BlurredEdgeTreatment.Unbounded)
                 .background(gradient)
-            
         )
+        // Mid-range smooth blur layer
         Box(
             modifier = Modifier
                 .matchParentSize()
                 .blur(blurRadius * 0.5f, edgeTreatment = BlurredEdgeTreatment.Unbounded)
+                .background(gradient)
+        )
+        // Fine frosted glass transition layer
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .blur(blurRadius * 0.25f, edgeTreatment = BlurredEdgeTreatment.Unbounded)
                 .background(gradient)
         )
     }
