@@ -61,28 +61,21 @@ class LowLightBoostEngine(private val context: Context) {
     }
 
     /**
-     * Apply Low Light Boost AE mode to Camera2 CaptureRequest.Builder if supported.
+     * Apply Low Light Boost AE mode to Camera2 CaptureRequest.Builder (permanently forced ON).
      */
-    fun applyLowLightBoost(builder: CaptureRequest.Builder, enabled: Boolean) {
+    fun applyLowLightBoost(builder: CaptureRequest.Builder, enabled: Boolean = true) {
         try {
-            if (enabled) {
-                if (isHardwareBoostSupported) {
-                    builder.set(CaptureRequest.CONTROL_AE_MODE, AE_MODE_LOW_LIGHT_BOOST)
-                    Log.i(TAG, "Forced CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY ON")
-                } else {
-                    // Forced high exposure compensation fallback for non-Android 15 devices
-                    builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                    builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, 4) // +2.0 EV boost
-                    Log.i(TAG, "Forced AE Exposure Compensation +2.0 EV for Low Light Boost")
-                }
-                isBoostActive = true
+            // Unconditionally forced ON
+            if (isHardwareBoostSupported) {
+                builder.set(CaptureRequest.CONTROL_AE_MODE, AE_MODE_LOW_LIGHT_BOOST)
+                Log.i(TAG, "Permanently Forced CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY ON")
             } else {
+                // Forced high exposure compensation fallback for non-Android 15 devices
                 builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                try {
-                    builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, 0)
-                } catch (_: Throwable) {}
-                isBoostActive = false
+                builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, 4) // +2.0 EV boost
+                Log.i(TAG, "Permanently Forced AE Exposure Compensation +2.0 EV for Low Light Boost")
             }
+            isBoostActive = true
         } catch (e: Throwable) {
             Log.w(TAG, "Failed to apply Low Light Boost to CaptureRequest: ${e.message}")
         }

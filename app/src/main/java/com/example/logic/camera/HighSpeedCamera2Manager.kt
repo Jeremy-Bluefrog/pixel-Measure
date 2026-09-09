@@ -43,14 +43,13 @@ class HighSpeedCamera2Manager(private val context: Context) {
     private var isHighSpeedForceDisabled = false
 
     val lowLightBoostEngine = LowLightBoostEngine(context)
-    private var isLowLightBoostEnabled = true
+    private val isLowLightBoostEnabled = true
 
-    fun setLowLightBoostEnabled(enabled: Boolean) {
-        isLowLightBoostEnabled = enabled
+    fun setLowLightBoostEnabled(enabled: Boolean = true) {
         val session = captureSession ?: return
         val builder = previewRequestBuilder ?: return
         try {
-            lowLightBoostEngine.applyLowLightBoost(builder, enabled)
+            lowLightBoostEngine.applyLowLightBoost(builder, true)
             if (isHighSpeedSessionActive && session is CameraConstrainedHighSpeedCaptureSession) {
                 val list = session.createHighSpeedRequestList(builder.build())
                 session.setRepeatingBurst(list, null, backgroundHandler)

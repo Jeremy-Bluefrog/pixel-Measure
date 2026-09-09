@@ -237,13 +237,12 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
 
     val highFpsModeEnabled = MutableStateFlow(prefs.getBoolean("high_fps_mode_enabled", true))
     val highDefinitionQualityEnabled = MutableStateFlow(prefs.getBoolean("high_definition_quality_enabled", true))
-    val lowLightBoostEnabled = MutableStateFlow(prefs.getBoolean("low_light_boost_enabled", true))
+    val lowLightBoostEnabled = MutableStateFlow(true)
 
-    fun setLowLightBoostEnabled(enabled: Boolean) {
-        lowLightBoostEnabled.value = enabled
-        prefs.edit().putBoolean("low_light_boost_enabled", enabled).apply()
-        highSpeedCamera2Manager?.setLowLightBoostEnabled(enabled)
-        _toastMessage.tryEmit(if (enabled) "✨ 已啟用 Android 15 暗光增強 (Low Light Boost)" else "已關閉暗光增強")
+    fun setLowLightBoostEnabled(enabled: Boolean = true) {
+        lowLightBoostEnabled.value = true
+        prefs.edit().putBoolean("low_light_boost_enabled", true).apply()
+        highSpeedCamera2Manager?.setLowLightBoostEnabled(true)
     }
 
     fun setHighFpsModeEnabled(enabled: Boolean) {
@@ -641,9 +640,22 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     private val _rulerCalibration = MutableStateFlow(prefs.getFloat("ruler_calibration", 1.0f))
     val rulerCalibration: StateFlow<Float> = _rulerCalibration.asStateFlow()
 
-    fun updateRulerCalibration(factor: Float) {
+    private val _isRulerCalibrationActive = MutableStateFlow(false)
+    val isRulerCalibrationActive: StateFlow<Boolean> = _isRulerCalibrationActive.asStateFlow()
+
+    fun setRulerCalibrationActive(active: Boolean) {
+        _isRulerCalibrationActive.value = active
+    }
+
+    fun updateRulerCalibration(factor: Float, persistImmediately: Boolean = true) {
         _rulerCalibration.value = factor
-        prefs.edit().putFloat("ruler_calibration", factor).apply()
+        if (persistImmediately) {
+            prefs.edit().putFloat("ruler_calibration", factor).apply()
+        }
+    }
+
+    fun persistRulerCalibration() {
+        prefs.edit().putFloat("ruler_calibration", _rulerCalibration.value).apply()
     }
 
     // Queue for hit-testing requested from UI touches
@@ -1371,12 +1383,13 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     ) {
         viewModelScope.launch {
             val timeStr = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
-            val formatted = formatLength(cmVal / 100.0, _selectedUnit.value)
+            val meters = cmVal / 100.0
+            val formatted = String.format(java.util.Locale.US, "%.2f cm", cmVal)
             val title = if (!customTitle.isNullOrBlank()) customTitle else "螢幕尺測量 ($formatted) · $timeStr"
             val record = MeasureRecord(
                 title = title,
-                value = cmVal,
-                unit = _selectedUnit.value,
+                value = meters,
+                unit = "cm",
                 type = "RULER",
                 notes = customNotes,
                 imagePath = imagePath
@@ -1388,7 +1401,7 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
                 _lastSavedRecord.value = record
                 _toastMessage.tryEmit("已自動儲存: $title")
                 onSaved?.invoke(record)
-                triggerHapticFeedback()
+                triggerHapticFeedback(HapticType.DOUBLE)
             } catch (e: Exception) {
                 _toastMessage.tryEmit("儲存失敗: ${e.localizedMessage}")
             }

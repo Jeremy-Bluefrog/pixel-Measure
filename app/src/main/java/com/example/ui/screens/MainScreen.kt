@@ -266,7 +266,8 @@ fun MainScreen(viewModel: MeasureViewModel) {
                     1 -> {
                         RulerComponent(
                             viewModel = viewModel,
-                            onShowHistoryClick = { showHistorySheet = true }
+                            onShowHistoryClick = { showHistorySheet = true },
+                            bottomPadding = innerPadding.calculateBottomPadding()
                         )
                     }
                 }
@@ -632,6 +633,11 @@ fun HistorySheetContent(
                                 Spacer(modifier = Modifier.height(2.dp))
 
                                 val formattedVal = when (record.type) {
+                                    "RULER" -> {
+                                        val cm = record.value * 100.0
+                                        val mm = cm * 10.0
+                                        String.format(java.util.Locale.US, "%.2f cm (%.1f mm)", cm, mm)
+                                    }
                                     "AREA" -> viewModel.formatArea(record.value, record.unit)
                                     "VOLUME" -> viewModel.formatVolume(record.value, record.unit)
                                     "ANGLE" -> "${Math.round(record.value)}°"
@@ -820,6 +826,11 @@ fun RecordDetailDialog(
                         )
 
                         val formattedVal = when (record.type) {
+                            "RULER" -> {
+                                val cm = record.value * 100.0
+                                val mm = cm * 10.0
+                                String.format(java.util.Locale.US, "%.2f cm (%.1f mm)", cm, mm)
+                            }
                             "AREA" -> viewModel.formatArea(record.value, record.unit)
                             "VOLUME" -> viewModel.formatVolume(record.value, record.unit)
                             "ANGLE" -> "${Math.round(record.value)}°"

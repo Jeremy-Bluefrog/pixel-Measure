@@ -389,7 +389,13 @@ object ShareUtility {
         sb.append("✍️ 測量名稱 : ${record.title}\n")
         sb.append("⏱️ 測量時間 : $dateStr\n")
         sb.append("🔧 測量模式 : $modeStr\n")
-        sb.append("📐 測量數值 : ${Math.round(record.value)} ${record.unit}\n")
+        val valueStr = if (record.type == "RULER") {
+            val cm = record.value * 100.0
+            "${String.format(Locale.US, "%.2f", cm)} cm (${String.format(Locale.US, "%.1f", cm * 10.0)} mm)"
+        } else {
+            "${Math.round(record.value)} ${record.unit}"
+        }
+        sb.append("📐 測量數值 : $valueStr\n")
         
         if (!record.notes.isNullOrBlank()) {
             sb.append("📝 備註事項 : ${record.notes}\n")
@@ -498,7 +504,12 @@ object ShareUtility {
             typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
             isAntiAlias = true
         }
-        val formattedVal = "${Math.round(record.value)} ${record.unit}"
+        val formattedVal = if (record.type == "RULER") {
+            val cm = record.value * 100.0
+            "${String.format(Locale.US, "%.2f", cm)} cm"
+        } else {
+            "${Math.round(record.value)} ${record.unit}"
+        }
         canvas.drawText(formattedVal, 80f, 175f, valPaint)
         
         // Meta Tag (Mode Label)
@@ -843,6 +854,62 @@ object ShareUtility {
             context.startActivity(Intent.createChooser(shareIntent, title))
         } catch (e: Exception) {
             // Silently handled
+        }
+    }
+
+    /**
+     * Sends user problem feedback to dedicated support email (jeremy1030623@gmail.com)
+     */
+    fun sendFeedbackEmail(
+        context: Context,
+        targetEmail: String = "jeremy1030623@gmail.com"
+    ) {
+        val appInfo = """
+            
+            -------------------------
+            【系統偵錯資訊 (請保留)】
+            應用程式：AR 尺子與空間測量
+            系統版本：Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})
+            裝置型號：${Build.MANUFACTURER} ${Build.MODEL}
+            硬體核心：${Build.HARDWARE}
+            時間：${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}
+            -------------------------
+        """.trimIndent()
+
+        try {
+            val emailIntent = Intent(Intent.ACTION_SENDTO).apply {
+                data = Uri.parse("mailto:$targetEmail")
+                putExtra(Intent.EXTRA_EMAIL, arrayOf(targetEmail))
+                putExtra(Intent.EXTRA_SUBJECT, "【AR 測量工具】問題回饋與功能建議")
+                putExtra(Intent.EXTRA_TEXT, "請在此填寫您遇到的問題或建議：\n\n\n$appInfo")
+            }
+            context.startActivity(Intent.createChooser(emailIntent, "發送問題回饋"))
+        } catch (e: Exception) {
+            try {
+                val fallbackIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = "message/rfc822"
+                    putExtra(Intent.EXTRA_EMAIL, arrayOf(targetEmail))
+                    putExtra(Intent.EXTRA_SUBJECT, "【AR 測量工具】問題回饋與功能建議")
+                    putExtra(Intent.EXTRA_TEXT, "請在此填寫您遇到的問題或建議：\n\n\n$appInfo")
+                }
+                context.startActivity(Intent.createChooser(fallbackIntent, "發送問題回饋"))
+            } catch (err: Exception) {
+                copyToClipboard(context, targetEmail, "已複製回饋電子信箱：$targetEmail")
+            }
+        }
+    }
+
+    /**
+     * Copies text to system clipboard with Toast prompt
+     */
+    fun copyToClipboard(context: Context, text: String, toastMsg: String = "已複製至剪貼簿") {
+        try {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            val clip = ClipData.newPlainText("text", text)
+            clipboard?.setPrimaryClip(clip)
+            android.widget.Toast.makeText(context, toastMsg, android.widget.Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 }

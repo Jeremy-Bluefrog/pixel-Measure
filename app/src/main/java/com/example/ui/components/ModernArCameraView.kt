@@ -119,7 +119,6 @@ fun ModernArCameraView(
     val sensorTelemetry by viewModel.sensorTelemetry.collectAsState()
     val sensorCorrectionEnabled by viewModel.sensorCorrectionEnabled.collectAsState()
     val highFpsModeEnabled by viewModel.highFpsModeEnabled.collectAsState()
-    val lowLightBoostEnabled by viewModel.lowLightBoostEnabled.collectAsState()
     val isObjectronMode by viewModel.isObjectronMode.collectAsState()
     val objectron3DBox by viewModel.objectron3DBox.collectAsState()
     val isMobileSamMode by viewModel.isMobileSamMode.collectAsState()
@@ -1525,35 +1524,6 @@ fun ModernArCameraView(
                                     val currentTv = textureViewRef
                                     val bmp = if (currentTv != null && currentTv.isAvailable) currentTv.bitmap else null
                                     viewModel.triggerAiTileDetection(bmp)
-                                    showAiToolsMenu = false
-                                }
-                            )
-
-                            DropdownMenuItem(
-                                text = {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Text(
-                                            "Android 15 暗光增強",
-                                            color = if (lowLightBoostEnabled) colorPrimary else colorOnSurface,
-                                            fontWeight = if (lowLightBoostEnabled) FontWeight.Bold else FontWeight.Normal
-                                        )
-                                        if (lowLightBoostEnabled) {
-                                            Text("● 開啟", color = colorPrimary, fontSize = 11.sp)
-                                        }
-                                    }
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Rounded.Nightlight,
-                                        contentDescription = null,
-                                        tint = if (lowLightBoostEnabled) colorPrimary else colorOnSurfaceVariant
-                                    )
-                                },
-                                onClick = {
-                                    viewModel.setLowLightBoostEnabled(!lowLightBoostEnabled)
                                     showAiToolsMenu = false
                                 }
                             )

@@ -23,6 +23,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.logic.ShareUtility
 import com.example.ui.viewmodel.MeasureViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -31,6 +32,7 @@ fun SettingsSheet(
     viewModel: MeasureViewModel,
     onDismissRequest: () -> Unit
 ) {
+    val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var showClearRecordsConfirmDialog by remember { mutableStateOf(false) }
 
@@ -38,9 +40,9 @@ fun SettingsSheet(
     val vibrateOnAlign by viewModel.vibrateOnAlignment.collectAsState()
     val showPointCloud by viewModel.showPointCloud.collectAsState()
     val selectedUnit by viewModel.selectedUnit.collectAsState()
+    val rulerCalibration by viewModel.rulerCalibration.collectAsState()
     val highFpsModeEnabled by viewModel.highFpsModeEnabled.collectAsState()
     val highDefinitionQualityEnabled by viewModel.highDefinitionQualityEnabled.collectAsState()
-    val lowLightBoostEnabled by viewModel.lowLightBoostEnabled.collectAsState()
     val sensorCorrectionEnabled by viewModel.sensorCorrectionEnabled.collectAsState()
     val torchBrightness by viewModel.torchBrightness.collectAsState()
     val isVulkanGraphicsEnabled by viewModel.isVulkanGraphicsEnabled.collectAsState()
@@ -164,6 +166,66 @@ fun SettingsSheet(
                         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
                     )
 
+                    // Screen Ruler Physical Calibration Row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                viewModel.setMode(1)
+                                viewModel.setRulerCalibrationActive(true)
+                                onDismissRequest()
+                            }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    Icons.Rounded.Straighten,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "螢幕尺實體精準度校準",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "當前係數: ${String.format(java.util.Locale.US, "%.3fx", rulerCalibration)} · 即時微調兩側刻度",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Button(
+                            onClick = {
+                                viewModel.setMode(1)
+                                viewModel.setRulerCalibrationActive(true)
+                                onDismissRequest()
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            modifier = Modifier.height(32.dp)
+                        ) {
+                            Text("立即校準", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 12.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                    )
+
                     // High Definition Quality
                     SettingsSwitchRow(
                         icon = Icons.Rounded.Hd,
@@ -187,21 +249,6 @@ fun SettingsSheet(
                         checked = highFpsModeEnabled,
                         onCheckedChange = { viewModel.setHighFpsModeEnabled(it) },
                         testTag = "switch_high_fps"
-                    )
-
-                    HorizontalDivider(
-                        modifier = Modifier.padding(vertical = 12.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-                    )
-
-                    // Low Light Boost (Android 15 暗光增強)
-                    SettingsSwitchRow(
-                        icon = Icons.Rounded.Nightlight,
-                        title = "Android 15 暗光即時增強 (Low Light Boost)",
-                        subtitle = "在微光或昏暗環境下自動提升預覽亮度與 SNR 噪訊比",
-                        checked = lowLightBoostEnabled,
-                        onCheckedChange = { viewModel.setLowLightBoostEnabled(it) },
-                        testTag = "switch_low_light_boost"
                     )
 
                     HorizontalDivider(
@@ -255,7 +302,6 @@ fun SettingsSheet(
                     )
 
                     // Flashlight Brightness Setting
-                    val context = LocalContext.current
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -565,6 +611,87 @@ fun SettingsSheet(
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.outline
                         )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // 4. 支援與問題回饋 (Support & Feedback)
+            SettingsCategoryHeader(
+                title = "支援與問題回饋",
+                icon = Icons.Rounded.Feedback,
+                tint = MaterialTheme.colorScheme.primary
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            ElevatedCard(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.elevatedCardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                ),
+                elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    val feedbackEmail = "jeremy1030623@gmail.com"
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                ShareUtility.sendFeedbackEmail(context, feedbackEmail)
+                            }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
+                            modifier = Modifier.size(42.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    Icons.Rounded.Mail,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "問題回饋與功能建議",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = feedbackEmail,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "點擊直接開啟郵件 App 發送回饋，或複製信箱",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                ShareUtility.copyToClipboard(context, feedbackEmail, "已複製回饋電子信箱：$feedbackEmail")
+                            }
+                        ) {
+                            Icon(
+                                Icons.Rounded.ContentCopy,
+                                contentDescription = "複製電子信箱",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
                 }
             }
