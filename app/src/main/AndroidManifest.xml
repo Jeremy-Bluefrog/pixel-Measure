@@ -18,6 +18,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.MyApplication"
+        android:localeConfig="@xml/locales_config"
         android:enableOnBackInvokedCallback="true">
         <meta-data android:name="com.google.ar.core" android:value="optional" />
         <activity

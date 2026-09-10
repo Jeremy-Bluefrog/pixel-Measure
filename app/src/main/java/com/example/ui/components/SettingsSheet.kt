@@ -4,6 +4,8 @@ import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -14,6 +16,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -24,6 +27,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.logic.ShareUtility
+import com.example.logic.TranslationManager
 import com.example.ui.viewmodel.MeasureViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -35,6 +39,7 @@ fun SettingsSheet(
     val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var showClearRecordsConfirmDialog by remember { mutableStateOf(false) }
+    var showLanguageSelectionDialog by remember { mutableStateOf(false) }
 
     val currentLang by viewModel.currentLanguage.collectAsState()
     val vibrateOnAlign by viewModel.vibrateOnAlignment.collectAsState()
@@ -61,6 +66,8 @@ fun SettingsSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .widthIn(max = 680.dp)
+                .align(Alignment.CenterHorizontally)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 8.dp)
                 .navigationBarsPadding()
@@ -504,6 +511,10 @@ fun SettingsSheet(
 
             Spacer(modifier = Modifier.height(8.dp))
 
+            val currentLangObj = remember(currentLang) {
+                TranslationManager.supportedLanguages.find { it.code == currentLang }
+            }
+
             ElevatedCard(
                 shape = RoundedCornerShape(18.dp),
                 colors = CardDefaults.elevatedCardColors(
@@ -513,22 +524,70 @@ fun SettingsSheet(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "應用程式語言",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
                     Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "應用程式語言",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "當前: ${currentLangObj?.name ?: currentLang} (${currentLang})",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
+                        FilledTonalButton(
+                            onClick = { showLanguageSelectionDialog = true },
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier
+                                .height(36.dp)
+                                .testTag("open_all_languages_btn")
+                        ) {
+                            Icon(
+                                Icons.Rounded.Translate,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                "全部語言 (110)",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Icon(
+                                Icons.Rounded.ChevronRight,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    LazyRow(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        listOf(
+                        val quickLangs = listOf(
                             "zh-TW" to "繁體中文",
                             "zh-CN" to "简体中文",
                             "en" to "English",
-                            "ja" to "日本語"
-                        ).forEach { (code, name) ->
+                            "ja" to "日本語",
+                            "ko" to "한국어",
+                            "es" to "Español",
+                            "fr" to "Français",
+                            "de" to "Deutsch"
+                        )
+                        items(quickLangs) { (code, name) ->
                             val isSelected = currentLang == code
                             FilterChip(
                                 selected = isSelected,
@@ -546,6 +605,118 @@ fun SettingsSheet(
                                 shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier.testTag("lang_chip_$code")
                             )
+                        }
+
+                        item {
+                            SuggestionChip(
+                                onClick = { showLanguageSelectionDialog = true },
+                                label = {
+                                    Text(
+                                        "更多 (110+)...",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.testTag("lang_chip_more")
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                        thickness = 1.dp
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Direct link to Android System App Language Settings (Per-App Language)
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable {
+                                viewModel.openSystemLanguageSettings(context)
+                            }
+                            .testTag("open_system_locale_settings_btn")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.secondaryContainer,
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        Icons.Rounded.Settings,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = viewModel.getString("system_lang_title"),
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = MaterialTheme.colorScheme.primaryContainer
+                                    ) {
+                                        Text(
+                                            text = "Android 13+",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 10.sp,
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = viewModel.getString("system_lang_desc"),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 11.sp,
+                                    lineHeight = 15.sp
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(8.dp))
+
+                            Surface(
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        Icons.Rounded.OpenInNew,
+                                        contentDescription = "開啟系統設定",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -767,6 +938,22 @@ fun SettingsSheet(
                 ) {
                     Text("取消")
                 }
+            }
+        )
+    }
+
+    // Language Selection Dialog with Search across 110 Languages
+    if (showLanguageSelectionDialog) {
+        LanguageSelectionDialog(
+            currentLanguage = currentLang,
+            onLanguageSelected = { code ->
+                viewModel.setLanguage(code)
+            },
+            onDismissRequest = {
+                showLanguageSelectionDialog = false
+            },
+            onOpenSystemSettings = {
+                viewModel.openSystemLanguageSettings(context)
             }
         )
     }

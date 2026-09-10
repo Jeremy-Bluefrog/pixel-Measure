@@ -39,7 +39,15 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         if (::viewModel.isInitialized) {
+            viewModel.syncWithSystemLocale()
             viewModel.onResume()
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (::viewModel.isInitialized) {
+            viewModel.syncWithSystemLocale()
         }
     }
 

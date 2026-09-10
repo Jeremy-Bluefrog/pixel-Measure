@@ -21,17 +21,21 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import coil.compose.AsyncImage
 import com.example.data.model.MeasureRecord
 import com.example.logic.ShareUtility
+import com.example.ui.components.AdaptiveNavigationRail
 import com.example.ui.components.FloatingPillNavigationBar
 import com.example.ui.components.FloatingPillNavItem
 import com.example.ui.components.GradientBlurTopBar
 import com.example.ui.components.ModernArCameraView
 import com.example.ui.components.RulerComponent
 import com.example.ui.components.SettingsSheet
+import com.example.ui.components.SupportingPaneHistory
 import com.example.ui.viewmodel.MeasureViewModel
 import java.io.File
 import java.text.SimpleDateFormat
@@ -55,321 +59,336 @@ fun MainScreen(viewModel: MeasureViewModel) {
 
     val colorPrimary = MaterialTheme.colorScheme.primary
 
-    Scaffold(
-        topBar = {
-            AnimatedVisibility(
-                visible = currentMode == 1,
-                enter = fadeIn(animationSpec = tween(300, easing = FastOutSlowInEasing)) +
-                        slideInVertically(
-                            initialOffsetY = { -it / 2 },
-                            animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
-                        ),
-                exit = fadeOut(animationSpec = tween(200, easing = FastOutSlowInEasing)) +
-                        slideOutVertically(
-                            targetOffsetY = { -it / 2 },
-                            animationSpec = tween(200, easing = FastOutSlowInEasing)
-                        )
-            ) {
-                GradientBlurTopBar(
-                    baseColor = MaterialTheme.colorScheme.surface,
-                    modifier = Modifier.testTag("top_gradient_blur_bar")
-                ) {
-                    CenterAlignedTopAppBar(
-                        title = {
-                            Text(
-                                text = "螢幕高精直尺",
-                                fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.titleMedium
-                            )
-                        },
-                        actions = {
-                            // Unit selector button
-                            Box {
-                                TextButton(
-                                    onClick = { showUnitMenu = true },
-                                    shape = RoundedCornerShape(12.dp)
-                                ) {
-                                    Text(
-                                        text = selectedUnit.uppercase(),
-                                        fontWeight = FontWeight.ExtraBold,
-                                        color = colorPrimary
-                                    )
-                                    Icon(
-                                        Icons.Rounded.ArrowDropDown,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
+    val cameraLabel = viewModel.getString("nav_camera").ifEmpty { "相機 AR" }
+    val rulerLabel = viewModel.getString("nav_ruler").ifEmpty { "螢幕尺" }
 
-                                DropdownMenu(
-                                    expanded = showUnitMenu,
-                                    onDismissRequest = { showUnitMenu = false }
-                                ) {
-                                    listOf("cm" to "公分 (cm)", "m" to "公尺 (m)", "in" to "英吋 (in)", "ft" to "英呎 (ft)", "yd" to "碼 (yd)").forEach { (unitCode, label) ->
-                                        DropdownMenuItem(
-                                            text = { Text(label, fontWeight = if (selectedUnit == unitCode) FontWeight.Bold else FontWeight.Normal) },
-                                            onClick = {
-                                                viewModel.setSelectedUnit(unitCode)
-                                                showUnitMenu = false
-                                            },
-                                            leadingIcon = if (selectedUnit == unitCode) {
-                                                { Icon(Icons.Rounded.Check, null, tint = colorPrimary) }
-                                            } else null
-                                        )
-                                    }
-                                }
-                            }
+    val navItems = remember(cameraLabel, rulerLabel) {
+        listOf(
+            FloatingPillNavItem(
+                id = 0,
+                label = cameraLabel,
+                icon = Icons.Rounded.GridView,
+                testTag = "segmented_button_camera"
+            ),
+            FloatingPillNavItem(
+                id = 1,
+                label = rulerLabel,
+                icon = Icons.Rounded.Straighten,
+                testTag = "segmented_button_ruler"
+            )
+        )
+    }
 
-                            // Flashlight button
-                            IconButton(
-                                onClick = { viewModel.toggleTorch(context) },
-                                modifier = Modifier.testTag("ruler_flashlight_button")
-                            ) {
-                                Icon(
-                                    if (isTorchOn) Icons.Rounded.FlashlightOn else Icons.Rounded.FlashlightOff,
-                                    contentDescription = "手電筒",
-                                    tint = if (isTorchOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                )
-                            }
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val windowWidth = maxWidth
+        val isExpanded = windowWidth >= 840.dp
+        val isMedium = windowWidth >= 600.dp && windowWidth < 840.dp
+        val isCompact = windowWidth < 600.dp
+        val useNavRail = windowWidth >= 600.dp
 
-                            // History sheet button
-                            IconButton(onClick = { showHistorySheet = true }) {
-                                Icon(
-                                    Icons.Rounded.History,
-                                    contentDescription = "歷史記錄",
-                                    tint = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-
-                            // Settings dialog button
-                            IconButton(onClick = { showSettingsDialog = true }) {
-                                Icon(
-                                    Icons.Rounded.Settings,
-                                    contentDescription = "設定",
-                                    tint = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-                        },
-                        colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                            containerColor = Color.Transparent
-                        )
-                    )
-                }
-            }
-        },
-        bottomBar = {
-            val cameraLabel = viewModel.getString("nav_camera").ifEmpty { "相機 AR" }
-            val rulerLabel = viewModel.getString("nav_ruler").ifEmpty { "螢幕尺" }
-
-            val navItems = remember(cameraLabel, rulerLabel) {
-                listOf(
-                    FloatingPillNavItem(
-                        id = 0,
-                        label = cameraLabel,
-                        icon = Icons.Rounded.GridView,
-                        testTag = "segmented_button_camera"
-                    ),
-                    FloatingPillNavItem(
-                        id = 1,
-                        label = rulerLabel,
-                        icon = Icons.Rounded.Straighten,
-                        testTag = "segmented_button_ruler"
-                    )
+        Row(modifier = Modifier.fillMaxSize()) {
+            // Adaptive Navigation Rail on medium and expanded displays (foldables, tablets, desktop)
+            if (useNavRail) {
+                AdaptiveNavigationRail(
+                    currentMode = currentMode,
+                    onModeSelected = { viewModel.setMode(it) },
+                    cameraLabel = cameraLabel,
+                    rulerLabel = rulerLabel,
+                    selectedUnit = selectedUnit,
+                    onSelectUnit = { viewModel.setSelectedUnit(it) },
+                    isTorchOn = isTorchOn,
+                    onToggleTorch = { viewModel.toggleTorch(context) },
+                    recordCount = savedRecords.size,
+                    isHistoryOpen = showHistorySheet,
+                    onToggleHistory = { showHistorySheet = !showHistorySheet },
+                    onOpenSettings = { showSettingsDialog = true }
                 )
             }
 
+            // Primary Workspace Layout
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .padding(bottom = 12.dp)
-                    .testTag("bottom_segmented_bar"),
-                contentAlignment = Alignment.Center
+                    .weight(1f)
+                    .fillMaxHeight()
             ) {
-                FloatingPillNavigationBar(
-                    selectedIndex = currentMode,
-                    items = navItems,
-                    onItemSelected = { id ->
-                        viewModel.setMode(id)
-                    },
-                    modifier = Modifier.testTag("mode_segmented_button_row")
-                )
-            }
-        }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(if (currentMode == 0) PaddingValues(bottom = 0.dp) else innerPadding)
-        ) {
-            // Material 3 Shared Axis Mode Transition: Camera AR (0) <-> Screen Ruler (1)
-            AnimatedContent(
-                targetState = currentMode,
-                transitionSpec = {
-                    if (targetState > initialState) {
-                        // Forward transition: Camera AR -> Ruler (Slide from right with scale and fade)
-                        (slideInHorizontally(
-                            initialOffsetX = { fullWidth -> (fullWidth * 0.15f).toInt() },
-                            animationSpec = spring(dampingRatio = 0.85f, stiffness = 420f)
-                        ) + fadeIn(
-                            animationSpec = tween(220, easing = LinearOutSlowInEasing)
-                        ) + scaleIn(
-                            initialScale = 0.98f,
-                            animationSpec = spring(dampingRatio = 0.85f, stiffness = 420f)
-                        )).togetherWith(
-                            slideOutHorizontally(
-                                targetOffsetX = { fullWidth -> (-fullWidth * 0.15f).toInt() },
-                                animationSpec = tween(180, easing = FastOutLinearInEasing)
-                            ) + fadeOut(
-                                animationSpec = tween(150, easing = FastOutLinearInEasing)
-                            ) + scaleOut(
-                                targetScale = 0.98f,
-                                animationSpec = tween(180, easing = FastOutLinearInEasing)
-                            )
-                        )
-                    } else {
-                        // Backward transition: Ruler -> Camera AR (Slide from left with scale and fade)
-                        (slideInHorizontally(
-                            initialOffsetX = { fullWidth -> (-fullWidth * 0.15f).toInt() },
-                            animationSpec = spring(dampingRatio = 0.85f, stiffness = 420f)
-                        ) + fadeIn(
-                            animationSpec = tween(220, easing = LinearOutSlowInEasing)
-                        ) + scaleIn(
-                            initialScale = 0.98f,
-                            animationSpec = spring(dampingRatio = 0.85f, stiffness = 420f)
-                        )).togetherWith(
-                            slideOutHorizontally(
-                                targetOffsetX = { fullWidth -> (fullWidth * 0.15f).toInt() },
-                                animationSpec = tween(180, easing = FastOutLinearInEasing)
-                            ) + fadeOut(
-                                animationSpec = tween(150, easing = FastOutLinearInEasing)
-                            ) + scaleOut(
-                                targetScale = 0.98f,
-                                animationSpec = tween(180, easing = FastOutLinearInEasing)
-                            )
-                        )
-                    }
-                },
-                contentKey = { it },
-                modifier = Modifier.fillMaxSize(),
-                label = "MainModeSharedAxisTransition"
-            ) { mode ->
-                when (mode) {
-                    0 -> {
-                        ModernArCameraView(
-                            viewModel = viewModel,
-                            onShowHistoryClick = { showHistorySheet = true },
-                            onShowSettingsClick = { showSettingsDialog = true },
-                            bottomPadding = innerPadding.calculateBottomPadding()
-                        )
-                    }
-                    1 -> {
-                        RulerComponent(
-                            viewModel = viewModel,
-                            onShowHistoryClick = { showHistorySheet = true },
-                            bottomPadding = innerPadding.calculateBottomPadding()
-                        )
-                    }
-                }
-            }
-
-            // Quick Floating Share Banner when a record is newly saved
-            AnimatedVisibility(
-                visible = lastSavedRecord != null,
-                enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-                exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = innerPadding.calculateBottomPadding() + 16.dp, start = 16.dp, end = 16.dp)
-            ) {
-                lastSavedRecord?.let { saved ->
-                    Surface(
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                        shape = RoundedCornerShape(20.dp),
-                        shadowElevation = 8.dp,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                Scaffold(
+                    topBar = {
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = currentMode == 1,
+                            enter = fadeIn(animationSpec = tween(120, easing = FastOutSlowInEasing)),
+                            exit = fadeOut(animationSpec = tween(100, easing = FastOutLinearInEasing))
                         ) {
-                            Row(
-                                modifier = Modifier.weight(1f),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            GradientBlurTopBar(
+                                baseColor = MaterialTheme.colorScheme.surface,
+                                modifier = Modifier.testTag("top_gradient_blur_bar")
                             ) {
-                                Icon(
-                                    Icons.Rounded.CheckCircle,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                                Column {
-                                    Text(
-                                        text = "已儲存測量截圖與紀錄",
-                                        fontWeight = FontWeight.Bold,
-                                        style = MaterialTheme.typography.bodyMedium
+                                CenterAlignedTopAppBar(
+                                    title = {
+                                        Text(
+                                            text = "螢幕高精直尺",
+                                            fontWeight = FontWeight.Bold,
+                                            style = MaterialTheme.typography.titleMedium
+                                        )
+                                    },
+                                    actions = {
+                                        // Unit selector button
+                                        Box {
+                                            TextButton(
+                                                onClick = { showUnitMenu = true },
+                                                shape = RoundedCornerShape(12.dp)
+                                            ) {
+                                                Text(
+                                                    text = selectedUnit.uppercase(),
+                                                    fontWeight = FontWeight.ExtraBold,
+                                                    color = colorPrimary
+                                                )
+                                                Icon(
+                                                    Icons.Rounded.ArrowDropDown,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+
+                                            DropdownMenu(
+                                                expanded = showUnitMenu,
+                                                onDismissRequest = { showUnitMenu = false }
+                                            ) {
+                                                listOf("cm" to "公分 (cm)", "m" to "公尺 (m)", "in" to "英吋 (in)", "ft" to "英呎 (ft)", "yd" to "碼 (yd)").forEach { (unitCode, label) ->
+                                                    DropdownMenuItem(
+                                                        text = { Text(label, fontWeight = if (selectedUnit == unitCode) FontWeight.Bold else FontWeight.Normal) },
+                                                        onClick = {
+                                                            viewModel.setSelectedUnit(unitCode)
+                                                            showUnitMenu = false
+                                                        },
+                                                        leadingIcon = if (selectedUnit == unitCode) {
+                                                            { Icon(Icons.Rounded.Check, null, tint = colorPrimary) }
+                                                        } else null
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        // Flashlight button
+                                        IconButton(
+                                            onClick = { viewModel.toggleTorch(context) },
+                                            modifier = Modifier.testTag("ruler_flashlight_button")
+                                        ) {
+                                            Icon(
+                                                if (isTorchOn) Icons.Rounded.FlashlightOn else Icons.Rounded.FlashlightOff,
+                                                contentDescription = "手電筒",
+                                                tint = if (isTorchOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+
+                                        // History button (toggles supporting pane on tablets or opens sheet)
+                                        IconButton(onClick = { showHistorySheet = !showHistorySheet }) {
+                                            Icon(
+                                                Icons.Rounded.History,
+                                                contentDescription = "歷史記錄",
+                                                tint = if (showHistorySheet) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+
+                                        // Settings dialog button
+                                        IconButton(onClick = { showSettingsDialog = true }) {
+                                            Icon(
+                                                Icons.Rounded.Settings,
+                                                contentDescription = "設定",
+                                                tint = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                    },
+                                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                                        containerColor = Color.Transparent
                                     )
-                                    Text(
-                                        text = saved.title,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    },
+                    bottomBar = {
+                        // Only show bottom navigation bar on compact screens (phones)
+                        if (isCompact) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .navigationBarsPadding()
+                                    .padding(bottom = 12.dp)
+                                    .testTag("bottom_segmented_bar"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                FloatingPillNavigationBar(
+                                    selectedIndex = currentMode,
+                                    items = navItems,
+                                    onItemSelected = { id ->
+                                        viewModel.setMode(id)
+                                    },
+                                    modifier = Modifier.testTag("mode_segmented_button_row")
+                                )
+                            }
+                        }
+                    }
+                ) { innerPadding ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(if (currentMode == 0) PaddingValues(bottom = 0.dp) else innerPadding)
+                    ) {
+                        // Pure Fade Transition: Camera AR (0) <-> Screen Ruler (1)
+                        AnimatedContent(
+                            targetState = currentMode,
+                            transitionSpec = {
+                                fadeIn(
+                                    animationSpec = tween(durationMillis = 140, easing = LinearOutSlowInEasing)
+                                ).togetherWith(
+                                    fadeOut(
+                                        animationSpec = tween(durationMillis = 100, easing = FastOutLinearInEasing)
+                                    )
+                                )
+                            },
+                            contentKey = { it },
+                            modifier = Modifier.fillMaxSize(),
+                            label = "MainModeFadeTransition"
+                        ) { mode ->
+                            when (mode) {
+                                0 -> {
+                                    ModernArCameraView(
+                                        viewModel = viewModel,
+                                        onShowHistoryClick = { showHistorySheet = !showHistorySheet },
+                                        onShowSettingsClick = { showSettingsDialog = true },
+                                        bottomPadding = if (isCompact) innerPadding.calculateBottomPadding() else 0.dp
+                                    )
+                                }
+                                1 -> {
+                                    RulerComponent(
+                                        viewModel = viewModel,
+                                        onShowHistoryClick = { showHistorySheet = !showHistorySheet },
+                                        bottomPadding = if (isCompact) innerPadding.calculateBottomPadding() else 0.dp
                                     )
                                 }
                             }
+                        }
 
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Button(
-                                    onClick = {
-                                        ShareUtility.shareRecord(context, saved)
-                                        viewModel.clearLastSavedRecord()
-                                    },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = MaterialTheme.colorScheme.primary,
-                                        contentColor = MaterialTheme.colorScheme.onPrimary
-                                    ),
-                                    shape = RoundedCornerShape(12.dp),
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        // Quick Floating Share Banner when a record is newly saved
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = lastSavedRecord != null,
+                            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(
+                                    bottom = (if (isCompact) innerPadding.calculateBottomPadding() else 16.dp) + 16.dp,
+                                    start = 16.dp,
+                                    end = 16.dp
+                                )
+                                .widthIn(max = 560.dp)
+                        ) {
+                            lastSavedRecord?.let { saved ->
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    shape = RoundedCornerShape(20.dp),
+                                    shadowElevation = 8.dp,
+                                    modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Icon(Icons.Rounded.Share, null, Modifier.size(16.dp))
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("分享", fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                }
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.weight(1f),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Rounded.CheckCircle,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(24.dp)
+                                            )
+                                            Column {
+                                                Text(
+                                                    text = "已儲存測量截圖與紀錄",
+                                                    fontWeight = FontWeight.Bold,
+                                                    style = MaterialTheme.typography.bodyMedium
+                                                )
+                                                Text(
+                                                    text = saved.title,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        }
 
-                                IconButton(
-                                    onClick = { viewModel.clearLastSavedRecord() },
-                                    modifier = Modifier.size(32.dp)
-                                ) {
-                                    Icon(Icons.Rounded.Close, contentDescription = "關閉", modifier = Modifier.size(18.dp))
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Button(
+                                                onClick = {
+                                                    ShareUtility.shareRecord(context, saved)
+                                                    viewModel.clearLastSavedRecord()
+                                                },
+                                                colors = ButtonDefaults.buttonColors(
+                                                    containerColor = MaterialTheme.colorScheme.primary,
+                                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                                ),
+                                                shape = RoundedCornerShape(12.dp),
+                                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                            ) {
+                                                Icon(Icons.Rounded.Share, null, Modifier.size(16.dp))
+                                                Spacer(Modifier.width(4.dp))
+                                                Text("分享", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                            }
+
+                                            IconButton(
+                                                onClick = { viewModel.clearLastSavedRecord() },
+                                                modifier = Modifier.size(32.dp)
+                                            ) {
+                                                Icon(Icons.Rounded.Close, contentDescription = "關閉", modifier = Modifier.size(18.dp))
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-        }
-    }
 
-    // History Bottom Sheet
-    if (showHistorySheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showHistorySheet = false },
-            containerColor = MaterialTheme.colorScheme.surface
-        ) {
-            HistorySheetContent(
-                records = savedRecords,
-                viewModel = viewModel,
-                onSelectRecord = { record ->
-                    selectedRecordForDetail = record
-                },
-                onClose = { showHistorySheet = false }
-            )
+            // Right: Supporting Pane on Expanded Displays (width >= 840.dp)
+            this@Row.AnimatedVisibility(
+                visible = isExpanded && showHistorySheet,
+                enter = fadeIn(tween(140)) + expandHorizontally(tween(200)),
+                exit = fadeOut(tween(100)) + shrinkHorizontally(tween(160))
+            ) {
+                SupportingPaneHistory(
+                    records = savedRecords,
+                    viewModel = viewModel,
+                    onSelectRecord = { record ->
+                        selectedRecordForDetail = record
+                    },
+                    onClose = { showHistorySheet = false }
+                )
+            }
+        }
+
+        // History Bottom Sheet for Compact & Medium Screens (when not in expanded side-by-side mode)
+        if (!isExpanded && showHistorySheet) {
+            ModalBottomSheet(
+                onDismissRequest = { showHistorySheet = false },
+                containerColor = MaterialTheme.colorScheme.surface
+            ) {
+                HistorySheetContent(
+                    records = savedRecords,
+                    viewModel = viewModel,
+                    onSelectRecord = { record ->
+                        selectedRecordForDetail = record
+                    },
+                    onClose = { showHistorySheet = false }
+                )
+            }
         }
     }
 
@@ -757,6 +776,7 @@ fun RecordDetailDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        modifier = Modifier.widthIn(max = 560.dp),
         title = {
             Row(
                 modifier = Modifier.fillMaxWidth(),

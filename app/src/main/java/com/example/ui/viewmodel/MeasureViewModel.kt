@@ -1,11 +1,18 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.app.LocaleManager
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.net.Uri
+import android.os.Build
+import android.os.LocaleList
+import android.provider.Settings
 import android.util.Log
+import java.util.Locale
 import androidx.compose.runtime.mutableStateListOf
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -49,23 +56,115 @@ enum class HapticType {
  * Modern, clean ViewModel managing AR measurements, sensor fusion,
  * persistence, unit conversions, and UI state.
  */
-class MeasureViewModel(application: Application) : AndroidViewModel(application) {
+class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private val prefs: SharedPreferences =
-        application.getSharedPreferences("measure_app_prefs", Context.MODE_PRIVATE)
+        app.getSharedPreferences("measure_app_prefs", Context.MODE_PRIVATE)
 
-    private val database = MeasureDatabase.getDatabase(application)
+    private val database = MeasureDatabase.getDatabase(app)
     private val repository = MeasureRepository(database.measureDao())
 
     // Language state
-    private val _currentLanguage = MutableStateFlow(
-        prefs.getString("selected_language", "zh-TW") ?: "zh-TW"
-    )
+    private val _currentLanguage = MutableStateFlow(resolveInitialLanguage())
     val currentLanguage: StateFlow<String> = _currentLanguage.asStateFlow()
+
+    private fun resolveInitialLanguage(): String {
+        // 1. Check if user configured a language in system Settings on Android 13+ (API 33+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            try {
+                val localeManager = app.getSystemService(Context.LOCALE_SERVICE) as? LocaleManager
+                val appLocales = localeManager?.applicationLocales
+                if (appLocales != null && !appLocales.isEmpty) {
+                    val primary = appLocales.get(0)
+                    val matched = TranslationManager.matchLanguageCode(primary.toLanguageTag())
+                    prefs.edit().putString("selected_language", matched).apply()
+                    return matched
+                }
+            } catch (e: Exception) {
+                // Ignore fallback to prefs
+            }
+        }
+
+        // 2. Check saved preference
+        val savedLang = prefs.getString("selected_language", null)
+        if (!savedLang.isNullOrBlank()) {
+            return savedLang
+        }
+
+        // 3. Fallback to device system locale
+        return try {
+            val systemLocale = app.resources.configuration.locales.get(0)
+            val matched = TranslationManager.matchLanguageCode(systemLocale.toLanguageTag())
+            prefs.edit().putString("selected_language", matched).apply()
+            matched
+        } catch (e: Exception) {
+            "zh-TW"
+        }
+    }
+
+    /**
+     * Synchronizes app language with system per-app locale settings.
+     * Called on app startup, onResume, and configuration changes.
+     */
+    fun syncWithSystemLocale() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            try {
+                val localeManager = getApplication<Application>().getSystemService(Context.LOCALE_SERVICE) as? LocaleManager
+                val appLocales = localeManager?.applicationLocales
+                if (appLocales != null && !appLocales.isEmpty) {
+                    val primary = appLocales.get(0)
+                    val matched = TranslationManager.matchLanguageCode(primary.toLanguageTag())
+                    if (matched != _currentLanguage.value) {
+                        _currentLanguage.value = matched
+                        prefs.edit().putString("selected_language", matched).apply()
+                    }
+                }
+            } catch (e: Exception) {
+                // Ignore
+            }
+        }
+    }
 
     fun setLanguage(langCode: String) {
         _currentLanguage.value = langCode
         prefs.edit().putString("selected_language", langCode).apply()
+
+        // Synchronize to Android System LocaleManager on Android 13+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            try {
+                val localeManager = getApplication<Application>().getSystemService(Context.LOCALE_SERVICE) as? LocaleManager
+                val targetLocale = Locale.forLanguageTag(langCode)
+                localeManager?.applicationLocales = LocaleList(targetLocale)
+            } catch (e: Exception) {
+                // Safe fallback
+            }
+        }
+    }
+
+    /**
+     * Launches the Android System Settings app for this application's language preferences.
+     * On Android 13+ (API 33+), directly opens the App Locale Settings screen.
+     * On older Android versions, opens the App Details screen.
+     */
+    fun openSystemLanguageSettings(context: Context) {
+        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Intent(Settings.ACTION_APP_LOCALE_SETTINGS).apply {
+                data = Uri.fromParts("package", context.packageName, null)
+            }
+        } else {
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.fromParts("package", context.packageName, null)
+            }
+        }
+        try {
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            try {
+                context.startActivity(Intent(Settings.ACTION_LOCALE_SETTINGS))
+            } catch (e2: Exception) {
+                context.startActivity(Intent(Settings.ACTION_SETTINGS))
+            }
+        }
     }
 
     fun getString(key: String): String {
@@ -107,7 +206,7 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     }
 
     // Modern AR Engine & Session
-    val modernArEngine = ModernArEngine(application)
+    val modernArEngine = ModernArEngine(app)
     val arSession: Session? get() = modernArEngine.session
 
     private val _arTrackingState = MutableStateFlow(TrackingState.STOPPED)
@@ -220,7 +319,7 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     }
 
     // Multi-Sensor Fusion & Measurement Correction Engine
-    val sensorCorrectionEngine = SensorFusionCorrectionEngine(application)
+    val sensorCorrectionEngine = SensorFusionCorrectionEngine(app)
     val sensorTelemetry: StateFlow<SensorCorrectionTelemetry> = sensorCorrectionEngine.telemetry
 
     val sensorCorrectionEnabled = MutableStateFlow(prefs.getBoolean("sensor_correction_enabled", true))
@@ -258,8 +357,8 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     }
 
     // Vulkan 1.3 AR Hardware Accelerated Graphics & AI Inference Engine
-    val vulkanGraphicsPipeline = VulkanArGraphicsPipeline(application)
-    val vulkanAiBridge = VulkanAiInferenceBridge(application)
+    val vulkanGraphicsPipeline = VulkanArGraphicsPipeline(app)
+    val vulkanAiBridge = VulkanAiInferenceBridge(app)
 
     val isVulkanGraphicsEnabled = MutableStateFlow(prefs.getBoolean("vulkan_graphics_enabled", true))
     val isVulkanAiEnabled = MutableStateFlow(prefs.getBoolean("vulkan_ai_enabled", true))
@@ -1453,6 +1552,7 @@ class MeasureViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun onResume() {
+        syncWithSystemLocale()
         modernArEngine.resume()
         sensorCorrectionEngine.startListening()
     }

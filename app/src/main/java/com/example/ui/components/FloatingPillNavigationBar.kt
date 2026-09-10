@@ -4,6 +4,9 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -96,30 +99,30 @@ fun FloatingPillNavigationBar(
 
                 val backgroundColor by animateColorAsState(
                     targetValue = if (isSelected) activePillBg else Color.Transparent,
-                    animationSpec = spring(stiffness = Spring.StiffnessMedium),
+                    animationSpec = tween(durationMillis = 90, easing = FastOutSlowInEasing),
                     label = "pillBgColor"
                 )
 
                 val contentColor by animateColorAsState(
                     targetValue = if (isSelected) activeContentColor else inactiveIconColor,
-                    animationSpec = spring(stiffness = Spring.StiffnessMedium),
+                    animationSpec = tween(durationMillis = 90, easing = FastOutSlowInEasing),
                     label = "pillContentColor"
                 )
 
                 val pillScale by animateFloatAsState(
-                    targetValue = if (isSelected) 1.02f else 0.98f,
+                    targetValue = if (isSelected) 1.02f else 1.0f,
                     animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioLowBouncy,
-                        stiffness = Spring.StiffnessMedium
+                        dampingRatio = Spring.DampingRatioNoBouncy,
+                        stiffness = Spring.StiffnessHigh
                     ),
                     label = "pillScale"
                 )
 
                 val iconScale by animateFloatAsState(
-                    targetValue = if (isSelected) 1.08f else 1.0f,
+                    targetValue = if (isSelected) 1.05f else 1.0f,
                     animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioLowBouncy,
-                        stiffness = Spring.StiffnessMedium
+                        dampingRatio = Spring.DampingRatioNoBouncy,
+                        stiffness = Spring.StiffnessHigh
                     ),
                     label = "iconScale"
                 )
@@ -143,8 +146,8 @@ fun FloatingPillNavigationBar(
                         )
                         .animateContentSize(
                             animationSpec = spring(
-                                dampingRatio = Spring.DampingRatioLowBouncy,
-                                stiffness = Spring.StiffnessMedium
+                                dampingRatio = Spring.DampingRatioNoBouncy,
+                                stiffness = Spring.StiffnessHigh
                             )
                         )
                         .minimumInteractiveComponentSize()
@@ -170,10 +173,20 @@ fun FloatingPillNavigationBar(
 
                         AnimatedVisibility(
                             visible = isSelected,
-                            enter = fadeIn(spring(stiffness = Spring.StiffnessMediumLow)) +
-                                    expandHorizontally(spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessMediumLow)),
-                            exit = fadeOut(tween(100)) +
-                                    shrinkHorizontally(spring(stiffness = Spring.StiffnessMediumLow))
+                            enter = fadeIn(animationSpec = tween(70, easing = LinearOutSlowInEasing)) +
+                                    expandHorizontally(
+                                        animationSpec = spring(
+                                            dampingRatio = Spring.DampingRatioNoBouncy,
+                                            stiffness = Spring.StiffnessHigh
+                                        )
+                                    ),
+                            exit = fadeOut(animationSpec = tween(50, easing = FastOutLinearInEasing)) +
+                                    shrinkHorizontally(
+                                        animationSpec = spring(
+                                            dampingRatio = Spring.DampingRatioNoBouncy,
+                                            stiffness = Spring.StiffnessHigh
+                                        )
+                                    )
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Spacer(modifier = Modifier.width(7.dp))
