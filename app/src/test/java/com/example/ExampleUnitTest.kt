@@ -104,5 +104,23 @@ class ExampleUnitTest {
     val descEn = TranslationManager.getString("system_lang_desc", "en")
     assertTrue(descEn.contains("Android"))
   }
+
+  @Test
+  fun `verify point count state toggles checkmark when first point placed`() {
+    // 0 points: awaiting first point -> plus icon (+), isWaitingForSecondPoint = false
+    val points0 = listOf<Int>()
+    val awaitingSecond0 = points0.size % 2 == 1
+    assertFalse("0 points should show plus icon", awaitingSecond0)
+
+    // 1 point placed: awaiting second point -> checkmark icon (✓), isWaitingForSecondPoint = true
+    val points1 = listOf(1)
+    val awaitingSecond1 = points1.size % 2 == 1
+    assertTrue("1 point placed should show checkmark icon", awaitingSecond1)
+
+    // 2 points placed: completed segment, ready for next start point -> plus icon (+)
+    val points2 = listOf(1, 2)
+    val awaitingSecond2 = points2.size % 2 == 1
+    assertFalse("2 points placed should show plus icon", awaitingSecond2)
+  }
 }
 

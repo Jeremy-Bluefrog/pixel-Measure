@@ -19,6 +19,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.CircleShape
@@ -33,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.*
@@ -1849,138 +1852,68 @@ fun ModernArCameraView(
                     .padding(horizontal = 20.dp, vertical = 6.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // 1. Live Auto-Detected Dimension / Guidance Pill with Fluid Spring Transition
-                AnimatedContent(
-                    targetState = capturedPoints.isNotEmpty(),
-                    transitionSpec = {
-                        (fadeIn(animationSpec = tween(220)) + scaleIn(
-                            initialScale = 0.92f,
-                            animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessMediumLow)
-                        )).togetherWith(
-                            fadeOut(animationSpec = tween(160)) + scaleOut(
-                                targetScale = 0.92f,
-                                animationSpec = tween(160)
-                            )
-                        )
-                    },
-                    label = "DimensionPillTransition"
-                ) { hasPoints ->
-                    if (hasPoints) {
-                        val totalLen = viewModel.calculateTotalDistance()
-                        val area = viewModel.calculatePolygonArea()
-                        val height = viewModel.calculateVerticalHeight()
-
-                        Surface(
-                            color = Color.Black.copy(alpha = 0.78f),
-                            shape = RoundedCornerShape(24.dp),
-                            border = BorderStroke(1.dp, colorPrimary.copy(alpha = 0.4f)),
-                            modifier = Modifier.shadow(8.dp, RoundedCornerShape(24.dp))
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 18.dp, vertical = 9.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                val isArea = autoDetectedType == "AREA" && capturedPoints.size >= 3
-                                val isHeight = autoDetectedType == "HEIGHT" && capturedPoints.size >= 2
-                                val completedLinesCount = capturedPoints.size / 2
-                                val isOddPoint = capturedPoints.size % 2 == 1
-
-                                val (badgeText, badgeIcon) = when {
-                                    isObjectronMode && objectron3DBox != null ->
-                                        "3D體積: ${"%.1f".format(objectron3DBox!!.volumeM3 * 1000.0)} L (${"%.0f".format(objectron3DBox!!.widthMeters * 100)}×${"%.0f".format(objectron3DBox!!.heightMeters * 100)}×${"%.0f".format(objectron3DBox!!.depthMeters * 100)}cm)" to Icons.Rounded.ViewInAr
-                                    isArea ->
-                                        "面積: ${viewModel.formatArea(area, selectedUnit)}" to Icons.Rounded.SquareFoot
-                                    isHeight ->
-                                        "高度: ${viewModel.formatLength(height, selectedUnit)}" to Icons.Rounded.Height
-                                    isOddPoint -> {
-                                        val curDist = liveDistanceMeters ?: 0.0
-                                        val curStr = if (curDist > 0.0) viewModel.formatLength(curDist, selectedUnit) else "..."
-                                        "長度: $curStr" to Icons.Rounded.Straighten
+                // AI Specialized Guidance Pill (MobileSAM & Objectron if active)
+                if (isMobileSamMode || isObjectronMode) {
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.65f),
+                        shape = RoundedCornerShape(18.dp),
+                        border = BorderStroke(
+                            1.dp,
+                            when {
+                                isMobileSamMode -> colorTertiary.copy(alpha = 0.6f)
+                                isObjectronMode -> colorSecondary.copy(alpha = 0.5f)
+                                else -> Color.White.copy(alpha = 0.15f)
+                            }
+                        ),
+                        modifier = Modifier
+                            .shadow(4.dp, RoundedCornerShape(18.dp))
+                            .then(
+                                if (isMobileSamMode && segmentedObject != null) {
+                                    Modifier.clickable {
+                                        viewModel.applySegmentedObjectCorners()
                                     }
-                                    completedLinesCount > 1 ->
-                                        "總長: ${viewModel.formatLength(totalLen, selectedUnit)}" to Icons.Rounded.Straighten
-                                    else ->
-                                        "長度: ${viewModel.formatLength(totalLen, selectedUnit)}" to Icons.Rounded.Straighten
-                                }
-
-                                Icon(
-                                    badgeIcon,
-                                    contentDescription = null,
-                                    tint = if (isObjectronMode) colorSecondary else colorPrimary,
-                                    modifier = Modifier.size(18.dp)
-                                )
+                                } else if (isObjectronMode && objectron3DBox != null) {
+                                    Modifier.clickable {
+                                        viewModel.applyObjectronBoxCorners()
+                                    }
+                                } else Modifier
+                            )
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            if (isMobileSamMode && segmentedObject != null) {
+                                Icon(Icons.Rounded.AutoAwesomeMosaic, null, tint = colorTertiary, modifier = Modifier.size(16.dp))
                                 Text(
-                                    text = badgeText,
+                                    text = "SAM ${segmentedObject!!.label}: ${"%.2f".format(segmentedObject!!.areaM2)} m² (輕觸一鍵鎖定)",
+                                    color = colorTertiary,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            } else if (isMobileSamMode) {
+                                Icon(Icons.Rounded.TouchApp, null, tint = colorTertiary, modifier = Modifier.size(16.dp))
+                                Text(
+                                    text = "輕觸畫面任意物件，即時分割邊界與面積",
                                     color = Color.White,
-                                    fontSize = 15.sp,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            } else if (isObjectronMode && objectron3DBox != null) {
+                                Icon(Icons.Rounded.ViewInAr, null, tint = colorSecondary, modifier = Modifier.size(16.dp))
+                                Text(
+                                    text = "AI 3D方框: ${"%.0f".format(objectron3DBox!!.widthMeters * 100)}×${"%.0f".format(objectron3DBox!!.heightMeters * 100)}×${"%.0f".format(objectron3DBox!!.depthMeters * 100)} cm (輕觸鎖定)",
+                                    color = colorSecondary,
+                                    fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold
                                 )
                             }
                         }
-                    } else if (isMobileSamMode || isObjectronMode) {
-                        // Guidance Pill (Specialized for MobileSAM & Objectron if active)
-                        Surface(
-                            color = Color.Black.copy(alpha = 0.65f),
-                            shape = RoundedCornerShape(18.dp),
-                            border = BorderStroke(
-                                1.dp,
-                                when {
-                                    isMobileSamMode -> colorTertiary.copy(alpha = 0.6f)
-                                    isObjectronMode -> colorSecondary.copy(alpha = 0.5f)
-                                    else -> Color.White.copy(alpha = 0.15f)
-                                }
-                            ),
-                            modifier = Modifier
-                                .shadow(4.dp, RoundedCornerShape(18.dp))
-                                .then(
-                                    if (isMobileSamMode && segmentedObject != null) {
-                                        Modifier.clickable {
-                                            viewModel.applySegmentedObjectCorners()
-                                        }
-                                    } else if (isObjectronMode && objectron3DBox != null) {
-                                        Modifier.clickable {
-                                            viewModel.applyObjectronBoxCorners()
-                                        }
-                                    } else Modifier
-                                )
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                if (isMobileSamMode && segmentedObject != null) {
-                                    Icon(Icons.Rounded.AutoAwesomeMosaic, null, tint = colorTertiary, modifier = Modifier.size(16.dp))
-                                    Text(
-                                        text = "SAM ${segmentedObject!!.label}: ${"%.2f".format(segmentedObject!!.areaM2)} m² (輕觸一鍵鎖定)",
-                                        color = colorTertiary,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                } else if (isMobileSamMode) {
-                                    Icon(Icons.Rounded.TouchApp, null, tint = colorTertiary, modifier = Modifier.size(16.dp))
-                                    Text(
-                                        text = "輕觸畫面任意物件，即時分割邊界與面積",
-                                        color = Color.White,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                } else if (isObjectronMode && objectron3DBox != null) {
-                                    Icon(Icons.Rounded.ViewInAr, null, tint = colorSecondary, modifier = Modifier.size(16.dp))
-                                    Text(
-                                        text = "AI 3D方框: ${"%.0f".format(objectron3DBox!!.widthMeters * 100)}×${"%.0f".format(objectron3DBox!!.heightMeters * 100)}×${"%.0f".format(objectron3DBox!!.depthMeters * 100)} cm (輕觸鎖定)",
-                                        color = colorSecondary,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            }
-                        }
                     }
-                }
 
-                Spacer(modifier = Modifier.height(18.dp))
+                    Spacer(modifier = Modifier.height(18.dp))
+                }
 
                 // 2. Interactive Bottom Action Deck (Left, Center, Right Symmetrical Layout)
                 Row(
@@ -2029,19 +1962,44 @@ fun ModernArCameraView(
                         }
                     }
 
-                    // Center Slot: Primary Circular Main Button with count badge
+                    // Center Slot: Primary Circular Main Button with dynamic press morphing
+                    val addFabInteractionSource = remember { MutableInteractionSource() }
+                    val isAddFabPressed by addFabInteractionSource.collectIsPressedAsState()
+
+                    val addFabCornerRadius by animateDpAsState(
+                        targetValue = if (isAddFabPressed) 16.dp else 34.dp,
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioMediumBouncy,
+                            stiffness = Spring.StiffnessMedium
+                        ),
+                        label = "addFabCornerRadius"
+                    )
+
+                    val addFabScale by animateFloatAsState(
+                        targetValue = if (isAddFabPressed) 0.93f else 1.0f,
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioLowBouncy,
+                            stiffness = Spring.StiffnessMedium
+                        ),
+                        label = "addFabScale"
+                    )
+
                     Box(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier.padding(horizontal = 8.dp)
                     ) {
                         Surface(
                             color = addFabContainerColor,
-                            shape = CircleShape,
+                            shape = RoundedCornerShape(addFabCornerRadius),
                             border = if (!isMeasurementAvailable) BorderStroke(1.5.dp, Color(0xFF5A5A5E)) else null,
-                            shadowElevation = if (isMeasurementAvailable) 8.dp else 2.dp,
+                            shadowElevation = if (isMeasurementAvailable) (if (isAddFabPressed) 3.dp else 8.dp) else 2.dp,
                             modifier = Modifier
                                 .size(68.dp)
-                                .clickable {
+                                .scale(addFabScale)
+                                .clickable(
+                                    interactionSource = addFabInteractionSource,
+                                    indication = ripple(bounded = true, radius = 34.dp)
+                                ) {
                                     if (isMeasurementAvailable) {
                                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                                         viewModel.requestHitTest()
@@ -2052,40 +2010,20 @@ fun ModernArCameraView(
                                 .testTag("add_point_fab")
                         ) {
                             Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    Icons.Rounded.Add,
-                                    contentDescription = "Add Point",
-                                    tint = addFabIconColor,
-                                    modifier = Modifier.size(34.dp)
-                                )
-                            }
-                        }
-
-                        androidx.compose.animation.AnimatedVisibility(
-                            visible = capturedPoints.isNotEmpty(),
-                            enter = scaleIn(
-                                initialScale = 0.5f,
-                                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow)
-                            ) + fadeIn(animationSpec = tween(180)),
-                            exit = scaleOut(
-                                targetScale = 0.5f,
-                                animationSpec = tween(150)
-                            ) + fadeOut(animationSpec = tween(150)),
-                            modifier = Modifier.align(Alignment.TopEnd)
-                        ) {
-                            Surface(
-                                color = MaterialTheme.colorScheme.tertiary,
-                                shape = CircleShape,
-                                modifier = Modifier
-                                    .size(22.dp)
-                                    .shadow(3.dp, CircleShape)
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Text(
-                                        text = "${capturedPoints.size}",
-                                        color = MaterialTheme.colorScheme.onTertiary,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold
+                                val isWaitingForSecondPoint = capturedPoints.size % 2 == 1
+                                AnimatedContent(
+                                    targetState = isWaitingForSecondPoint,
+                                    transitionSpec = {
+                                        (fadeIn(animationSpec = tween(150)) + scaleIn(initialScale = 0.6f, animationSpec = tween(150)))
+                                            .togetherWith(fadeOut(animationSpec = tween(110)) + scaleOut(targetScale = 0.6f, animationSpec = tween(110)))
+                                    },
+                                    label = "AddPointFabIconTransition"
+                                ) { waitingForSecond ->
+                                    Icon(
+                                        imageVector = if (waitingForSecond) Icons.Rounded.Check else Icons.Rounded.Add,
+                                        contentDescription = if (waitingForSecond) "確認第二點 (Confirm Point)" else "加入點 (Add Point)",
+                                        tint = addFabIconColor,
+                                        modifier = Modifier.size(34.dp)
                                     )
                                 }
                             }
