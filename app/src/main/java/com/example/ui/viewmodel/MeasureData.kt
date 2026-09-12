@@ -49,3 +49,17 @@ fun String.deserializePoints(): List<Point3D> {
     if (this.isBlank()) return emptyList()
     return this.split(";").mapNotNull { it.deserializePoint3D() }
 }
+
+/**
+ * Real-time wall measurement details extracted from AR vertical planes.
+ */
+data class WallMeasurementInfo(
+    val id: String,
+    val centerPose: com.google.ar.core.Pose,
+    val widthMeters: Float,
+    val heightMeters: Float,
+    val areaSqMeters: Float,
+    val distanceToCamera: Float,
+    val corners3D: List<Point3D>,
+    val isTracking: Boolean = true
+)

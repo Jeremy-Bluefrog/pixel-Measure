@@ -233,15 +233,27 @@ fun MainScreen(viewModel: MeasureViewModel) {
                             .fillMaxSize()
                             .padding(if (currentMode == 0) PaddingValues(bottom = 0.dp) else innerPadding)
                     ) {
-                        // Pure Fade Transition: Camera AR (0) <-> Screen Ruler (1)
+                        // Smooth Fade & Subtle Scale Transition: Camera AR (0) <-> Screen Ruler (1)
                         AnimatedContent(
                             targetState = currentMode,
                             transitionSpec = {
-                                fadeIn(
-                                    animationSpec = tween(durationMillis = 140, easing = LinearOutSlowInEasing)
-                                ).togetherWith(
+                                (fadeIn(
+                                    animationSpec = tween(
+                                        durationMillis = 300,
+                                        easing = CubicBezierEasing(0.0f, 0.0f, 0.2f, 1.0f)
+                                    )
+                                ) + scaleIn(
+                                    initialScale = 0.98f,
+                                    animationSpec = tween(
+                                        durationMillis = 300,
+                                        easing = CubicBezierEasing(0.0f, 0.0f, 0.2f, 1.0f)
+                                    )
+                                )).togetherWith(
                                     fadeOut(
-                                        animationSpec = tween(durationMillis = 100, easing = FastOutLinearInEasing)
+                                        animationSpec = tween(
+                                            durationMillis = 200,
+                                            easing = CubicBezierEasing(0.4f, 0.0f, 1.0f, 1.0f)
+                                        )
                                     )
                                 )
                             },

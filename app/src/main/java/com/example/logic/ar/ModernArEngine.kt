@@ -74,6 +74,9 @@ class ModernArEngine(private val context: Context) {
     var isTorchActive: Boolean = false
         private set
 
+    var isRawDepthConfidenceFilterEnabled: Boolean = true
+    var rawDepthConfidenceThreshold: Int = 45
+
     private var frameCounter = 0
     private var cachedPlanes: List<DetectedPlaneInfo> = emptyList()
     private var lastCameraPose: Pose? = null
@@ -317,15 +320,24 @@ class ModernArEngine(private val context: Context) {
 
             if (planePolygonHit != null) {
                 val plane = planePolygonHit.trackable as Plane
+                val edgeSnap = findPlaneEdgeOrVertexSnap(plane, planePolygonHit.hitPose, snapRadiusMeters = 0.08f)
+                val finalPose = edgeSnap?.first ?: planePolygonHit.hitPose
+                val isSnapped = edgeSnap?.second ?: false
+
                 val anchor = if (createAnchor) {
-                    try { planePolygonHit.createAnchor() } catch (e: Exception) { null }
+                    try {
+                        plane.createAnchor(finalPose)
+                    } catch (e: Exception) {
+                        try { planePolygonHit.createAnchor() } catch (e2: Exception) { null }
+                    }
                 } else null
                 return HitTestResult(
-                    pose = planePolygonHit.hitPose,
+                    pose = finalPose,
                     anchor = anchor,
                     hitType = HitType.PLANE_POLYGON,
                     distance = planePolygonHit.distance,
-                    planeType = plane.type
+                    planeType = plane.type,
+                    isSnappedToFeature = isSnapped
                 )
             }
 
@@ -338,15 +350,24 @@ class ModernArEngine(private val context: Context) {
             }
             if (planeHit != null) {
                 val plane = planeHit.trackable as Plane
+                val edgeSnap = findPlaneEdgeOrVertexSnap(plane, planeHit.hitPose, snapRadiusMeters = 0.08f)
+                val finalPose = edgeSnap?.first ?: planeHit.hitPose
+                val isSnapped = edgeSnap?.second ?: false
+
                 val anchor = if (createAnchor) {
-                    try { planeHit.createAnchor() } catch (e: Exception) { null }
+                    try {
+                        plane.createAnchor(finalPose)
+                    } catch (e: Exception) {
+                        try { planeHit.createAnchor() } catch (e2: Exception) { null }
+                    }
                 } else null
                 return HitTestResult(
-                    pose = planeHit.hitPose,
+                    pose = finalPose,
                     anchor = anchor,
                     hitType = HitType.PLANE_ESTIMATED,
                     distance = planeHit.distance,
-                    planeType = plane.type
+                    planeType = plane.type,
+                    isSnappedToFeature = isSnapped
                 )
             }
 
@@ -394,12 +415,77 @@ class ModernArEngine(private val context: Context) {
                     anchor = anchor,
                     hitType = HitType.FEATURE_POINT,
                     distance = featurePointHit.distance,
-                    planeType = null
+                    planeType = null,
+                    isSnappedToFeature = true
                 )
             }
 
         } catch (e: Exception) {
             Log.e("ModernArEngine", "Hit test exception: ${e.message}")
+        }
+        return null
+    }
+
+    /**
+     * Magnetically snap hit pose to nearest detected plane polygon vertex (corner)
+     * or boundary edge segment (wall lines, tile seams, door frames, table borders).
+     */
+    fun findPlaneEdgeOrVertexSnap(plane: Plane, hitPose: Pose, snapRadiusMeters: Float = 0.08f): Pair<Pose, Boolean>? {
+        try {
+            val poly = plane.polygon ?: return null
+            val count = poly.remaining() / 2
+            if (count < 2) return null
+
+            val localHit = plane.centerPose.inverse().transformPoint(floatArrayOf(hitPose.tx(), hitPose.ty(), hitPose.tz()))
+            val hx = localHit[0]
+            val hz = localHit[2]
+
+            var bestDist = snapRadiusMeters
+            var snapX = hx
+            var snapZ = hz
+            var didSnap = false
+
+            for (i in 0 until count) {
+                val x1 = poly.get(i * 2)
+                val z1 = poly.get(i * 2 + 1)
+                val nextIdx = (i + 1) % count
+                val x2 = poly.get(nextIdx * 2)
+                val z2 = poly.get(nextIdx * 2 + 1)
+
+                // 1. Polygon Corner Vertex Snap
+                val d1 = kotlin.math.sqrt((hx - x1) * (hx - x1) + (hz - z1) * (hz - z1))
+                if (d1 < bestDist) {
+                    bestDist = d1
+                    snapX = x1
+                    snapZ = z1
+                    didSnap = true
+                }
+
+                // 2. Polygon Boundary Edge Segment Snap
+                val edx = x2 - x1
+                val edz = z2 - z1
+                val lenSq = edx * edx + edz * edz
+                if (lenSq > 1e-6f) {
+                    val t = (((hx - x1) * edx + (hz - z1) * edz) / lenSq).coerceIn(0f, 1f)
+                    val px = x1 + t * edx
+                    val pz = z1 + t * edz
+                    val segDist = kotlin.math.sqrt((hx - px) * (hx - px) + (hz - pz) * (hz - pz))
+                    if (segDist < bestDist && segDist < snapRadiusMeters * 0.75f) {
+                        bestDist = segDist
+                        snapX = px
+                        snapZ = pz
+                        didSnap = true
+                    }
+                }
+            }
+
+            if (didSnap) {
+                val worldSnap = plane.centerPose.transformPoint(floatArrayOf(snapX, 0f, snapZ))
+                val snappedPose = Pose(floatArrayOf(worldSnap[0], worldSnap[1], worldSnap[2]), hitPose.rotationQuaternion)
+                return Pair(snappedPose, true)
+            }
+        } catch (e: Throwable) {
+            // fallback gracefully
         }
         return null
     }
@@ -603,5 +689,6 @@ data class HitTestResult(
     val anchor: Anchor?,
     val hitType: HitType,
     val distance: Float,
-    val planeType: Plane.Type? = null
+    val planeType: Plane.Type? = null,
+    val isSnappedToFeature: Boolean = false
 )

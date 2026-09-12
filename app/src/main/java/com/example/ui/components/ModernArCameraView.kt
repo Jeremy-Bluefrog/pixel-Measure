@@ -11,6 +11,7 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.view.TextureView
 import com.example.ui.viewmodel.HapticType
+import com.example.ui.viewmodel.WallMeasurementInfo
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
@@ -135,6 +136,10 @@ fun ModernArCameraView(
     val revealedTileIds = remember { mutableStateMapOf<String, Boolean>() }
     var textureViewRef by remember { mutableStateOf<TextureView?>(null) }
 
+    // Simultaneous Wall Measurement state
+    val isSimultaneousWallMeasureActive by viewModel.isSimultaneousWallMeasureActive.collectAsState()
+    val detectedWalls by viewModel.detectedWalls.collectAsState()
+
     // AR Measurement Video Recorder (Tap photo, Long-press video recording)
     val videoRecorder = remember { com.example.logic.camera.ArVideoRecorder(context) }
     val isRecordingVideo by videoRecorder.isRecording.collectAsState()
@@ -215,10 +220,10 @@ fun ModernArCameraView(
     // Reticle & HUD pulse animation
     val infiniteTransition = rememberInfiniteTransition(label = "ReticlePulse")
     val reticlePulseScale by infiniteTransition.animateFloat(
-        initialValue = 0.94f,
-        targetValue = 1.06f,
+        initialValue = 0.96f,
+        targetValue = 1.04f,
         animationSpec = infiniteRepeatable(
-            animation = tween(1100, easing = FastOutSlowInEasing),
+            animation = tween(1200, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
         label = "reticlePulse"
@@ -227,7 +232,7 @@ fun ModernArCameraView(
         initialValue = 0f,
         targetValue = 40f,
         animationSpec = infiniteRepeatable(
-            animation = tween(900, easing = LinearEasing),
+            animation = tween(1000, easing = LinearEasing),
             repeatMode = RepeatMode.Restart
         ),
         label = "dashPhase"
@@ -244,16 +249,16 @@ fun ModernArCameraView(
 
     // Redesigned Reactive Spring Animations for Target Snapping & Lock (Ultra-Smooth & Responsive)
     val snapScaleAnimated by animateFloatAsState(
-        targetValue = if (isSnapped) 1.22f else 1.0f,
+        targetValue = if (isSnapped) 1.20f else 1.0f,
         animationSpec = spring(
             dampingRatio = Spring.DampingRatioLowBouncy,
-            stiffness = Spring.StiffnessMedium
+            stiffness = Spring.StiffnessLow
         ),
         label = "snapScaleAnimated"
     )
     val snapGlowAlphaAnimated by animateFloatAsState(
         targetValue = if (isSnapped) 0.9f else 0.15f,
-        animationSpec = tween(180, easing = FastOutSlowInEasing),
+        animationSpec = tween(220, easing = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)),
         label = "snapGlowAlphaAnimated"
     )
     val colorPrimary = MaterialTheme.colorScheme.primary
@@ -285,19 +290,19 @@ fun ModernArCameraView(
             isSnapped -> colorTertiary
             else -> colorPrimary
         },
-        animationSpec = tween(150, easing = FastOutSlowInEasing),
+        animationSpec = tween(220, easing = FastOutSlowInEasing),
         label = "reticleColorAnimated"
     )
 
     val addFabContainerColor by animateColorAsState(
         targetValue = if (isMeasurementAvailable) colorPrimary else Color(0xFF3C3C3E),
-        animationSpec = tween(200, easing = FastOutSlowInEasing),
+        animationSpec = tween(240, easing = FastOutSlowInEasing),
         label = "addFabContainerColor"
     )
 
     val addFabIconColor by animateColorAsState(
         targetValue = if (isMeasurementAvailable) colorOnPrimary else Color(0xFF8E8E93),
-        animationSpec = tween(200, easing = FastOutSlowInEasing),
+        animationSpec = tween(240, easing = FastOutSlowInEasing),
         label = "addFabIconColor"
     )
 
@@ -476,11 +481,26 @@ fun ModernArCameraView(
                 )
             }
 
-            // 2. 3D Augmented Overlay Canvas (Planes, Projected Points, Lines, Measurements, Pings)
+            // 2. 3D Augmented Overlay Canvas (Planes, Projected Points, Lines, Measurements, Pings, Reticle)
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val screenW = size.width.toInt()
                 val screenH = size.height.toInt()
                 val screenCenter = Offset(size.width / 2f, size.height / 2f)
+
+                // Calculate real-time projected reticle position from 3D live target point
+                val liveTarget = liveTargetPoint
+                val projectedReticle = if (liveTarget != null && viewMatrix.size >= 16 && projectionMatrix.size >= 16) {
+                    ArMath.projectWorldToScreen(liveTarget, viewMatrix, projectionMatrix, screenW, screenH)
+                } else null
+
+                val currentReticlePos = if (projectedReticle != null &&
+                    projectedReticle.first in (-120f)..(size.width + 120f) &&
+                    projectedReticle.second in (-120f)..(size.height + 120f)
+                ) {
+                    Offset(projectedReticle.first, projectedReticle.second)
+                } else {
+                    screenCenter
+                }
 
                 // Draw touch ripples
                 pings.forEach { (offset, anim) ->
@@ -600,22 +620,22 @@ fun ModernArCameraView(
                     }
                 }
 
-                // 2C. Draw active dynamic virtual line from last anchor point to current center reticle
+                // 2C. Draw active dynamic virtual line from last anchor point to current dynamic 3D surface reticle
                 // 兩點成一線：僅在奇數個點（正在延伸該線段的終點）時繪製動態虛線
                 val isActivelyDrawingLine = projectedPoints.size % 2 == 1
                 if (isActivelyDrawingLine && projectedPoints.isNotEmpty()) {
                     val lastPt = projectedPoints.last()
                     if (lastPt != null) {
                         val startOffset = Offset(lastPt.first, lastPt.second)
-                        val dx = screenCenter.x - startOffset.x
-                        val dy = screenCenter.y - startOffset.y
+                        val dx = currentReticlePos.x - startOffset.x
+                        val dy = currentReticlePos.y - startOffset.y
                         val liveLen = sqrt(dx * dx + dy * dy)
 
                         // 1. Shadow under active line
                         drawLine(
                             color = Color.Black.copy(alpha = 0.4f),
                             start = Offset(startOffset.x + 1f, startOffset.y + 2f),
-                            end = Offset(screenCenter.x + 1f, screenCenter.y + 2f),
+                            end = Offset(currentReticlePos.x + 1f, currentReticlePos.y + 2f),
                             strokeWidth = 7.dp.toPx(),
                             cap = StrokeCap.Round
                         )
@@ -624,7 +644,7 @@ fun ModernArCameraView(
                         drawLine(
                             color = colorPrimary.copy(alpha = 0.35f),
                             start = startOffset,
-                            end = screenCenter,
+                            end = currentReticlePos,
                             strokeWidth = 8.5.dp.toPx(),
                             cap = StrokeCap.Round
                         )
@@ -633,21 +653,21 @@ fun ModernArCameraView(
                         drawLine(
                             color = colorPrimary,
                             start = startOffset,
-                            end = screenCenter,
+                            end = currentReticlePos,
                             strokeWidth = 4.dp.toPx(),
                             pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), dashPhase),
                             cap = StrokeCap.Round
                         )
 
-                        // Solid endpoint cap at the moving end (screenCenter)
+                        // Solid endpoint cap at the moving end (currentReticlePos)
                         drawCircle(
                             color = Color.White,
-                            center = screenCenter,
+                            center = currentReticlePos,
                             radius = 5.dp.toPx()
                         )
                         drawCircle(
                             color = colorSecondary,
-                            center = screenCenter,
+                            center = currentReticlePos,
                             radius = 2.5.dp.toPx()
                         )
 
@@ -883,6 +903,102 @@ fun ModernArCameraView(
                     }
                 }
 
+                // 2D-4. Draw Simultaneous Wall Measurement Overlay (即時牆面測量與 3D 投影網格)
+                if (isSimultaneousWallMeasureActive && detectedWalls.isNotEmpty()) {
+                    detectedWalls.forEach { wall ->
+                        val screenCorners = wall.corners3D.map { cornerPt ->
+                            ArMath.projectWorldToScreen(cornerPt, viewMatrix, projectionMatrix, screenW, screenH)
+                        }
+                        val pBL = screenCorners.getOrNull(0)
+                        val pBR = screenCorners.getOrNull(1)
+                        val pTR = screenCorners.getOrNull(2)
+                        val pTL = screenCorners.getOrNull(3)
+
+                        if (pBL != null && pBR != null && pTR != null && pTL != null) {
+                            val wallPath = Path().apply {
+                                moveTo(pBL.first, pBL.second)
+                                lineTo(pBR.first, pBR.second)
+                                lineTo(pTR.first, pTR.second)
+                                lineTo(pTL.first, pTL.second)
+                                close()
+                            }
+
+                            // 1. Semi-transparent holographic wall mesh fill
+                            drawPath(
+                                path = wallPath,
+                                color = Color(0x2200E5FF)
+                            )
+
+                            // 2. Futuristic boundary outline with animated dash
+                            drawPath(
+                                path = wallPath,
+                                color = Color(0xFF00E5FF).copy(alpha = 0.85f),
+                                style = Stroke(
+                                    width = 2.5.dp.toPx(),
+                                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(16f, 10f), dashPhase)
+                                )
+                            )
+
+                            // 3. Holographic grid lines inside wall surface
+                            for (fraction in listOf(0.33f, 0.66f)) {
+                                // Horizontal lines across the wall
+                                val hStart = Offset(
+                                    pBL.first + (pTL.first - pBL.first) * fraction,
+                                    pBL.second + (pTL.second - pBL.second) * fraction
+                                )
+                                val hEnd = Offset(
+                                    pBR.first + (pTR.first - pBR.first) * fraction,
+                                    pBR.second + (pTR.second - pBR.second) * fraction
+                                )
+                                drawLine(
+                                    color = Color(0xFF00E5FF).copy(alpha = 0.3f),
+                                    start = hStart,
+                                    end = hEnd,
+                                    strokeWidth = 1.2.dp.toPx()
+                                )
+
+                                // Vertical lines across the wall
+                                val vStart = Offset(
+                                    pBL.first + (pBR.first - pBL.first) * fraction,
+                                    pBL.second + (pBR.second - pBL.second) * fraction
+                                )
+                                val vEnd = Offset(
+                                    pTL.first + (pTR.first - pTL.first) * fraction,
+                                    pTL.second + (pTR.second - pTL.second) * fraction
+                                )
+                                drawLine(
+                                    color = Color(0xFF00E5FF).copy(alpha = 0.3f),
+                                    start = vStart,
+                                    end = vEnd,
+                                    strokeWidth = 1.2.dp.toPx()
+                                )
+                            }
+
+                            // 4. Corner bracket anchors (4 corners)
+                            screenCorners.forEach { cornerProj ->
+                                if (cornerProj != null) {
+                                    val cOffset = Offset(cornerProj.first, cornerProj.second)
+                                    drawCircle(
+                                        color = Color.Black.copy(alpha = 0.5f),
+                                        center = Offset(cOffset.x, cOffset.y + 1f),
+                                        radius = 6.dp.toPx()
+                                    )
+                                    drawCircle(
+                                        color = Color.White,
+                                        center = cOffset,
+                                        radius = 5.dp.toPx()
+                                    )
+                                    drawCircle(
+                                        color = Color(0xFF00E5FF),
+                                        center = cOffset,
+                                        radius = 3.5.dp.toPx()
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // 2E. Draw start and confirmed anchor pin node markers (3D Spatial Anchors)
                 projectedPoints.forEachIndexed { index, proj ->
                     if (proj != null) {
@@ -923,6 +1039,94 @@ fun ModernArCameraView(
                             color = if (isStartNode) colorPrimary else if (isLastNode) colorSecondary else colorPrimary,
                             center = offset,
                             radius = 3.5.dp.toPx()
+                        )
+                    }
+                }
+
+                // 4. Google Measure Style Dynamic 3D Target Reticle (Surface Locked & Spring Snapped)
+                val reticleCenter = currentReticlePos
+                val baseRadius = 14.dp.toPx()
+                val currentRadius = baseRadius * snapScaleAnimated * reticlePulseScale
+
+                // 1. Snapped Target Lock Radial Aura Glow
+                if (isSnapped) {
+                    drawCircle(
+                        color = Color(0xFFFBBF24).copy(alpha = snapGlowAlphaAnimated * 0.45f),
+                        center = reticleCenter,
+                        radius = currentRadius * 1.6f
+                    )
+                    drawCircle(
+                        color = Color(0xFFFBBF24).copy(alpha = snapGlowAlphaAnimated * 0.25f),
+                        center = reticleCenter,
+                        radius = currentRadius * 2.2f
+                    )
+                }
+
+                // 2. High-contrast ground shadow
+                drawCircle(
+                    color = Color.Black.copy(alpha = 0.35f),
+                    center = Offset(reticleCenter.x + 1f, reticleCenter.y + 1.5f),
+                    radius = currentRadius,
+                    style = Stroke(width = 3.dp.toPx())
+                )
+
+                // 3. Clean Elegant Outer Gold Ring
+                drawCircle(
+                    color = if (isSnapped) Color(0xFFFFD54F) else Color(0xFFFBBF24),
+                    center = reticleCenter,
+                    radius = currentRadius,
+                    style = Stroke(
+                        width = if (isSnapped) 2.6.dp.toPx() else 2.0.dp.toPx()
+                    )
+                )
+
+                // 3.1 Multi-Sample Burst Averaging Dynamic Progress Arc (Precision Lock)
+                if (sensorTelemetry.multiSampleProgress > 0f) {
+                    val arcRadius = currentRadius + 5.dp.toPx()
+                    drawArc(
+                        color = if (sensorTelemetry.isMultiSampleLocked) colorTertiary else colorPrimary,
+                        startAngle = -90f,
+                        sweepAngle = sensorTelemetry.multiSampleProgress * 360f,
+                        useCenter = false,
+                        topLeft = Offset(reticleCenter.x - arcRadius, reticleCenter.y - arcRadius),
+                        size = androidx.compose.ui.geometry.Size(arcRadius * 2f, arcRadius * 2f),
+                        style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
+                    )
+                }
+
+                // 5. Solid Center White & Gold Accent Core Pinpoint Dot
+                drawCircle(
+                    color = Color.Black.copy(alpha = 0.4f),
+                    center = Offset(reticleCenter.x + 0.5f, reticleCenter.y + 0.5f),
+                    radius = 4.5.dp.toPx()
+                )
+                drawCircle(
+                    color = Color.White,
+                    center = reticleCenter,
+                    radius = 4.0.dp.toPx()
+                )
+                drawCircle(
+                    color = if (isSnapped) Color(0xFFFFD54F) else Color(0xFFFBBF24),
+                    center = reticleCenter,
+                    radius = 2.2.dp.toPx()
+                )
+
+                // 6. Plane Locked Center Micro Particle Feedback Ring
+                if (planesCount > 0) {
+                    val particleCount = 8
+                    for (i in 0 until particleCount) {
+                        val angle = (i * (360f / particleCount)) + (planeLockedParticleAnim * 360f)
+                        val rad = Math.toRadians(angle.toDouble())
+                        val orbitRadius = (18.dp.toPx()) + (kotlin.math.sin(planeLockedParticleAnim * 6.28318f + i).toFloat() * 2.5.dp.toPx())
+                        val px = reticleCenter.x + (kotlin.math.cos(rad).toFloat() * orbitRadius)
+                        val py = reticleCenter.y + (kotlin.math.sin(rad).toFloat() * orbitRadius)
+                        val sineVal = kotlin.math.sin(planeLockedParticleAnim * 6.28318f + i)
+                        val pAlpha = ((sineVal + 1f) / 2f).coerceIn(0.25f, 0.9f)
+
+                        drawCircle(
+                            color = Color(0xFFFBBF24).copy(alpha = pAlpha),
+                            center = Offset(px, py),
+                            radius = 2f * density
                         )
                     }
                 }
@@ -1205,100 +1409,150 @@ fun ModernArCameraView(
                         }
                     }
                 }
-            }
 
-            // 4. Redesigned Futuristic AR Target Reticle (Spring Snap Aura + Rotating Crosshair Ticks + Center Laser Pinpoint)
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Canvas(modifier = Modifier.size(72.dp)) {
-                    val center = Offset(size.width / 2f, size.height / 2f)
-                    val baseRadius = 14.dp.toPx()
-                    val currentRadius = baseRadius * snapScaleAnimated * reticlePulseScale
+                // 3F. Simultaneous Wall Measurement 3D Floating Badges & Controls
+                if (isSimultaneousWallMeasureActive && detectedWalls.isNotEmpty()) {
+                    detectedWalls.forEach { wall ->
+                        val screenCorners = wall.corners3D.map { cornerPt ->
+                            ArMath.projectWorldToScreen(cornerPt, viewMatrix, projectionMatrix, screenW, screenH)
+                        }
+                        val pBL = screenCorners.getOrNull(0)
+                        val pBR = screenCorners.getOrNull(1)
+                        val pTR = screenCorners.getOrNull(2)
+                        val pTL = screenCorners.getOrNull(3)
 
-                    // 1. Snapped Target Lock Radial Aura Glow
-                    if (isSnapped) {
-                        drawCircle(
-                            color = colorPrimary.copy(alpha = snapGlowAlphaAnimated * 0.45f),
-                            center = center,
-                            radius = currentRadius * 1.6f
-                        )
-                        drawCircle(
-                            color = colorPrimary.copy(alpha = snapGlowAlphaAnimated * 0.25f),
-                            center = center,
-                            radius = currentRadius * 2.2f
-                        )
-                    }
+                        if (pBL != null && pBR != null && pTR != null && pTL != null) {
+                            val midBottomX = (pBL.first + pBR.first) / 2f
+                            val midBottomY = (pBL.second + pBR.second) / 2f
 
-                    // 2. High-contrast ground shadow
-                    drawCircle(
-                        color = Color.Black.copy(alpha = 0.35f),
-                        center = Offset(center.x + 1f, center.y + 1.5f),
-                        radius = currentRadius,
-                        style = Stroke(width = 3.dp.toPx())
-                    )
+                            val midLeftX = (pBL.first + pTL.first) / 2f
+                            val midLeftY = (pBL.second + pTL.second) / 2f
 
-                    // 3. Clean Elegant Static Outer Ring
-                    drawCircle(
-                        color = reticleColorAnimated,
-                        center = center,
-                        radius = currentRadius,
-                        style = Stroke(
-                            width = if (isSnapped) 2.5.dp.toPx() else 1.8.dp.toPx()
-                        )
-                    )
+                            val centerX = (pBL.first + pBR.first + pTR.first + pTL.first) / 4f
+                            val centerY = (pBL.second + pBR.second + pTR.second + pTL.second) / 4f
 
-                    // 3.1 Multi-Sample Burst Averaging Dynamic Progress Arc (Precision Lock)
-                    if (sensorTelemetry.multiSampleProgress > 0f) {
-                        val arcRadius = currentRadius + 5.dp.toPx()
-                        drawArc(
-                            color = if (sensorTelemetry.isMultiSampleLocked) colorTertiary else colorPrimary,
-                            startAngle = -90f,
-                            sweepAngle = sensorTelemetry.multiSampleProgress * 360f,
-                            useCenter = false,
-                            topLeft = Offset(center.x - arcRadius, center.y - arcRadius),
-                            size = androidx.compose.ui.geometry.Size(arcRadius * 2f, arcRadius * 2f),
-                            style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
-                        )
-                    }
+                            val wFormatted = viewModel.formatLength(wall.widthMeters.toDouble(), selectedUnit)
+                            val hFormatted = viewModel.formatLength(wall.heightMeters.toDouble(), selectedUnit)
+                            val aFormatted = viewModel.formatArea(wall.areaSqMeters.toDouble(), selectedUnit)
 
+                            // 1. Bottom Width Badge
+                            Surface(
+                                color = Color(0xFF0F172A).copy(alpha = 0.88f),
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.7f)),
+                                shadowElevation = 6.dp,
+                                modifier = Modifier.offset {
+                                    androidx.compose.ui.unit.IntOffset(
+                                        (midBottomX - 45.dp.toPx()).toInt(),
+                                        (midBottomY + 8.dp.toPx()).toInt().coerceIn(10, screenH - 120)
+                                    )
+                                }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.Straighten,
+                                        contentDescription = null,
+                                        tint = Color(0xFF00E5FF),
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Text(
+                                        text = "牆寬 $wFormatted",
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
 
+                            // 2. Side Height Badge
+                            Surface(
+                                color = Color(0xFF0F172A).copy(alpha = 0.88f),
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.7f)),
+                                shadowElevation = 6.dp,
+                                modifier = Modifier.offset {
+                                    androidx.compose.ui.unit.IntOffset(
+                                        (midLeftX - 90.dp.toPx()).toInt().coerceAtLeast(10),
+                                        (midLeftY - 14.dp.toPx()).toInt().coerceIn(60, screenH - 120)
+                                    )
+                                }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.Height,
+                                        contentDescription = null,
+                                        tint = Color(0xFF10B981),
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Text(
+                                        text = "牆高 $hFormatted",
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
 
-                    // 5. Solid Center White & Accent Core Pinpoint Dot
-                    drawCircle(
-                        color = Color.Black.copy(alpha = 0.4f),
-                        center = Offset(center.x + 0.5f, center.y + 0.5f),
-                        radius = 4.5.dp.toPx()
-                    )
-                    drawCircle(
-                        color = Color.White,
-                        center = center,
-                        radius = 4.5.dp.toPx()
-                    )
-                    drawCircle(
-                        color = reticleColorAnimated,
-                        center = center,
-                        radius = 2.5.dp.toPx()
-                    )
-
-                    // 6. Plane Locked Center Micro Particle Feedback Ring (When AR system detects planes)
-                    if (planesCount > 0) {
-                        val particleCount = 8
-                        for (i in 0 until particleCount) {
-                            val angle = (i * (360f / particleCount)) + (planeLockedParticleAnim * 360f)
-                            val rad = Math.toRadians(angle.toDouble())
-                            val orbitRadius = (18.dp.toPx()) + (kotlin.math.sin(planeLockedParticleAnim * 6.28318f + i).toFloat() * 2.5.dp.toPx())
-                            val px = center.x + (kotlin.math.cos(rad).toFloat() * orbitRadius)
-                            val py = center.y + (kotlin.math.sin(rad).toFloat() * orbitRadius)
-                            val sineVal = kotlin.math.sin(planeLockedParticleAnim * 6.28318f + i)
-                            val pAlpha = ((sineVal + 1f) / 2f).coerceIn(0.25f, 0.9f)
-
-                            drawCircle(
-                                color = colorPrimary.copy(alpha = pAlpha),
-                                center = Offset(px, py),
-                                radius = 2f * density
-                            )
+                            // 3. Center Interactive Wall Card (One-tap lock wall measurement)
+                            Surface(
+                                color = Color.Black.copy(alpha = 0.82f),
+                                shape = RoundedCornerShape(16.dp),
+                                border = BorderStroke(1.2.dp, Color(0xFF00E5FF)),
+                                shadowElevation = 8.dp,
+                                modifier = Modifier
+                                    .offset {
+                                        androidx.compose.ui.unit.IntOffset(
+                                            (centerX - 100.dp.toPx()).toInt().coerceIn(20, screenW - 220),
+                                            (centerY - 24.dp.toPx()).toInt().coerceIn(100, screenH - 180)
+                                        )
+                                    }
+                                    .clickable {
+                                        viewModel.lockWallMeasurement(wall)
+                                    }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Surface(
+                                        color = Color(0xFF00E5FF).copy(alpha = 0.2f),
+                                        shape = CircleShape,
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                Icons.Rounded.Layers,
+                                                contentDescription = null,
+                                                tint = Color(0xFF00E5FF),
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                    Column {
+                                        Text(
+                                            text = "垂直牆面 • $aFormatted",
+                                            color = Color.White,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = "$wFormatted × $hFormatted (輕觸鎖定)",
+                                            color = Color(0xFF00E5FF),
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1310,13 +1564,14 @@ fun ModernArCameraView(
                     .fillMaxWidth()
                     .align(Alignment.TopCenter)
             ) {
-                // Top Gradient Blur Scrim
+                // Top Progressive Variable Blur Scrim (漸進式毛玻璃模糊取代黑漸層)
                 GradientBlurScrim(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(130.dp),
                     isTop = true,
-                    baseColor = Color.Black
+                    baseColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.35f),
+                    blurRadius = 32.dp
                 )
 
                 Row(
@@ -1441,6 +1696,34 @@ fun ModernArCameraView(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    // Simultaneous Wall Measurement Quick Toggle
+                    val isWallDetected = detectedWalls.isNotEmpty()
+                    IconButton(
+                        onClick = { viewModel.toggleSimultaneousWallMeasure() },
+                        modifier = Modifier
+                            .size(40.dp)
+                            .background(
+                                if (isSimultaneousWallMeasureActive) {
+                                    if (isWallDetected) Color(0xFF00E5FF).copy(alpha = 0.85f) else Color(0xFF0F172A).copy(alpha = 0.75f)
+                                } else Color.Black.copy(alpha = 0.55f),
+                                CircleShape
+                            )
+                            .border(
+                                width = if (isSimultaneousWallMeasureActive) 1.5.dp else 0.5.dp,
+                                color = if (isSimultaneousWallMeasureActive) Color(0xFF00E5FF) else Color.White.copy(alpha = 0.25f),
+                                shape = CircleShape
+                            )
+                            .shadow(if (isSimultaneousWallMeasureActive) 4.dp else 2.dp, CircleShape)
+                            .testTag("wall_measure_toggle_button")
+                    ) {
+                        Icon(
+                            Icons.Rounded.Layers,
+                            contentDescription = "同時測量牆壁",
+                            tint = if (isSimultaneousWallMeasureActive && isWallDetected) Color.Black else (if (isSimultaneousWallMeasureActive) Color(0xFF00E5FF) else Color.White),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
                     // Unified AI Smart Tools Anchor & Dropdown Menu
                     Box {
                         val isAnyAiActive = isMobileSamMode || isObjectronMode || isAiTileMode
@@ -1585,6 +1868,39 @@ fun ModernArCameraView(
                                 },
                                 onClick = {
                                     viewModel.toggleObjectronMode()
+                                    showAiToolsMenu = false
+                                }
+                            )
+
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            "同時測量牆壁",
+                                            color = if (isSimultaneousWallMeasureActive) Color(0xFF00E5FF) else colorOnSurface,
+                                            fontWeight = if (isSimultaneousWallMeasureActive) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                        if (isSimultaneousWallMeasureActive) {
+                                            Text(
+                                                if (detectedWalls.isNotEmpty()) "● 已鎖定牆面" else "● 偵測中",
+                                                color = Color(0xFF00E5FF),
+                                                fontSize = 11.sp
+                                            )
+                                        }
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Rounded.Layers,
+                                        contentDescription = null,
+                                        tint = if (isSimultaneousWallMeasureActive) Color(0xFF00E5FF) else colorOnSurfaceVariant
+                                    )
+                                },
+                                onClick = {
+                                    viewModel.toggleSimultaneousWallMeasure()
                                     showAiToolsMenu = false
                                 }
                             )
@@ -1834,14 +2150,14 @@ fun ModernArCameraView(
                 )
             }
 
-            // Bottom Gradient Blur Scrim for camera control deck (漸層模糊取代純黑漸層)
+            // Bottom Progressive Variable Blur Scrim for camera control deck (漸進式毛玻璃模糊取代黑漸層)
             GradientBlurScrim(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(160.dp)
+                    .height(170.dp)
                     .align(Alignment.BottomCenter),
                 isTop = false,
-                baseColor = Color.Black.copy(alpha = 0.35f),
+                baseColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.35f),
                 blurRadius = 32.dp
             )
 
@@ -1852,8 +2168,8 @@ fun ModernArCameraView(
                     .padding(horizontal = 20.dp, vertical = 6.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // AI Specialized Guidance Pill (MobileSAM & Objectron if active)
-                if (isMobileSamMode || isObjectronMode) {
+                // AI Specialized Guidance Pill (MobileSAM & Objectron & Wall if active)
+                if (isMobileSamMode || isObjectronMode || (isSimultaneousWallMeasureActive && detectedWalls.isNotEmpty())) {
                     Surface(
                         color = Color.Black.copy(alpha = 0.65f),
                         shape = RoundedCornerShape(18.dp),
@@ -1862,6 +2178,7 @@ fun ModernArCameraView(
                             when {
                                 isMobileSamMode -> colorTertiary.copy(alpha = 0.6f)
                                 isObjectronMode -> colorSecondary.copy(alpha = 0.5f)
+                                isSimultaneousWallMeasureActive && detectedWalls.isNotEmpty() -> Color(0xFF00E5FF).copy(alpha = 0.6f)
                                 else -> Color.White.copy(alpha = 0.15f)
                             }
                         ),
@@ -1875,6 +2192,10 @@ fun ModernArCameraView(
                                 } else if (isObjectronMode && objectron3DBox != null) {
                                     Modifier.clickable {
                                         viewModel.applyObjectronBoxCorners()
+                                    }
+                                } else if (isSimultaneousWallMeasureActive && detectedWalls.isNotEmpty()) {
+                                    Modifier.clickable {
+                                        viewModel.lockWallMeasurement(detectedWalls.first())
                                     }
                                 } else Modifier
                             )
@@ -1905,6 +2226,18 @@ fun ModernArCameraView(
                                 Text(
                                     text = "AI 3D方框: ${"%.0f".format(objectron3DBox!!.widthMeters * 100)}×${"%.0f".format(objectron3DBox!!.heightMeters * 100)}×${"%.0f".format(objectron3DBox!!.depthMeters * 100)} cm (輕觸鎖定)",
                                     color = colorSecondary,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            } else if (isSimultaneousWallMeasureActive && detectedWalls.isNotEmpty()) {
+                                val firstWall = detectedWalls.first()
+                                val wFormatted = viewModel.formatLength(firstWall.widthMeters.toDouble(), selectedUnit)
+                                val hFormatted = viewModel.formatLength(firstWall.heightMeters.toDouble(), selectedUnit)
+                                val aFormatted = viewModel.formatArea(firstWall.areaSqMeters.toDouble(), selectedUnit)
+                                Icon(Icons.Rounded.Layers, null, tint = Color(0xFF00E5FF), modifier = Modifier.size(16.dp))
+                                Text(
+                                    text = "牆面測量: 寬 $wFormatted × 高 $hFormatted ($aFormatted) 輕觸鎖定",
+                                    color = Color(0xFF00E5FF),
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -2132,6 +2465,8 @@ fun ModernArCameraView(
         val gravityAlign by viewModel.gravityAlignmentEnabled.collectAsState()
         val barometerFusion by viewModel.barometerFusionEnabled.collectAsState()
         val jerkRejection by viewModel.jerkRejectionEnabled.collectAsState()
+        val rawDepthConfidenceEnabled by viewModel.rawDepthConfidenceEnabled.collectAsState()
+        val rawDepthConfidenceThreshold by viewModel.rawDepthConfidenceThreshold.collectAsState()
         val df1 = remember { DecimalFormat("#,##0") }
         val df2 = remember { DecimalFormat("#,##0") }
 
@@ -2296,6 +2631,30 @@ fun ModernArCameraView(
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+
+                        // 6. Pixel Raw Depth Confidence Filter (ML Depth map confidence)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Surface(
+                                    color = if (rawDepthConfidenceEnabled) colorPrimary else Color.Gray,
+                                    shape = CircleShape,
+                                    modifier = Modifier.size(8.dp)
+                                ) {}
+                                Spacer(Modifier.width(6.dp))
+                                Column {
+                                    Text("Pixel Raw Depth 置信度過濾", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                                    Text("門檻: 置信度 ≥ ${rawDepthConfidenceThreshold}% (無效噪點自動剔除)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                            Switch(
+                                checked = rawDepthConfidenceEnabled,
+                                onCheckedChange = { viewModel.setRawDepthConfidenceEnabled(it) }
                             )
                         }
 

@@ -228,6 +228,13 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     private val _detectedPlanes = MutableStateFlow<List<DetectedPlaneInfo>>(emptyList())
     val detectedPlanes: StateFlow<List<DetectedPlaneInfo>> = _detectedPlanes.asStateFlow()
 
+    // Simultaneous Wall Measurement
+    private val _isSimultaneousWallMeasureActive = MutableStateFlow(true)
+    val isSimultaneousWallMeasureActive: StateFlow<Boolean> = _isSimultaneousWallMeasureActive.asStateFlow()
+
+    private val _detectedWalls = MutableStateFlow<List<WallMeasurementInfo>>(emptyList())
+    val detectedWalls: StateFlow<List<WallMeasurementInfo>> = _detectedWalls.asStateFlow()
+
     private val _surfaceTypeAtCenter = MutableStateFlow("尋找空間特徵中...")
     val surfaceTypeAtCenter: StateFlow<String> = _surfaceTypeAtCenter.asStateFlow()
 
@@ -332,6 +339,8 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     val multiSampleAveragingEnabled = MutableStateFlow(prefs.getBoolean("sensor_multisample_enabled", true))
     val coplanarProjectionEnabled = MutableStateFlow(prefs.getBoolean("sensor_coplanar_enabled", true))
     val orthogonalSnapEnabled = MutableStateFlow(prefs.getBoolean("sensor_ortho_snap_enabled", true))
+    val rawDepthConfidenceEnabled = MutableStateFlow(prefs.getBoolean("raw_depth_confidence_enabled", true))
+    val rawDepthConfidenceThreshold = MutableStateFlow(prefs.getInt("raw_depth_confidence_threshold", 45))
     val scaleCalibrationFactor = MutableStateFlow(prefs.getFloat("scale_calibration_factor", 1.0000f))
 
     val highFpsModeEnabled = MutableStateFlow(prefs.getBoolean("high_fps_mode_enabled", true))
@@ -437,6 +446,20 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         orthogonalSnapEnabled.value = enabled
         sensorCorrectionEngine.isOrthogonalSnapEnabled = enabled
         prefs.edit().putBoolean("sensor_ortho_snap_enabled", enabled).apply()
+    }
+
+    fun setRawDepthConfidenceEnabled(enabled: Boolean) {
+        rawDepthConfidenceEnabled.value = enabled
+        modernArEngine.isRawDepthConfidenceFilterEnabled = enabled
+        prefs.edit().putBoolean("raw_depth_confidence_enabled", enabled).apply()
+        _toastMessage.tryEmit(if (enabled) "已啟用 Pixel Raw Depth 置信度過濾" else "已關閉 Raw Depth 置信度過濾")
+    }
+
+    fun setRawDepthConfidenceThreshold(threshold: Int) {
+        val clamped = threshold.coerceIn(10, 95)
+        rawDepthConfidenceThreshold.value = clamped
+        modernArEngine.rawDepthConfidenceThreshold = clamped
+        prefs.edit().putInt("raw_depth_confidence_threshold", clamped).apply()
     }
 
     fun setScaleCalibrationFactor(factor: Float) {
@@ -724,6 +747,136 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         measureTileOneTap(detected)
     }
 
+    // Simultaneous Wall Measurement Actions
+    fun toggleSimultaneousWallMeasure() {
+        val nextState = !_isSimultaneousWallMeasureActive.value
+        _isSimultaneousWallMeasureActive.value = nextState
+        triggerHapticFeedback()
+        if (nextState) {
+            _toastMessage.tryEmit("🧱 已啟用同時測量牆壁")
+        } else {
+            _detectedWalls.value = emptyList()
+            _toastMessage.tryEmit("已暫停牆壁測量")
+        }
+    }
+
+    fun lockWallMeasurement(wall: WallMeasurementInfo) {
+        saveUndoState()
+        capturedPoints.clear()
+        capturedPoints.addAll(wall.corners3D)
+        _autoDetectedType.value = "AREA"
+        triggerHapticFeedback()
+        val wStr = formatLength(wall.widthMeters.toDouble(), selectedUnit.value)
+        val hStr = formatLength(wall.heightMeters.toDouble(), selectedUnit.value)
+        val aStr = formatArea(wall.areaSqMeters.toDouble(), selectedUnit.value)
+        _toastMessage.tryEmit("🧱 已鎖定垂直牆面：寬 $wStr × 高 $hStr (面積 $aStr)")
+    }
+
+    fun saveWallMeasurementToRecords(wall: WallMeasurementInfo) {
+        val wStr = formatLength(wall.widthMeters.toDouble(), selectedUnit.value)
+        val hStr = formatLength(wall.heightMeters.toDouble(), selectedUnit.value)
+        val aStr = formatArea(wall.areaSqMeters.toDouble(), selectedUnit.value)
+        saveMeasurementRecord(
+            customNotes = "🧱 垂直牆面測量: 寬 $wStr × 高 $hStr, 面積: $aStr"
+        )
+        triggerHapticFeedback()
+        _toastMessage.tryEmit("💾 已儲存牆壁測量數據至歷史紀錄")
+    }
+
+    private fun updateDetectedWalls(data: ModernArFrame) {
+        if (!_isSimultaneousWallMeasureActive.value) {
+            if (_detectedWalls.value.isNotEmpty()) _detectedWalls.value = emptyList()
+            return
+        }
+
+        val verticalPlanes = data.planes.filter { it.type == Plane.Type.VERTICAL && it.isTracking }
+        if (verticalPlanes.isNotEmpty()) {
+            val walls = verticalPlanes.map { plane ->
+                val w = plane.extentX.coerceAtLeast(0.4f)
+                val h = plane.extentZ.coerceAtLeast(0.4f)
+                val halfW = w / 2f
+                val halfH = h / 2f
+
+                val localBL = floatArrayOf(-halfW, 0f, -halfH)
+                val localBR = floatArrayOf(halfW, 0f, -halfH)
+                val localTR = floatArrayOf(halfW, 0f, halfH)
+                val localTL = floatArrayOf(-halfW, 0f, halfH)
+
+                val worldBL = plane.centerPose.transformPoint(localBL)
+                val worldBR = plane.centerPose.transformPoint(localBR)
+                val worldTR = plane.centerPose.transformPoint(localTR)
+                val worldTL = plane.centerPose.transformPoint(localTL)
+
+                val corners = listOf(
+                    Point3D(worldBL[0].toDouble(), worldBL[1].toDouble(), worldBL[2].toDouble(), label = "牆角 左下", isArPrecision = true),
+                    Point3D(worldBR[0].toDouble(), worldBR[1].toDouble(), worldBR[2].toDouble(), label = "牆角 右下", isArPrecision = true),
+                    Point3D(worldTR[0].toDouble(), worldTR[1].toDouble(), worldTR[2].toDouble(), label = "牆角 右上", isArPrecision = true),
+                    Point3D(worldTL[0].toDouble(), worldTL[1].toDouble(), worldTL[2].toDouble(), label = "牆角 左上", isArPrecision = true)
+                )
+
+                val dx = plane.centerPose.tx() - data.cameraPoseX
+                val dy = plane.centerPose.ty() - data.cameraPoseY
+                val dz = plane.centerPose.tz() - data.cameraPoseZ
+                val dist = kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
+
+                WallMeasurementInfo(
+                    id = plane.id,
+                    centerPose = plane.centerPose,
+                    widthMeters = w,
+                    heightMeters = h,
+                    areaSqMeters = w * h,
+                    distanceToCamera = dist,
+                    corners3D = corners,
+                    isTracking = true
+                )
+            }
+            _detectedWalls.value = walls
+        } else {
+            // Virtual responsive fallback when camera is tracking horizontally toward a vertical surface
+            if (data.trackingState == TrackingState.TRACKING && kotlin.math.abs(data.cameraPitch) < 28f) {
+                val forwardDist = 2.0f
+                val yawRad = Math.toRadians(data.cameraYaw.toDouble())
+                val wallCenterX = (data.cameraPoseX - kotlin.math.sin(yawRad) * forwardDist).toFloat()
+                val wallCenterZ = (data.cameraPoseZ - kotlin.math.cos(yawRad) * forwardDist).toFloat()
+                val wallCenterY = data.cameraPoseY
+
+                val estW = 2.4f
+                val estH = 2.2f
+                val halfW = estW / 2f
+                val halfH = estH / 2f
+
+                val cosY = kotlin.math.cos(yawRad).toFloat()
+                val sinY = kotlin.math.sin(yawRad).toFloat()
+
+                val rightX = cosY
+                val rightZ = -sinY
+
+                val corners = listOf(
+                    Point3D((wallCenterX - rightX * halfW).toDouble(), (wallCenterY - halfH).toDouble(), (wallCenterZ - rightZ * halfW).toDouble(), label = "牆角 左下", isArPrecision = false),
+                    Point3D((wallCenterX + rightX * halfW).toDouble(), (wallCenterY - halfH).toDouble(), (wallCenterZ + rightZ * halfW).toDouble(), label = "牆角 右下", isArPrecision = false),
+                    Point3D((wallCenterX + rightX * halfW).toDouble(), (wallCenterY + halfH).toDouble(), (wallCenterZ + rightZ * halfW).toDouble(), label = "牆角 右上", isArPrecision = false),
+                    Point3D((wallCenterX - rightX * halfW).toDouble(), (wallCenterY + halfH).toDouble(), (wallCenterZ - rightZ * halfW).toDouble(), label = "牆角 左上", isArPrecision = false)
+                )
+
+                val simulatedPose = Pose(floatArrayOf(wallCenterX, wallCenterY, wallCenterZ), floatArrayOf(0f, sinY, 0f, cosY))
+                _detectedWalls.value = listOf(
+                    WallMeasurementInfo(
+                        id = "simulated_wall_plane",
+                        centerPose = simulatedPose,
+                        widthMeters = estW,
+                        heightMeters = estH,
+                        areaSqMeters = estW * estH,
+                        distanceToCamera = forwardDist,
+                        corners3D = corners,
+                        isTracking = true
+                    )
+                )
+            } else {
+                _detectedWalls.value = emptyList()
+            }
+        }
+    }
+
     init {
         sensorCorrectionEngine.isSensorCorrectionEnabled = sensorCorrectionEnabled.value
         sensorCorrectionEngine.isAntiJitterEnabled = antiJitterEnabled.value
@@ -732,6 +885,8 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         sensorCorrectionEngine.isJerkRejectionEnabled = jerkRejectionEnabled.value
         sensorCorrectionEngine.isProximityZeroContactEnabled = proximityContactEnabled.value
         sensorCorrectionEngine.isStereoParallaxScaleEnabled = stereoParallaxEnabled.value
+        modernArEngine.isRawDepthConfidenceFilterEnabled = rawDepthConfidenceEnabled.value
+        modernArEngine.rawDepthConfidenceThreshold = rawDepthConfidenceThreshold.value
         sensorCorrectionEngine.startListening()
     }
 
@@ -808,19 +963,24 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 smoothedPoint
             }
 
-            // 4. Magnetic Vertex Snapping check
+            // 4. Magnetic Snapping check (Physical Plane Edges/Corners + Existing Vertices)
             val snappedVertex = ArMath.findVertexSnap(orthogonalAdjustedPoint, capturedPoints, 0.07)
             val finalTargetPoint: Point3D
+            val isFeatureSnapped = centerHit.isSnappedToFeature || (snappedVertex != null)
 
             if (snappedVertex != null) {
                 finalTargetPoint = snappedVertex
+            } else {
+                finalTargetPoint = orthogonalAdjustedPoint
+            }
+
+            if (isFeatureSnapped) {
                 if (!_isSnapped.value) {
                     _isSnapped.value = true
                     triggerHapticFeedback(HapticType.SNAP)
                 }
             } else {
                 _isSnapped.value = false
-                finalTargetPoint = orthogonalAdjustedPoint
             }
 
             _liveTargetPoint.value = finalTargetPoint
@@ -946,6 +1106,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         if (_surfaceTypeAtCenter.value != data.surfaceTypeAtCenter) _surfaceTypeAtCenter.value = data.surfaceTypeAtCenter
         _lightIntensity.value = data.lightIntensity
         _trackingStability.value = data.stability
+        updateDetectedWalls(data)
 
         // Update active anchor positions to eliminate world drift
         if (capturedPoints.isNotEmpty() && data.trackingState == TrackingState.TRACKING) {
@@ -1029,8 +1190,13 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun requestHitTest(pixelX: Float? = null, pixelY: Float? = null) {
-        val x = pixelX ?: (displayWidth / 2f)
-        val y = pixelY ?: (displayHeight / 2f)
+        val targetP = _liveTargetPoint.value
+        val proj = if (pixelX == null && pixelY == null && targetP != null && _viewMatrix.value.size >= 16 && _projectionMatrix.value.size >= 16) {
+            ArMath.projectWorldToScreen(targetP, _viewMatrix.value, _projectionMatrix.value, displayWidth.toInt(), displayHeight.toInt())
+        } else null
+
+        val x = pixelX ?: proj?.first ?: (displayWidth / 2f)
+        val y = pixelY ?: proj?.second ?: (displayHeight / 2f)
 
         // Proactive warning when AR tracking feature points are deficient or camera moves too fast
         val stability = _trackingStability.value
