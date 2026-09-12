@@ -1318,19 +1318,16 @@ fun ModernArCameraView(
                                 .wrapContentSize(),
                             contentAlignment = Alignment.Center
                         ) {
-                            // Frosted Glass Blur Backdrop Layer (模糊效果背景)
+                            // Frosted Glass Blur Backdrop Layer (漸進模糊效果背景)
                             Box(
                                 modifier = Modifier
                                     .matchParentSize()
                                     .clip(RoundedCornerShape(50))
-                                    .blur(radius = 16.dp, edgeTreatment = BlurredEdgeTreatment.Unbounded)
-                                    .background(
-                                        brush = Brush.verticalGradient(
-                                            colors = listOf(
-                                                Color.White.copy(alpha = 0.35f),
-                                                colorSurfaceContainerHighest.copy(alpha = 0.60f)
-                                            )
-                                        )
+                                    .blur(
+                                        radius = 16.dp,
+                                        mask = ProgressiveBlurMasks.topFade(startAlpha = 0.85f, endAlpha = 0.4f),
+                                        edgeTreatment = BlurredEdgeTreatment.Unbounded,
+                                        tintColor = colorSurfaceContainerHighest.copy(alpha = 0.45f)
                                     )
                             )
 

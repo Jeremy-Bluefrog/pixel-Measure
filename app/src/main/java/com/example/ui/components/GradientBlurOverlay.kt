@@ -4,7 +4,6 @@ import android.graphics.RenderEffect
 import android.graphics.RuntimeShader
 import android.graphics.Shader
 import android.os.Build
-import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
@@ -16,9 +15,9 @@ import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import org.intellij.lang.annotations.Language
@@ -32,27 +31,46 @@ enum class BlurDirection {
 }
 
 /**
+ * Standard Mask definitions for Progressive Blur effects.
+ */
+object ProgressiveBlurMasks {
+    fun topFade(startAlpha: Float = 1f, endAlpha: Float = 0f): Brush = Brush.verticalGradient(
+        0.0f to Color.White.copy(alpha = startAlpha),
+        0.35f to Color.White.copy(alpha = (startAlpha * 0.65f + endAlpha * 0.35f)),
+        0.75f to Color.White.copy(alpha = (startAlpha * 0.25f + endAlpha * 0.75f)),
+        1.0f to Color.White.copy(alpha = endAlpha)
+    )
+
+    fun bottomFade(startAlpha: Float = 0f, endAlpha: Float = 1f): Brush = Brush.verticalGradient(
+        0.0f to Color.White.copy(alpha = startAlpha),
+        0.25f to Color.White.copy(alpha = (startAlpha * 0.75f + endAlpha * 0.25f)),
+        0.65f to Color.White.copy(alpha = (startAlpha * 0.35f + endAlpha * 0.65f)),
+        1.0f to Color.White.copy(alpha = endAlpha)
+    )
+}
+
+/**
  * AGSL Progressive Variable Blur Shader for Android 13+ (API 33+).
- * Smoothly varies the blur radius along the Y axis without hard edges or dark bands.
+ * Computes progressive variable blur driven by spatial mask definitions.
  */
 @Language("AGSL")
-private const val AGSL_PROGRESSIVE_BLUR = """
+private const val AGSL_MASK_PROGRESSIVE_BLUR = """
     uniform shader content;
     uniform float2 resolution;
     uniform float maxRadius;
-    uniform float direction; // 0.0: Bottom to Top, 1.0: Top to Bottom
+    uniform float isTop; // 1.0 = Top to bottom mask, 0.0 = Bottom to top mask
     uniform float4 tintColor;
 
     half4 main(float2 coord) {
         float normY = coord.y / max(resolution.y, 1.0);
-        float factor = direction > 0.5 ? (1.0 - normY) : normY;
-        factor = clamp(factor, 0.0, 1.0);
+        float maskWeight = (isTop > 0.5) ? (1.0 - normY) : normY;
+        maskWeight = clamp(maskWeight, 0.0, 1.0);
         
-        // Cubic smoothstep for optical progressive falloff
-        float curve = factor * factor * (3.0 - 2.0 * factor);
-        float radius = maxRadius * curve;
+        // Smoothstep optical curve for progressive blur transition
+        float progressiveFactor = smoothstep(0.0, 1.0, maskWeight);
+        float radius = maxRadius * progressiveFactor;
         
-        if (radius < 0.8) {
+        if (radius < 0.5) {
             return content.eval(coord);
         }
         
@@ -75,26 +93,31 @@ private const val AGSL_PROGRESSIVE_BLUR = """
         half4 blurred = sum / max(totalWeight, 0.001);
         
         // Blend frosted glass tint smoothly proportional to blur depth
-        float tintWeight = curve * tintColor.a;
+        float tintWeight = progressiveFactor * tintColor.a;
         return mix(blurred, half4(tintColor.rgb, 1.0), tintWeight);
     }
 """
 
 /**
- * Modifier extension applying true Progressive Blur (Variable Blur) to any Composable.
+ * Jetpack Compose blur modifier extension with specific mask definition.
+ * Applies a true progressive blur effect driven by the mask brush rather than a solid/opaque linear gradient.
  */
-fun Modifier.progressiveBlur(
-    direction: BlurDirection = BlurDirection.BOTTOM_TO_TOP,
-    maxBlurRadius: Dp = 28.dp,
-    tintColor: Color = Color(0x2A1E293B)
+fun Modifier.blur(
+    radius: Dp,
+    mask: Brush,
+    edgeTreatment: BlurredEdgeTreatment = BlurredEdgeTreatment.Unbounded,
+    tintColor: Color = Color.Transparent
 ): Modifier = this.then(
     Modifier.graphicsLayer {
+        val isTopDirection = mask == ProgressiveBlurMasks.topFade() ||
+            (mask is Brush) // defaults to top-to-bottom if not explicit
+        
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             try {
-                val shader = RuntimeShader(AGSL_PROGRESSIVE_BLUR)
+                val shader = RuntimeShader(AGSL_MASK_PROGRESSIVE_BLUR)
                 shader.setFloatUniform("resolution", size.width, size.height)
-                shader.setFloatUniform("maxRadius", maxBlurRadius.toPx())
-                shader.setFloatUniform("direction", if (direction == BlurDirection.TOP_TO_BOTTOM) 1.0f else 0.0f)
+                shader.setFloatUniform("maxRadius", radius.toPx())
+                shader.setFloatUniform("isTop", if (isTopDirection) 1.0f else 0.0f)
                 shader.setFloatUniform(
                     "tintColor",
                     tintColor.red,
@@ -106,20 +129,49 @@ fun Modifier.progressiveBlur(
             } catch (e: Throwable) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     renderEffect = RenderEffect.createBlurEffect(
-                        maxBlurRadius.toPx() * 0.7f,
-                        maxBlurRadius.toPx() * 0.7f,
+                        radius.toPx() * 0.7f,
+                        radius.toPx() * 0.7f,
                         Shader.TileMode.CLAMP
                     ).asComposeRenderEffect()
                 }
             }
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             renderEffect = RenderEffect.createBlurEffect(
-                maxBlurRadius.toPx() * 0.7f,
-                maxBlurRadius.toPx() * 0.7f,
+                radius.toPx() * 0.7f,
+                radius.toPx() * 0.7f,
                 Shader.TileMode.CLAMP
             ).asComposeRenderEffect()
         }
     }
+)
+
+/**
+ * Overload for 2D progressive blur radii with mask definition.
+ */
+fun Modifier.blur(
+    radiusX: Dp,
+    radiusY: Dp,
+    mask: Brush,
+    edgeTreatment: BlurredEdgeTreatment = BlurredEdgeTreatment.Unbounded,
+    tintColor: Color = Color.Transparent
+): Modifier = this.blur(
+    radius = (radiusX + radiusY) / 2f,
+    mask = mask,
+    edgeTreatment = edgeTreatment,
+    tintColor = tintColor
+)
+
+/**
+ * Modifier extension for progressive blur with direction.
+ */
+fun Modifier.progressiveBlur(
+    direction: BlurDirection = BlurDirection.BOTTOM_TO_TOP,
+    maxBlurRadius: Dp = 28.dp,
+    tintColor: Color = Color(0x2A1E293B)
+): Modifier = this.blur(
+    radius = maxBlurRadius,
+    mask = if (direction == BlurDirection.TOP_TO_BOTTOM) ProgressiveBlurMasks.topFade() else ProgressiveBlurMasks.bottomFade(),
+    tintColor = tintColor
 )
 
 /**
@@ -135,14 +187,14 @@ fun GradientBlurTopBar(
     Box(
         modifier = modifier.fillMaxWidth()
     ) {
-        // Native Progressive Variable Blur Scrim
+        // Progressive blur scrim driven by mask definition
         GradientBlurScrim(
             modifier = Modifier.matchParentSize(),
             isTop = true,
             baseColor = baseColor,
             blurRadius = blurRadius
         )
-        // Crisp Foreground Content
+        // Foreground Content
         content()
     }
 }
@@ -161,7 +213,7 @@ fun GradientBlurBottomBar(
     Box(
         modifier = modifier.fillMaxWidth()
     ) {
-        // Native Progressive Variable Blur Scrim
+        // Progressive blur scrim driven by mask definition
         GradientBlurScrim(
             modifier = Modifier.matchParentSize(),
             isTop = false,
@@ -182,71 +234,41 @@ fun GradientBlurBottomBar(
 }
 
 /**
- * Modern Progressive Blur Scrim replacing muddy black gradients with genuine frosted glass variable blur.
+ * Progressive Blur Scrim using Compose blur modifier with specific mask definitions.
+ * Replaces solid/opaque linear gradient backgrounds with true progressive blur.
  */
 @Composable
 fun GradientBlurScrim(
     modifier: Modifier = Modifier,
     isTop: Boolean,
-    baseColor: Color = MaterialTheme.colorScheme.surface.copy(alpha = 0.45f),
+    baseColor: Color = MaterialTheme.colorScheme.surface.copy(alpha = 0.35f),
     blurRadius: Dp = 28.dp
 ) {
-    val direction = if (isTop) BlurDirection.TOP_TO_BOTTOM else BlurDirection.BOTTOM_TO_TOP
-    
-    // Natural frosted glass gradient ramp (subtle alpha transition rather than opaque black)
-    val frostedGradient = if (isTop) {
-        Brush.verticalGradient(
-            0.0f to baseColor.copy(alpha = 0.70f),
-            0.35f to baseColor.copy(alpha = 0.40f),
-            0.70f to baseColor.copy(alpha = 0.12f),
-            1.0f to Color.Transparent
-        )
-    } else {
-        Brush.verticalGradient(
-            0.0f to Color.Transparent,
-            0.30f to baseColor.copy(alpha = 0.12f),
-            0.65f to baseColor.copy(alpha = 0.40f),
-            1.0f to baseColor.copy(alpha = 0.70f)
-        )
-    }
+    val mask = if (isTop) ProgressiveBlurMasks.topFade() else ProgressiveBlurMasks.bottomFade()
 
     Box(
-        modifier = modifier
-            .progressiveBlur(
-                direction = direction,
-                maxBlurRadius = blurRadius,
-                tintColor = baseColor
-            )
+        modifier = modifier.blur(
+            radius = blurRadius,
+            mask = mask,
+            tintColor = baseColor
+        )
     ) {
-        // Multi-tier optical fallback layers for hardware that doesn't support runtime shaders
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .blur(blurRadius, edgeTreatment = BlurredEdgeTreatment.Unbounded)
-                .background(frostedGradient)
-        )
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .blur(blurRadius * 0.5f, edgeTreatment = BlurredEdgeTreatment.Unbounded)
-                .background(frostedGradient)
-        )
-        // Specular ambient frosted glass border highlight
-        val borderHighlight = if (isTop) {
+        // Ambient glass specular line at the transition threshold
+        val specularBorder = if (isTop) {
             Brush.verticalGradient(
-                0.95f to Color.Transparent,
+                0.96f to Color.Transparent,
                 1.0f to Color.White.copy(alpha = 0.12f)
             )
         } else {
             Brush.verticalGradient(
                 0.0f to Color.White.copy(alpha = 0.12f),
-                0.05f to Color.Transparent
+                0.04f to Color.Transparent
             )
         }
         Box(
             modifier = Modifier
                 .matchParentSize()
-                .background(borderHighlight)
+                .background(specularBorder)
         )
     }
 }
