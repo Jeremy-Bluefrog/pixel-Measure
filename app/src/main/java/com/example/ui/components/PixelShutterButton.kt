@@ -40,7 +40,7 @@ fun PixelShutterButton(
     isRecording: Boolean = false,
     size: Dp = 58.dp,
     innerPadding: Dp = 6.dp,
-    outerRingColor: Color = Color.Black.copy(alpha = 0.35f),
+    outerRingColor: Color = Color.White.copy(alpha = 0.18f),
     outerBorderColor: Color = Color.White.copy(alpha = 0.9f),
     innerCircleColor: Color = Color.White,
     recordingColor: Color = Color(0xFFE53935),

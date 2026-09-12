@@ -107,20 +107,20 @@ fun ModernArCameraView(
     val planesCount by viewModel.arPlanesCount.collectAsState()
     val surfaceTypeAtCenter by viewModel.surfaceTypeAtCenter.collectAsState()
     val detectedPlanes by viewModel.detectedPlanes.collectAsState()
-    val viewMatrix by viewModel.viewMatrix.collectAsState()
-    val projectionMatrix by viewModel.projectionMatrix.collectAsState()
+    val viewMatrixState = viewModel.viewMatrix.collectAsState()
+    val projectionMatrixState = viewModel.projectionMatrix.collectAsState()
     val subMode by viewModel.cameraSubMode.collectAsState()
     val autoDetectedType by viewModel.autoDetectedType.collectAsState()
     val selectedUnit by viewModel.selectedUnit.collectAsState()
-    val liveDistanceMeters by viewModel.liveDistanceMeters.collectAsState()
-    val liveTargetPoint by viewModel.liveTargetPoint.collectAsState()
+    val liveDistanceMetersState = viewModel.liveDistanceMeters.collectAsState()
+    val liveTargetPointState = viewModel.liveTargetPoint.collectAsState()
     val isSnapped by viewModel.isSnapped.collectAsState()
     val isTorchOn by viewModel.isTorchOn.collectAsState()
     val torchBrightness by viewModel.torchBrightness.collectAsState()
     var showTorchBrightnessMenu by remember { mutableStateOf(false) }
     val showPointCloud by viewModel.showPointCloud.collectAsState()
     val capturedPoints = viewModel.capturedPoints
-    val sensorTelemetry by viewModel.sensorTelemetry.collectAsState()
+    val sensorTelemetryState = viewModel.sensorTelemetry.collectAsState()
     val sensorCorrectionEnabled by viewModel.sensorCorrectionEnabled.collectAsState()
     val highFpsModeEnabled by viewModel.highFpsModeEnabled.collectAsState()
     val isObjectronMode by viewModel.isObjectronMode.collectAsState()
@@ -281,7 +281,7 @@ fun ModernArCameraView(
     val colorError = MaterialTheme.colorScheme.error
     val colorOnError = MaterialTheme.colorScheme.onError
 
-    val isMeasurementAvailable = trackingState == com.google.ar.core.TrackingState.TRACKING && liveTargetPoint != null
+    val isMeasurementAvailable by remember { derivedStateOf { trackingState == com.google.ar.core.TrackingState.TRACKING && liveTargetPointState.value != null } }
 
     val reticleColorAnimated by animateColorAsState(
         targetValue = when {
@@ -488,9 +488,9 @@ fun ModernArCameraView(
                 val screenCenter = Offset(size.width / 2f, size.height / 2f)
 
                 // Calculate real-time projected reticle position from 3D live target point
-                val liveTarget = liveTargetPoint
-                val projectedReticle = if (liveTarget != null && viewMatrix.size >= 16 && projectionMatrix.size >= 16) {
-                    ArMath.projectWorldToScreen(liveTarget, viewMatrix, projectionMatrix, screenW, screenH)
+                val liveTarget = liveTargetPointState.value
+                val projectedReticle = if (liveTarget != null && viewMatrixState.value.size >= 16 && projectionMatrixState.value.size >= 16) {
+                    ArMath.projectWorldToScreen(liveTarget, viewMatrixState.value, projectionMatrixState.value, screenW, screenH)
                 } else null
 
                 val currentReticlePos = if (projectedReticle != null &&
@@ -515,7 +515,7 @@ fun ModernArCameraView(
 
                 // Project 3D points to 2D screen positions
                 val projectedPoints = capturedPoints.map { pt ->
-                    ArMath.projectWorldToScreen(pt, viewMatrix, projectionMatrix, screenW, screenH)
+                    ArMath.projectWorldToScreen(pt, viewMatrixState.value, projectionMatrixState.value, screenW, screenH)
                 }
 
                 // 2B. Draw confirmed connecting 3D virtual lines
@@ -709,7 +709,7 @@ fun ModernArCameraView(
                 if (isObjectronMode && objectron3DBox != null) {
                     val box = objectron3DBox!!
                     val boxScreenCorners = box.corners.map { cornerPt ->
-                        ArMath.projectWorldToScreen(cornerPt, viewMatrix, projectionMatrix, screenW, screenH)
+                        ArMath.projectWorldToScreen(cornerPt, viewMatrixState.value, projectionMatrixState.value, screenW, screenH)
                     }
 
                     val boxCyan = colorPrimary
@@ -762,7 +762,7 @@ fun ModernArCameraView(
                     }
 
                     // Draw Center Ground Projection Reticle
-                    val centerProj = ArMath.projectWorldToScreen(box.center, viewMatrix, projectionMatrix, screenW, screenH)
+                    val centerProj = ArMath.projectWorldToScreen(box.center, viewMatrixState.value, projectionMatrixState.value, screenW, screenH)
                     if (centerProj != null) {
                         val cOffset = Offset(centerProj.first, centerProj.second)
                         drawCircle(
@@ -907,7 +907,7 @@ fun ModernArCameraView(
                 if (isSimultaneousWallMeasureActive && detectedWalls.isNotEmpty()) {
                     detectedWalls.forEach { wall ->
                         val screenCorners = wall.corners3D.map { cornerPt ->
-                            ArMath.projectWorldToScreen(cornerPt, viewMatrix, projectionMatrix, screenW, screenH)
+                            ArMath.projectWorldToScreen(cornerPt, viewMatrixState.value, projectionMatrixState.value, screenW, screenH)
                         }
                         val pBL = screenCorners.getOrNull(0)
                         val pBR = screenCorners.getOrNull(1)
@@ -1081,12 +1081,12 @@ fun ModernArCameraView(
                 )
 
                 // 3.1 Multi-Sample Burst Averaging Dynamic Progress Arc (Precision Lock)
-                if (sensorTelemetry.multiSampleProgress > 0f) {
+                if (sensorTelemetryState.value.multiSampleProgress > 0f) {
                     val arcRadius = currentRadius + 5.dp.toPx()
                     drawArc(
-                        color = if (sensorTelemetry.isMultiSampleLocked) colorTertiary else colorPrimary,
+                        color = if (sensorTelemetryState.value.isMultiSampleLocked) colorTertiary else colorPrimary,
                         startAngle = -90f,
-                        sweepAngle = sensorTelemetry.multiSampleProgress * 360f,
+                        sweepAngle = sensorTelemetryState.value.multiSampleProgress * 360f,
                         useCenter = false,
                         topLeft = Offset(reticleCenter.x - arcRadius, reticleCenter.y - arcRadius),
                         size = androidx.compose.ui.geometry.Size(arcRadius * 2f, arcRadius * 2f),
@@ -1137,7 +1137,7 @@ fun ModernArCameraView(
                 val screenW = localView.width.takeIf { it > 0 } ?: 1080
                 val screenH = localView.height.takeIf { it > 0 } ?: 1920
                 val projectedNodePoints = capturedPoints.map { pt ->
-                    ArMath.projectWorldToScreen(pt, viewMatrix, projectionMatrix, screenW, screenH)
+                    ArMath.projectWorldToScreen(pt, viewMatrixState.value, projectionMatrixState.value, screenW, screenH)
                 }
 
                 val isArea = subMode == 1 || (subMode == 0 && autoDetectedType == "AREA")
@@ -1147,7 +1147,7 @@ fun ModernArCameraView(
                 if (capturedPoints.size >= 2) {
                     for (i in 0 until capturedPoints.size - 1 step stepVal) {
                         val mid3D = ArMath.midpoint(capturedPoints[i], capturedPoints[i + 1])
-                        val midProj = ArMath.projectWorldToScreen(mid3D, viewMatrix, projectionMatrix, screenW, screenH)
+                        val midProj = ArMath.projectWorldToScreen(mid3D, viewMatrixState.value, projectionMatrixState.value, screenW, screenH)
                         if (midProj != null) {
                             val segDist = ArMath.distance(capturedPoints[i], capturedPoints[i + 1])
                             val distText = viewModel.formatLength(segDist, selectedUnit)
@@ -1182,13 +1182,13 @@ fun ModernArCameraView(
                 val isActivelyDrawingSegment = capturedPoints.size % 2 == 1
                 if (isActivelyDrawingSegment && capturedPoints.isNotEmpty()) {
                     val lastPt = capturedPoints.last()
-                    val liveTarget = liveTargetPoint
+                    val liveTarget = liveTargetPointState.value
 
-                    if (liveTarget != null && liveDistanceMeters != null && liveDistanceMeters!! > 0.0) {
+                    if (liveTarget != null && liveDistanceMetersState.value != null && liveDistanceMetersState.value!! > 0.0) {
                         val mid3D = ArMath.midpoint(lastPt, liveTarget)
-                        val midProj = ArMath.projectWorldToScreen(mid3D, viewMatrix, projectionMatrix, screenW, screenH)
+                        val midProj = ArMath.projectWorldToScreen(mid3D, viewMatrixState.value, projectionMatrixState.value, screenW, screenH)
                         val badgePos = midProj ?: Pair(screenW / 2f, screenH / 2f - 120f)
-                        val distText = viewModel.formatLength(liveDistanceMeters!!, selectedUnit)
+                        val distText = viewModel.formatLength(liveDistanceMetersState.value!!, selectedUnit)
 
                         Surface(
                             color = colorPrimary,
@@ -1318,16 +1318,19 @@ fun ModernArCameraView(
                                 .wrapContentSize(),
                             contentAlignment = Alignment.Center
                         ) {
-                            // Frosted Glass Blur Backdrop Layer (漸進模糊效果背景)
+                            // Frosted Glass Blur Backdrop Layer (模糊效果背景)
                             Box(
                                 modifier = Modifier
                                     .matchParentSize()
                                     .clip(RoundedCornerShape(50))
-                                    .blur(
-                                        radius = 16.dp,
-                                        mask = ProgressiveBlurMasks.topFade(startAlpha = 0.85f, endAlpha = 0.4f),
-                                        edgeTreatment = BlurredEdgeTreatment.Unbounded,
-                                        tintColor = colorSurfaceContainerHighest.copy(alpha = 0.45f)
+                                    .blur(radius = 16.dp, edgeTreatment = BlurredEdgeTreatment.Unbounded)
+                                    .background(
+                                        brush = Brush.verticalGradient(
+                                            colors = listOf(
+                                                Color.White.copy(alpha = 0.35f),
+                                                colorSurfaceContainerHighest.copy(alpha = 0.60f)
+                                            )
+                                        )
                                     )
                             )
 
@@ -1411,7 +1414,7 @@ fun ModernArCameraView(
                 if (isSimultaneousWallMeasureActive && detectedWalls.isNotEmpty()) {
                     detectedWalls.forEach { wall ->
                         val screenCorners = wall.corners3D.map { cornerPt ->
-                            ArMath.projectWorldToScreen(cornerPt, viewMatrix, projectionMatrix, screenW, screenH)
+                            ArMath.projectWorldToScreen(cornerPt, viewMatrixState.value, projectionMatrixState.value, screenW, screenH)
                         }
                         val pBL = screenCorners.getOrNull(0)
                         val pBR = screenCorners.getOrNull(1)
@@ -1567,7 +1570,7 @@ fun ModernArCameraView(
                         .fillMaxWidth()
                         .height(130.dp),
                     isTop = true,
-                    baseColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.35f),
+                    baseColor = Color.White.copy(alpha = 0.05f),
                     blurRadius = 32.dp
                 )
 
@@ -1633,8 +1636,9 @@ fun ModernArCameraView(
                             }
 
                             Surface(
-                                color = Color.Black.copy(alpha = 0.55f),
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
                                 shape = RoundedCornerShape(20.dp),
+                                border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
                                 modifier = Modifier
                                     .shadow(2.dp, RoundedCornerShape(20.dp))
                                     .clickable { showStabilityDiagnosticsDialog = true }
@@ -1702,12 +1706,12 @@ fun ModernArCameraView(
                             .background(
                                 if (isSimultaneousWallMeasureActive) {
                                     if (isWallDetected) Color(0xFF00E5FF).copy(alpha = 0.85f) else Color(0xFF0F172A).copy(alpha = 0.75f)
-                                } else Color.Black.copy(alpha = 0.55f),
+                                } else MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
                                 CircleShape
                             )
                             .border(
-                                width = if (isSimultaneousWallMeasureActive) 1.5.dp else 0.5.dp,
-                                color = if (isSimultaneousWallMeasureActive) Color(0xFF00E5FF) else Color.White.copy(alpha = 0.25f),
+                                width = if (isSimultaneousWallMeasureActive) 1.5.dp else 0.8.dp,
+                                color = if (isSimultaneousWallMeasureActive) Color(0xFF00E5FF) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
                                 shape = CircleShape
                             )
                             .shadow(if (isSimultaneousWallMeasureActive) 4.dp else 2.dp, CircleShape)
@@ -1729,8 +1733,13 @@ fun ModernArCameraView(
                             modifier = Modifier
                                 .size(40.dp)
                                 .background(
-                                    if (isAnyAiActive) colorPrimary else Color.Black.copy(alpha = 0.55f),
+                                    if (isAnyAiActive) colorPrimary else MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
                                     CircleShape
+                                )
+                                .border(
+                                    width = 0.8.dp,
+                                    color = if (isAnyAiActive) Color.Transparent else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+                                    shape = CircleShape
                                 )
                                 .shadow(if (isAnyAiActive) 6.dp else 3.dp, CircleShape)
                                 .testTag("ai_tools_menu_button")
@@ -1918,8 +1927,13 @@ fun ModernArCameraView(
                             modifier = Modifier
                                 .size(40.dp)
                                 .background(
-                                    if (isTorchOn) colorPrimary else Color.Black.copy(alpha = 0.55f),
+                                    if (isTorchOn) colorPrimary else MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
                                     CircleShape
+                                )
+                                .border(
+                                    width = 0.8.dp,
+                                    color = if (isTorchOn) Color.Transparent else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+                                    shape = CircleShape
                                 )
                                 .shadow(if (isTorchOn) 6.dp else 3.dp, CircleShape)
                                 .testTag("flashlight_toggle_button")
@@ -2054,7 +2068,12 @@ fun ModernArCameraView(
                         onClick = onShowHistoryClick,
                         modifier = Modifier
                             .size(40.dp)
-                            .background(Color.Black.copy(alpha = 0.55f), CircleShape)
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.65f), CircleShape)
+                            .border(
+                                width = 0.8.dp,
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+                                shape = CircleShape
+                            )
                             .shadow(3.dp, CircleShape)
                     ) {
                         Icon(
@@ -2070,7 +2089,12 @@ fun ModernArCameraView(
                         onClick = onShowSettingsClick,
                         modifier = Modifier
                             .size(40.dp)
-                            .background(Color.Black.copy(alpha = 0.55f), CircleShape)
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.65f), CircleShape)
+                            .border(
+                                width = 0.8.dp,
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+                                shape = CircleShape
+                            )
                             .shadow(3.dp, CircleShape)
                     ) {
                         Icon(
@@ -2154,7 +2178,7 @@ fun ModernArCameraView(
                     .height(170.dp)
                     .align(Alignment.BottomCenter),
                 isTop = false,
-                baseColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.35f),
+                baseColor = Color.White.copy(alpha = 0.05f),
                 blurRadius = 32.dp
             )
 
@@ -2168,7 +2192,7 @@ fun ModernArCameraView(
                 // AI Specialized Guidance Pill (MobileSAM & Objectron & Wall if active)
                 if (isMobileSamMode || isObjectronMode || (isSimultaneousWallMeasureActive && detectedWalls.isNotEmpty())) {
                     Surface(
-                        color = Color.Black.copy(alpha = 0.65f),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.70f),
                         shape = RoundedCornerShape(18.dp),
                         border = BorderStroke(
                             1.dp,
@@ -2176,7 +2200,7 @@ fun ModernArCameraView(
                                 isMobileSamMode -> colorTertiary.copy(alpha = 0.6f)
                                 isObjectronMode -> colorSecondary.copy(alpha = 0.5f)
                                 isSimultaneousWallMeasureActive && detectedWalls.isNotEmpty() -> Color(0xFF00E5FF).copy(alpha = 0.6f)
-                                else -> Color.White.copy(alpha = 0.15f)
+                                else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
                             }
                         ),
                         modifier = Modifier
@@ -2279,7 +2303,8 @@ fun ModernArCameraView(
                                 },
                                 modifier = Modifier
                                     .size(46.dp)
-                                    .background(Color.Black.copy(alpha = 0.60f), CircleShape)
+                                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.70f), CircleShape)
+                                    .border(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f), CircleShape)
                                     .shadow(4.dp, CircleShape)
                             ) {
                                 Icon(
@@ -2511,7 +2536,7 @@ fun ModernArCameraView(
                                 Text("陀螺儀防抖穩定度", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                             }
                             Text(
-                                "${(sensorTelemetry.stabilityScore * 100).toInt()}% (${if (sensorTelemetry.isHandSteady) "🎯 穩定鎖定" else "微動追蹤"})",
+                                "${(sensorTelemetryState.value.stabilityScore * 100).toInt()}% (${if (sensorTelemetryState.value.isHandSteady) "🎯 穩定鎖定" else "微動追蹤"})",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
@@ -2553,14 +2578,14 @@ fun ModernArCameraView(
                                 Text("重力向量垂直基準", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                             }
                             Text(
-                                "俯仰: ${df1.format(sensorTelemetry.pitchDeg)}° / 滾轉: ${df1.format(sensorTelemetry.rollDeg)}°",
+                                "俯仰: ${df1.format(sensorTelemetryState.value.pitchDeg)}° / 滾轉: ${df1.format(sensorTelemetryState.value.rollDeg)}°",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold
                             )
                         }
 
                         // 3. Barometer Altitude
-                        if (sensorTelemetry.isBarometerAvailable) {
+                        if (sensorTelemetryState.value.isBarometerAvailable) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -2576,7 +2601,7 @@ fun ModernArCameraView(
                                     Text("氣壓計相對高程", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                                 }
                                 Text(
-                                    "${if (sensorTelemetry.barometricAltitudeMeters >= 0) "+" else ""}${df2.format(sensorTelemetry.barometricAltitudeMeters)} m (${df1.format(sensorTelemetry.currentPressureHpa)} hPa)",
+                                    "${if (sensorTelemetryState.value.barometricAltitudeMeters >= 0) "+" else ""}${df2.format(sensorTelemetryState.value.barometricAltitudeMeters)} m (${df1.format(sensorTelemetryState.value.currentPressureHpa)} hPa)",
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -2584,7 +2609,7 @@ fun ModernArCameraView(
                         }
 
                         // 4. Proximity Sensor (Surface Contact Zero-Point)
-                        if (sensorTelemetry.isProximityAvailable) {
+                        if (sensorTelemetryState.value.isProximityAvailable) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -2592,7 +2617,7 @@ fun ModernArCameraView(
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Surface(
-                                        color = if (sensorTelemetry.isProximityNear) colorPrimary else Color.Gray,
+                                        color = if (sensorTelemetryState.value.isProximityNear) colorPrimary else Color.Gray,
                                         shape = CircleShape,
                                         modifier = Modifier.size(8.dp)
                                     ) {}
@@ -2600,7 +2625,7 @@ fun ModernArCameraView(
                                     Text("近接貼面零點校準", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                                 }
                                 Text(
-                                    if (sensorTelemetry.isProximityNear) "📐 貼面觸碰 (0 cm 零點補償)" else "遠離表面 (${df1.format(sensorTelemetry.proximityDistanceCm)} cm)",
+                                    if (sensorTelemetryState.value.isProximityNear) "📐 貼面觸碰 (0 cm 零點補償)" else "遠離表面 (${df1.format(sensorTelemetryState.value.proximityDistanceCm)} cm)",
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface
@@ -2624,7 +2649,7 @@ fun ModernArCameraView(
                                 Text("雙鏡頭同步視差基準", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                             }
                             Text(
-                                "物理基線: ${df1.format(sensorTelemetry.stereoBaselineMm)} mm (置信度 ${(sensorTelemetry.stereoScaleConfidence * 100).toInt()}%)",
+                                "物理基線: ${df1.format(sensorTelemetryState.value.stereoBaselineMm)} mm (置信度 ${(sensorTelemetryState.value.stereoScaleConfidence * 100).toInt()}%)",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface

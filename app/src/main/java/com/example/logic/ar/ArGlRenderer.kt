@@ -124,9 +124,11 @@ class ModernArGlView(
             attribute vec4 a_Position;
             attribute vec2 a_TexCoord;
             varying vec2 v_TexCoord;
+            varying vec2 v_ScreenPos;
             void main() {
                 gl_Position = a_Position;
                 v_TexCoord = a_TexCoord;
+                v_ScreenPos = a_Position.xy;
             }
         """.trimIndent()
 
@@ -134,9 +136,36 @@ class ModernArGlView(
             #extension GL_OES_EGL_image_external : require
             precision highp float;
             varying vec2 v_TexCoord;
+            varying vec2 v_ScreenPos;
             uniform samplerExternalOES sTexture;
             void main() {
-                gl_FragColor = texture2D(sTexture, v_TexCoord);
+                // Progressive blur falloff calculation at Top and Bottom HUD areas
+                float topProgress = smoothstep(0.68, 0.98, v_ScreenPos.y);
+                float bottomProgress = 1.0 - smoothstep(-0.98, -0.55, v_ScreenPos.y);
+                float blurFactor = max(topProgress, bottomProgress);
+
+                if (blurFactor < 0.01) {
+                    gl_FragColor = texture2D(sTexture, v_TexCoord);
+                    return;
+                }
+
+                // 9-tap progressive Gaussian sampling (optimized for OES hardware limits)
+                float spread = 0.015 * blurFactor;
+                vec4 sum = vec4(0.0);
+                
+                // Cross pattern 9-tap to be safe on all GPU drivers with OES textures
+                sum += texture2D(sTexture, v_TexCoord) * 0.204164;
+                sum += texture2D(sTexture, v_TexCoord + vec2( spread,  0.0)) * 0.153170;
+                sum += texture2D(sTexture, v_TexCoord + vec2(-spread,  0.0)) * 0.153170;
+                sum += texture2D(sTexture, v_TexCoord + vec2( 0.0,  spread)) * 0.153170;
+                sum += texture2D(sTexture, v_TexCoord + vec2( 0.0, -spread)) * 0.153170;
+                sum += texture2D(sTexture, v_TexCoord + vec2( spread,  spread)) * 0.045783;
+                sum += texture2D(sTexture, v_TexCoord + vec2(-spread,  spread)) * 0.045783;
+                sum += texture2D(sTexture, v_TexCoord + vec2( spread, -spread)) * 0.045783;
+                sum += texture2D(sTexture, v_TexCoord + vec2(-spread, -spread)) * 0.045783;
+                
+                vec4 frostedGlass = vec4(0.95, 0.97, 1.0, 1.0);
+                gl_FragColor = mix(sum, frostedGlass, blurFactor * 0.12);
             }
         """.trimIndent()
 
