@@ -63,6 +63,7 @@ fun SettingsSheet(
         dragHandle = { BottomSheetDefaults.DragHandle() },
         modifier = Modifier.testTag("settings_modal_sheet")
     ) {
+        EnableWindowBlur(blurRadiusDp = 50)
         Column(
             modifier = Modifier
                 .fillMaxWidth()

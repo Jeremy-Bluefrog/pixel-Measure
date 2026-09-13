@@ -105,8 +105,6 @@ fun ModernArCameraView(
     val trackingStability by viewModel.trackingStability.collectAsState()
     val isDepthAvailable by viewModel.isDepthAvailable.collectAsState()
     val planesCount by viewModel.arPlanesCount.collectAsState()
-    val surfaceTypeAtCenter by viewModel.surfaceTypeAtCenter.collectAsState()
-    val detectedPlanes by viewModel.detectedPlanes.collectAsState()
     val viewMatrixState = viewModel.viewMatrix.collectAsState()
     val projectionMatrixState = viewModel.projectionMatrix.collectAsState()
     val subMode by viewModel.cameraSubMode.collectAsState()
@@ -120,6 +118,8 @@ fun ModernArCameraView(
     var showTorchBrightnessMenu by remember { mutableStateOf(false) }
     val showPointCloud by viewModel.showPointCloud.collectAsState()
     val capturedPoints = viewModel.capturedPoints
+    val hasCapturedPoints by remember { derivedStateOf { capturedPoints.isNotEmpty() } }
+    val isWaitingForSecondPoint by remember { derivedStateOf { capturedPoints.size % 2 == 1 } }
     val sensorTelemetryState = viewModel.sensorTelemetry.collectAsState()
     val sensorCorrectionEnabled by viewModel.sensorCorrectionEnabled.collectAsState()
     val highFpsModeEnabled by viewModel.highFpsModeEnabled.collectAsState()
@@ -174,6 +174,17 @@ fun ModernArCameraView(
     var showPlaneGuidanceOverlay by remember { mutableStateOf(true) }
     var showAiToolsMenu by remember { mutableStateOf(false) }
 
+    val isArOverlayOpen by remember {
+        derivedStateOf {
+            showHelpDialog || showSensorStatusDialog || showStabilityDiagnosticsDialog || showTileDetailSheet || selectedTileForDetail != null
+        }
+    }
+    val arOverlayBlurRadius by animateFloatAsState(
+        targetValue = if (isArOverlayOpen) 28f else 0f,
+        animationSpec = tween(220, easing = FastOutSlowInEasing),
+        label = "ArOverlayBackdropBlur"
+    )
+
     // Lifecycle sync for ARCore & Camera
     DisposableEffect(lifecycleOwner) {
         viewModel.onResume()
@@ -219,7 +230,7 @@ fun ModernArCameraView(
 
     // Reticle & HUD pulse animation
     val infiniteTransition = rememberInfiniteTransition(label = "ReticlePulse")
-    val reticlePulseScale by infiniteTransition.animateFloat(
+    val reticlePulseScale = infiniteTransition.animateFloat(
         initialValue = 0.96f,
         targetValue = 1.04f,
         animationSpec = infiniteRepeatable(
@@ -228,7 +239,7 @@ fun ModernArCameraView(
         ),
         label = "reticlePulse"
     )
-    val dashPhase by infiniteTransition.animateFloat(
+    val dashPhase = infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 40f,
         animationSpec = infiniteRepeatable(
@@ -237,7 +248,7 @@ fun ModernArCameraView(
         ),
         label = "dashPhase"
     )
-    val planeLockedParticleAnim by infiniteTransition.animateFloat(
+    val planeLockedParticleAnim = infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
@@ -248,7 +259,7 @@ fun ModernArCameraView(
     )
 
     // Redesigned Reactive Spring Animations for Target Snapping & Lock (Ultra-Smooth & Responsive)
-    val snapScaleAnimated by animateFloatAsState(
+    val snapScaleAnimated = animateFloatAsState(
         targetValue = if (isSnapped) 1.20f else 1.0f,
         animationSpec = spring(
             dampingRatio = Spring.DampingRatioLowBouncy,
@@ -256,11 +267,12 @@ fun ModernArCameraView(
         ),
         label = "snapScaleAnimated"
     )
-    val snapGlowAlphaAnimated by animateFloatAsState(
+    val snapGlowAlphaAnimated = animateFloatAsState(
         targetValue = if (isSnapped) 0.9f else 0.15f,
         animationSpec = tween(220, easing = CubicBezierEasing(0.2f, 0.0f, 0.0f, 1.0f)),
         label = "snapGlowAlphaAnimated"
     )
+
     val colorPrimary = MaterialTheme.colorScheme.primary
     val colorOnPrimary = MaterialTheme.colorScheme.onPrimary
     val colorPrimaryContainer = MaterialTheme.colorScheme.primaryContainer
@@ -281,18 +293,31 @@ fun ModernArCameraView(
     val colorError = MaterialTheme.colorScheme.error
     val colorOnError = MaterialTheme.colorScheme.onError
 
-    val isMeasurementAvailable by remember { derivedStateOf { trackingState == com.google.ar.core.TrackingState.TRACKING && liveTargetPointState.value != null } }
+    // Cached paints for ultra-low latency hardware canvas badge rendering
+    val badgeBgPaint = remember {
+        android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            style = android.graphics.Paint.Style.FILL
+        }
+    }
+    val badgeBorderPaint = remember {
+        android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = 3f
+        }
+    }
+    val badgeTextPaint = remember {
+        android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = 38f
+            typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+            textAlign = android.graphics.Paint.Align.CENTER
+        }
+    }
 
-    val reticleColorAnimated by animateColorAsState(
-        targetValue = when {
-            !isMeasurementAvailable -> Color(0xFF8E8E93)
-            trackingStability.isDriftRisk -> colorError
-            isSnapped -> colorTertiary
-            else -> colorPrimary
-        },
-        animationSpec = tween(220, easing = FastOutSlowInEasing),
-        label = "reticleColorAnimated"
-    )
+    // Reusable Path caches to prevent per-frame GC allocations in Canvas
+    val samCachedPath = remember { Path() }
+    val wallCachedPath = remember { Path() }
+
+    val isMeasurementAvailable by remember { derivedStateOf { trackingState == com.google.ar.core.TrackingState.TRACKING && liveTargetPointState.value != null } }
 
     val addFabContainerColor by animateColorAsState(
         targetValue = if (isMeasurementAvailable) colorPrimary else Color(0xFF3C3C3E),
@@ -364,7 +389,11 @@ fun ModernArCameraView(
         }
     } else {
         // Active AR Camera Viewport
-        Box(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .hardwareBackdropBlur(isArOverlayOpen, arOverlayBlurRadius)
+        ) {
             // 1. OpenGL ARCore 60 FPS View with Point Cloud
             val session = remember(cameraPermissionState.status.isGranted) {
                 viewModel.modernArEngine.createSession()
@@ -599,6 +628,40 @@ fun ModernArCameraView(
                                     )
                                     d += step
                                 }
+
+                                // 3D In-Canvas Hardware Accelerated Floating Segment Capsule
+                                val midX = (startOffset.x + endOffset.x) / 2f
+                                val midY = (startOffset.y + endOffset.y) / 2f
+                                val segDist = ArMath.distance(capturedPoints[i], capturedPoints[i + 1])
+                                val distText = viewModel.formatLength(segDist, selectedUnit)
+
+                                drawContext.canvas.nativeCanvas.apply {
+                                    val textWidth = badgeTextPaint.measureText(distText)
+                                    val textHeight = badgeTextPaint.textSize
+                                    val padH = 32f
+                                    val padV = 16f
+                                    val left = midX - textWidth / 2f - padH
+                                    val top = midY - textHeight / 2f - padV
+                                    val right = midX + textWidth / 2f + padH
+                                    val bottom = midY + textHeight / 2f + padV
+                                    val radius = 36f
+
+                                    // Shadow
+                                    badgeBgPaint.color = 0x55000000
+                                    drawRoundRect(left + 2f, top + 4f, right + 2f, bottom + 4f, radius, radius, badgeBgPaint)
+
+                                    // Capsule background
+                                    badgeBgPaint.color = colorPrimaryContainer.toArgb()
+                                    drawRoundRect(left, top, right, bottom, radius, radius, badgeBgPaint)
+
+                                    // Border
+                                    badgeBorderPaint.color = colorPrimary.copy(alpha = 0.5f).toArgb()
+                                    drawRoundRect(left, top, right, bottom, radius, radius, badgeBorderPaint)
+
+                                    // Text
+                                    badgeTextPaint.color = colorOnPrimaryContainer.toArgb()
+                                    drawText(distText, midX, midY + textHeight * 0.35f, badgeTextPaint)
+                                }
                             }
                         }
                     }
@@ -614,7 +677,7 @@ fun ModernArCameraView(
                                 start = Offset(last.first, last.second),
                                 end = Offset(first.first, first.second),
                                 strokeWidth = 3.dp.toPx(),
-                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(15f, 10f), dashPhase)
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(15f, 10f), dashPhase.value)
                             )
                         }
                     }
@@ -655,7 +718,7 @@ fun ModernArCameraView(
                             start = startOffset,
                             end = currentReticlePos,
                             strokeWidth = 4.dp.toPx(),
-                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), dashPhase),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), dashPhase.value),
                             cap = StrokeCap.Round
                         )
 
@@ -700,6 +763,39 @@ fun ModernArCameraView(
                                     strokeWidth = 1.4.dp.toPx()
                                 )
                                 d += step
+                            }
+                        }
+
+                        // 3D In-Canvas Hardware Accelerated Live Distance Badge
+                        val liveDist = liveDistanceMetersState.value
+                        if (liveDist != null && liveDist > 0.0) {
+                            val midX = (startOffset.x + currentReticlePos.x) / 2f
+                            val midY = (startOffset.y + currentReticlePos.y) / 2f
+                            val rawDistText = viewModel.formatLength(liveDist, selectedUnit)
+                            val distText = if (isSnapped) "吸附 $rawDistText" else rawDistText
+
+                            drawContext.canvas.nativeCanvas.apply {
+                                val textWidth = badgeTextPaint.measureText(distText)
+                                val textHeight = badgeTextPaint.textSize
+                                val padH = 34f
+                                val padV = 18f
+                                val left = midX - textWidth / 2f - padH
+                                val top = midY - textHeight / 2f - padV
+                                val right = midX + textWidth / 2f + padH
+                                val bottom = midY + textHeight / 2f + padV
+                                val radius = 38f
+
+                                // Shadow
+                                badgeBgPaint.color = 0x55000000
+                                drawRoundRect(left + 2f, top + 4f, right + 2f, bottom + 4f, radius, radius, badgeBgPaint)
+
+                                // Capsule background
+                                badgeBgPaint.color = colorPrimary.toArgb()
+                                drawRoundRect(left, top, right, bottom, radius, radius, badgeBgPaint)
+
+                                // Text
+                                badgeTextPaint.color = colorOnPrimary.toArgb()
+                                drawText(distText, midX, midY + textHeight * 0.35f, badgeTextPaint)
                             }
                         }
                     }
@@ -766,9 +862,9 @@ fun ModernArCameraView(
                     if (centerProj != null) {
                         val cOffset = Offset(centerProj.first, centerProj.second)
                         drawCircle(
-                            color = boxCyan.copy(alpha = 0.35f * reticlePulseScale),
+                            color = boxCyan.copy(alpha = 0.35f * reticlePulseScale.value),
                             center = cOffset,
-                            radius = (16.dp * reticlePulseScale).toPx(),
+                            radius = (16.dp * reticlePulseScale.value).toPx(),
                             style = Stroke(width = 1.5.dp.toPx())
                         )
                     }
@@ -778,7 +874,8 @@ fun ModernArCameraView(
                 if (isMobileSamMode && segmentedObject != null) {
                     val seg = segmentedObject!!
                     if (seg.contour2D.size >= 3) {
-                        val samPath = Path().apply {
+                        val samPath = samCachedPath.apply {
+                            reset()
                             moveTo(seg.contour2D[0].x, seg.contour2D[0].y)
                             for (i in 1 until seg.contour2D.size) {
                                 lineTo(seg.contour2D[i].x, seg.contour2D[i].y)
@@ -825,7 +922,7 @@ fun ModernArCameraView(
                         drawCircle(
                             color = samEmerald,
                             center = seg.promptPoint,
-                            radius = (14.dp * reticlePulseScale).toPx(),
+                            radius = (14.dp * reticlePulseScale.value).toPx(),
                             style = Stroke(width = 2.dp.toPx())
                         )
                     }
@@ -915,7 +1012,8 @@ fun ModernArCameraView(
                         val pTL = screenCorners.getOrNull(3)
 
                         if (pBL != null && pBR != null && pTR != null && pTL != null) {
-                            val wallPath = Path().apply {
+                            val wallPath = wallCachedPath.apply {
+                                reset()
                                 moveTo(pBL.first, pBL.second)
                                 lineTo(pBR.first, pBR.second)
                                 lineTo(pTR.first, pTR.second)
@@ -935,7 +1033,7 @@ fun ModernArCameraView(
                                 color = Color(0xFF00E5FF).copy(alpha = 0.85f),
                                 style = Stroke(
                                     width = 2.5.dp.toPx(),
-                                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(16f, 10f), dashPhase)
+                                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(16f, 10f), dashPhase.value)
                                 )
                             )
 
@@ -1008,9 +1106,9 @@ fun ModernArCameraView(
 
                         // 1. Beacon pulse halo ring
                         drawCircle(
-                            color = colorPrimary.copy(alpha = 0.25f * (2f - reticlePulseScale)),
+                            color = colorPrimary.copy(alpha = 0.25f * (2f - reticlePulseScale.value)),
                             center = offset,
-                            radius = (14.dp * reticlePulseScale).toPx()
+                            radius = (14.dp * reticlePulseScale.value).toPx()
                         )
 
                         // 2. High-contrast ground shadow
@@ -1046,17 +1144,17 @@ fun ModernArCameraView(
                 // 4. Google Measure Style Dynamic 3D Target Reticle (Surface Locked & Spring Snapped)
                 val reticleCenter = currentReticlePos
                 val baseRadius = 14.dp.toPx()
-                val currentRadius = baseRadius * snapScaleAnimated * reticlePulseScale
+                val currentRadius = baseRadius * snapScaleAnimated.value * reticlePulseScale.value
 
                 // 1. Snapped Target Lock Radial Aura Glow
                 if (isSnapped) {
                     drawCircle(
-                        color = Color(0xFFFBBF24).copy(alpha = snapGlowAlphaAnimated * 0.45f),
+                        color = Color(0xFFFBBF24).copy(alpha = snapGlowAlphaAnimated.value * 0.45f),
                         center = reticleCenter,
                         radius = currentRadius * 1.6f
                     )
                     drawCircle(
-                        color = Color(0xFFFBBF24).copy(alpha = snapGlowAlphaAnimated * 0.25f),
+                        color = Color(0xFFFBBF24).copy(alpha = snapGlowAlphaAnimated.value * 0.25f),
                         center = reticleCenter,
                         radius = currentRadius * 2.2f
                     )
@@ -1115,12 +1213,12 @@ fun ModernArCameraView(
                 if (planesCount > 0) {
                     val particleCount = 8
                     for (i in 0 until particleCount) {
-                        val angle = (i * (360f / particleCount)) + (planeLockedParticleAnim * 360f)
+                        val angle = (i * (360f / particleCount)) + (planeLockedParticleAnim.value * 360f)
                         val rad = Math.toRadians(angle.toDouble())
-                        val orbitRadius = (18.dp.toPx()) + (kotlin.math.sin(planeLockedParticleAnim * 6.28318f + i).toFloat() * 2.5.dp.toPx())
+                        val orbitRadius = (18.dp.toPx()) + (kotlin.math.sin(planeLockedParticleAnim.value * 6.28318f + i).toFloat() * 2.5.dp.toPx())
                         val px = reticleCenter.x + (kotlin.math.cos(rad).toFloat() * orbitRadius)
                         val py = reticleCenter.y + (kotlin.math.sin(rad).toFloat() * orbitRadius)
-                        val sineVal = kotlin.math.sin(planeLockedParticleAnim * 6.28318f + i)
+                        val sineVal = kotlin.math.sin(planeLockedParticleAnim.value * 6.28318f + i)
                         val pAlpha = ((sineVal + 1f) / 2f).coerceIn(0.25f, 0.9f)
 
                         drawCircle(
@@ -1136,82 +1234,6 @@ fun ModernArCameraView(
             Box(modifier = Modifier.fillMaxSize()) {
                 val screenW = localView.width.takeIf { it > 0 } ?: 1080
                 val screenH = localView.height.takeIf { it > 0 } ?: 1920
-                val projectedNodePoints = capturedPoints.map { pt ->
-                    ArMath.projectWorldToScreen(pt, viewMatrixState.value, projectionMatrixState.value, screenW, screenH)
-                }
-
-                val isArea = subMode == 1 || (subMode == 0 && autoDetectedType == "AREA")
-
-                // 3C. Capsules for confirmed line segments (兩點成一線，不共用點)
-                val stepVal = if (isArea) 1 else 2
-                if (capturedPoints.size >= 2) {
-                    for (i in 0 until capturedPoints.size - 1 step stepVal) {
-                        val mid3D = ArMath.midpoint(capturedPoints[i], capturedPoints[i + 1])
-                        val midProj = ArMath.projectWorldToScreen(mid3D, viewMatrixState.value, projectionMatrixState.value, screenW, screenH)
-                        if (midProj != null) {
-                            val segDist = ArMath.distance(capturedPoints[i], capturedPoints[i + 1])
-                            val distText = viewModel.formatLength(segDist, selectedUnit)
-
-                            Surface(
-                                color = colorPrimaryContainer,
-                                shape = RoundedCornerShape(percent = 50),
-                                border = BorderStroke(1.dp, colorPrimary.copy(alpha = 0.5f)),
-                                shadowElevation = 6.dp,
-                                modifier = Modifier
-                                    .offset {
-                                        androidx.compose.ui.unit.IntOffset(
-                                            (midProj.first - 60.dp.toPx() / 2).toInt(),
-                                            (midProj.second - 36.dp.toPx() / 2).toInt()
-                                        )
-                                    }
-                            ) {
-                                Text(
-                                    text = distText,
-                                    color = colorOnPrimaryContainer,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // 3D. Active dynamic measurement capsule positioned along the live line
-                // 兩點成一線：僅在奇數個點時（正延伸某條線段中），才在動態虛線上顯示即時距離膠囊
-                val isActivelyDrawingSegment = capturedPoints.size % 2 == 1
-                if (isActivelyDrawingSegment && capturedPoints.isNotEmpty()) {
-                    val lastPt = capturedPoints.last()
-                    val liveTarget = liveTargetPointState.value
-
-                    if (liveTarget != null && liveDistanceMetersState.value != null && liveDistanceMetersState.value!! > 0.0) {
-                        val mid3D = ArMath.midpoint(lastPt, liveTarget)
-                        val midProj = ArMath.projectWorldToScreen(mid3D, viewMatrixState.value, projectionMatrixState.value, screenW, screenH)
-                        val badgePos = midProj ?: Pair(screenW / 2f, screenH / 2f - 120f)
-                        val distText = viewModel.formatLength(liveDistanceMetersState.value!!, selectedUnit)
-
-                        Surface(
-                            color = colorPrimary,
-                            shape = RoundedCornerShape(percent = 50),
-                            shadowElevation = 6.dp,
-                            modifier = Modifier
-                                .offset {
-                                    androidx.compose.ui.unit.IntOffset(
-                                        (badgePos.first - 60.dp.toPx() / 2).toInt(),
-                                        (badgePos.second - 36.dp.toPx() / 2).toInt()
-                                    )
-                                }
-                        ) {
-                            Text(
-                                text = if (isSnapped) "吸附 $distText" else distText,
-                                color = colorOnPrimary,
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
-                            )
-                        }
-                    }
-                }
 
                 // 3E. AI Tile Pill Button with Blur Effect & Length/Width Reveal (藥丸狀模糊按鈕，點擊顯示長寬)
                 // 只有在真正偵測到磁磚時才顯示
@@ -1584,7 +1606,7 @@ fun ModernArCameraView(
                 ) {
                 // Left: Status badge or clear button with Material 3 AnimatedContent transition
                 AnimatedContent(
-                    targetState = capturedPoints.isNotEmpty(),
+                    targetState = hasCapturedPoints,
                     transitionSpec = {
                         (fadeIn(animationSpec = tween(220)) + scaleIn(
                             initialScale = 0.92f,
@@ -2280,7 +2302,7 @@ fun ModernArCameraView(
                         contentAlignment = Alignment.CenterStart
                     ) {
                         androidx.compose.animation.AnimatedVisibility(
-                            visible = capturedPoints.isNotEmpty(),
+                            visible = hasCapturedPoints,
                             enter = slideInHorizontally(
                                 initialOffsetX = { -it },
                                 animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow)
@@ -2365,7 +2387,6 @@ fun ModernArCameraView(
                                 .testTag("add_point_fab")
                         ) {
                             Box(contentAlignment = Alignment.Center) {
-                                val isWaitingForSecondPoint = capturedPoints.size % 2 == 1
                                 AnimatedContent(
                                     targetState = isWaitingForSecondPoint,
                                     transitionSpec = {
@@ -2456,6 +2477,7 @@ fun ModernArCameraView(
         AlertDialog(
             onDismissRequest = { showHelpDialog = false },
             title = {
+                EnableWindowBlur(blurRadiusDp = 50)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Rounded.TipsAndUpdates, null, tint = colorPrimary)
                     Spacer(Modifier.width(8.dp))
@@ -2495,6 +2517,7 @@ fun ModernArCameraView(
         AlertDialog(
             onDismissRequest = { showSensorStatusDialog = false },
             title = {
+                EnableWindowBlur(blurRadiusDp = 50)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Rounded.Sensors, null, tint = colorPrimary)
                     Spacer(Modifier.width(8.dp))
@@ -3017,6 +3040,7 @@ fun ArStabilityDiagnosticsDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
+            EnableWindowBlur(blurRadiusDp = 50)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Rounded.Speed, null, tint = levelColor)
                 Spacer(Modifier.width(8.dp))

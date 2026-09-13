@@ -1,10 +1,11 @@
 package com.example.ui.components
 
+import android.app.Activity
 import android.graphics.RenderEffect
-import android.graphics.RuntimeShader
 import android.graphics.Shader
 import android.os.Build
-import androidx.annotation.RequiresApi
+import android.view.Window
+import android.view.WindowManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
@@ -12,16 +13,15 @@ import androidx.compose.material3.NavigationBarDefaults
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.BlurredEdgeTreatment
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import org.intellij.lang.annotations.Language
+import androidx.compose.ui.window.DialogWindowProvider
 
 /**
  * Direction of progressive blur falloff.
@@ -32,144 +32,135 @@ enum class BlurDirection {
 }
 
 /**
- * AGSL Progressive Variable Blur Shader for Android 13+ (API 33+).
- * Smoothly varies the blur radius along the Y axis without hard edges or dark bands.
+ * Enables Android 12+ (API 31+ / Android 17+) native hardware Window Blur on the host Window.
+ * When applied to a Dialog, AlertDialog, or ModalBottomSheet, the surface behind the window
+ * (the camera, 3D measurements, live viewport) is blurred in real-time by SurfaceFlinger.
  */
-@Language("AGSL")
-private const val AGSL_PROGRESSIVE_BLUR = """
-    uniform shader content;
-    uniform float2 resolution;
-    uniform float maxRadius;
-    uniform float direction; // 0.0: Bottom to Top, 1.0: Top to Bottom
-    uniform float4 tintColor;
+@Composable
+fun EnableWindowBlur(blurRadiusDp: Int = 40) {
+    val view = LocalView.current
+    val density = LocalDensity.current
+    val radiusPx = with(density) { blurRadiusDp.dp.roundToPx() }
 
-    half4 main(float2 coord) {
-        float normY = coord.y / max(resolution.y, 1.0);
-        float factor = direction > 0.5 ? (1.0 - normY) : normY;
-        factor = clamp(factor, 0.0, 1.0);
-        
-        // Cubic smoothstep for optical progressive falloff
-        float curve = factor * factor * (3.0 - 2.0 * factor);
-        float radius = maxRadius * curve;
-        
-        if (radius < 0.8) {
-            return content.eval(coord);
+    DisposableEffect(view) {
+        var parent = view.parent
+        var targetWindow: Window? = null
+        while (parent != null) {
+            if (parent is DialogWindowProvider) {
+                targetWindow = parent.window
+                break
+            }
+            parent = parent.parent
         }
-        
-        half4 sum = half4(0.0);
-        float totalWeight = 0.0;
-        
-        // 9-tap variable progressive Gaussian sampling
-        const int TAPS = 7;
-        for (int i = -TAPS; i <= TAPS; i++) {
-            float offset = (float(i) / float(TAPS)) * radius;
-            float dist = float(i) / (float(TAPS) * 0.48);
-            float weight = exp(-0.5 * dist * dist);
-            
-            float2 samplePos = coord + float2(0.0, offset);
-            samplePos.y = clamp(samplePos.y, 0.0, resolution.y);
-            
-            sum += content.eval(samplePos) * weight;
-            totalWeight += weight;
+        if (targetWindow == null) {
+            targetWindow = (view.context as? Activity)?.window
         }
-        
-        half4 blurred = sum / max(totalWeight, 0.001);
-        
-        // Blend frosted glass tint smoothly proportional to blur depth
-        float tintWeight = curve * tintColor.a;
-        return mix(blurred, half4(tintColor.rgb, 1.0), tintWeight);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && targetWindow != null) {
+            try {
+                targetWindow.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+                targetWindow.attributes = targetWindow.attributes.apply {
+                    blurBehindRadius = radiusPx
+                }
+            } catch (e: Throwable) {
+                android.util.Log.w("WindowBlur", "Hardware Window Blur failed: ${e.message}")
+            }
+        }
+        onDispose { }
     }
-"""
+}
 
 /**
- * Modifier extension applying true Progressive Blur (Variable Blur) to any Composable.
+ * Applies View-level hardware accelerated RenderEffect blur on Android 12+ (API 31+).
+ * Blurs the actual Composable container (e.g. the AR camera viewport) when sheets or dialogs are opened.
  */
-fun Modifier.progressiveBlur(
-    direction: BlurDirection = BlurDirection.BOTTOM_TO_TOP,
-    maxBlurRadius: Dp = 28.dp,
-    tintColor: Color = Color(0x2A1E293B)
+fun Modifier.hardwareBackdropBlur(
+    enabled: Boolean,
+    blurRadius: Float = 32f
 ): Modifier = this.then(
     Modifier.graphicsLayer {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            try {
-                val shader = RuntimeShader(AGSL_PROGRESSIVE_BLUR)
-                shader.setFloatUniform("resolution", size.width, size.height)
-                shader.setFloatUniform("maxRadius", maxBlurRadius.toPx())
-                shader.setFloatUniform("direction", if (direction == BlurDirection.TOP_TO_BOTTOM) 1.0f else 0.0f)
-                shader.setFloatUniform(
-                    "tintColor",
-                    tintColor.red,
-                    tintColor.green,
-                    tintColor.blue,
-                    tintColor.alpha
-                )
-                renderEffect = RenderEffect.createRuntimeShaderEffect(shader, "content").asComposeRenderEffect()
-            } catch (e: Throwable) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    renderEffect = RenderEffect.createBlurEffect(
-                        maxBlurRadius.toPx() * 0.7f,
-                        maxBlurRadius.toPx() * 0.7f,
-                        Shader.TileMode.CLAMP
-                    ).asComposeRenderEffect()
-                }
-            }
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            renderEffect = RenderEffect.createBlurEffect(
-                maxBlurRadius.toPx() * 0.7f,
-                maxBlurRadius.toPx() * 0.7f,
-                Shader.TileMode.CLAMP
-            ).asComposeRenderEffect()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            renderEffect = if (enabled && blurRadius > 0.5f) {
+                RenderEffect.createBlurEffect(
+                    blurRadius,
+                    blurRadius,
+                    Shader.TileMode.CLAMP
+                ).asComposeRenderEffect()
+            } else null
         }
     }
 )
 
 /**
- * Top Gradient Blur container providing a true frosted glass progressive blur effect.
+ * Modifier extension applying View-level hardware blur on Android 12+ (API 31+).
+ */
+fun Modifier.progressiveBlur(
+    direction: BlurDirection = BlurDirection.BOTTOM_TO_TOP,
+    maxBlurRadius: Dp = 28.dp,
+    tintColor: Color = Color.Transparent
+): Modifier = this.then(
+    Modifier.graphicsLayer {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && maxBlurRadius > 0.dp) {
+            try {
+                renderEffect = RenderEffect.createBlurEffect(
+                    maxBlurRadius.toPx(),
+                    maxBlurRadius.toPx(),
+                    Shader.TileMode.CLAMP
+                ).asComposeRenderEffect()
+            } catch (e: Throwable) {
+                // Graceful fallback
+            }
+        }
+    }
+)
+
+/**
+ * Top container providing a clean translucent frosted glass surface without muddy dark bands.
  */
 @Composable
 fun GradientBlurTopBar(
     modifier: Modifier = Modifier,
-    baseColor: Color = MaterialTheme.colorScheme.surface,
+    baseColor: Color = MaterialTheme.colorScheme.surface.copy(alpha = 0.70f),
     blurRadius: Dp = 24.dp,
     content: @Composable BoxScope.() -> Unit
 ) {
     Box(
-        modifier = modifier.fillMaxWidth()
+        modifier = modifier
+            .fillMaxWidth()
+            .background(
+                Brush.verticalGradient(
+                    0.0f to baseColor,
+                    0.80f to baseColor.copy(alpha = baseColor.alpha * 0.85f),
+                    1.0f to Color.Transparent
+                )
+            )
     ) {
-        // Native Progressive Variable Blur Scrim
-        GradientBlurScrim(
-            modifier = Modifier.matchParentSize(),
-            isTop = true,
-            baseColor = baseColor,
-            blurRadius = blurRadius
-        )
-        // Crisp Foreground Content
         content()
     }
 }
 
 /**
- * Bottom Gradient Blur container providing a true frosted glass progressive blur effect.
+ * Bottom container providing a clean translucent frosted glass surface without muddy dark bands.
  */
 @Composable
 fun GradientBlurBottomBar(
     modifier: Modifier = Modifier,
-    baseColor: Color = MaterialTheme.colorScheme.surface,
+    baseColor: Color = MaterialTheme.colorScheme.surface.copy(alpha = 0.70f),
     blurRadius: Dp = 24.dp,
     contentWindowInsets: WindowInsets = NavigationBarDefaults.windowInsets,
     content: @Composable BoxScope.() -> Unit
 ) {
     Box(
-        modifier = modifier.fillMaxWidth()
+        modifier = modifier
+            .fillMaxWidth()
+            .background(
+                Brush.verticalGradient(
+                    0.0f to Color.Transparent,
+                    0.20f to baseColor.copy(alpha = baseColor.alpha * 0.85f),
+                    1.0f to baseColor
+                )
+            )
     ) {
-        // Native Progressive Variable Blur Scrim
-        GradientBlurScrim(
-            modifier = Modifier.matchParentSize(),
-            isTop = false,
-            baseColor = baseColor,
-            blurRadius = blurRadius
-        )
-        // Foreground Content with WindowInsets padding
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -183,35 +174,29 @@ fun GradientBlurBottomBar(
 }
 
 /**
- * Modern Progressive Blur Scrim replacing muddy black gradients with genuine frosted glass variable blur.
+ * Pure optical specular scrim: keeps the camera view 100% crisp and crystal clear
+ * while framing the UI with an ultra-subtle light rim, completely removing muddy black gradients.
  */
 @Composable
 fun GradientBlurScrim(
     modifier: Modifier = Modifier,
     isTop: Boolean,
-    baseColor: Color = Color.White.copy(alpha = 0.08f),
-    blurRadius: Dp = 28.dp
+    baseColor: Color = Color.Transparent,
+    blurRadius: Dp = 0.dp
 ) {
-    val direction = if (isTop) BlurDirection.TOP_TO_BOTTOM else BlurDirection.BOTTOM_TO_TOP
-
     Box(
         modifier = modifier
-            .progressiveBlur(
-                direction = direction,
-                maxBlurRadius = blurRadius,
-                tintColor = baseColor
-            )
     ) {
-        // Specular ambient frosted glass border highlight (0.0 to 1px feather)
+        // Specular ambient light edge (100% free of dark/black haze)
         val borderHighlight = if (isTop) {
             Brush.verticalGradient(
-                0.90f to Color.Transparent,
-                1.0f to Color.White.copy(alpha = 0.12f)
+                0.85f to Color.Transparent,
+                1.0f to Color.White.copy(alpha = 0.08f)
             )
         } else {
             Brush.verticalGradient(
-                0.0f to Color.White.copy(alpha = 0.12f),
-                0.10f to Color.Transparent
+                0.0f to Color.White.copy(alpha = 0.08f),
+                0.15f to Color.Transparent
             )
         }
         Box(
@@ -221,3 +206,4 @@ fun GradientBlurScrim(
         )
     }
 }
+

@@ -29,6 +29,7 @@ import coil.compose.AsyncImage
 import com.example.data.model.MeasureRecord
 import com.example.logic.ShareUtility
 import com.example.ui.components.AdaptiveNavigationRail
+import com.example.ui.components.EnableWindowBlur
 import com.example.ui.components.FloatingPillNavigationBar
 import com.example.ui.components.FloatingPillNavItem
 import com.example.ui.components.GradientBlurTopBar
@@ -36,6 +37,7 @@ import com.example.ui.components.ModernArCameraView
 import com.example.ui.components.RulerComponent
 import com.example.ui.components.SettingsSheet
 import com.example.ui.components.SupportingPaneHistory
+import com.example.ui.components.hardwareBackdropBlur
 import com.example.ui.viewmodel.MeasureViewModel
 import java.io.File
 import java.text.SimpleDateFormat
@@ -56,6 +58,17 @@ fun MainScreen(viewModel: MeasureViewModel) {
     var selectedRecordForDetail by remember { mutableStateOf<MeasureRecord?>(null) }
     val lastSavedRecord by viewModel.lastSavedRecord.collectAsState()
     val context = LocalContext.current
+
+    val isOverlayActive by remember {
+        derivedStateOf {
+            showHistorySheet || showSettingsDialog || selectedRecordForDetail != null
+        }
+    }
+    val hardwareBlurRadius by animateFloatAsState(
+        targetValue = if (isOverlayActive) 28f else 0f,
+        animationSpec = tween(240, easing = FastOutSlowInEasing),
+        label = "HardwareBackdropBlurAnim"
+    )
 
     val colorPrimary = MaterialTheme.colorScheme.primary
 
@@ -258,7 +271,12 @@ fun MainScreen(viewModel: MeasureViewModel) {
                                 )
                             },
                             contentKey = { it },
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .hardwareBackdropBlur(
+                                    enabled = isOverlayActive,
+                                    blurRadius = hardwareBlurRadius
+                                ),
                             label = "MainModeFadeTransition"
                         ) { mode ->
                             when (mode) {
@@ -392,6 +410,7 @@ fun MainScreen(viewModel: MeasureViewModel) {
                 onDismissRequest = { showHistorySheet = false },
                 containerColor = MaterialTheme.colorScheme.surface
             ) {
+                EnableWindowBlur(blurRadiusDp = 50)
                 HistorySheetContent(
                     records = savedRecords,
                     viewModel = viewModel,
@@ -790,6 +809,7 @@ fun RecordDetailDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.widthIn(max = 560.dp),
         title = {
+            EnableWindowBlur(blurRadiusDp = 50)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,

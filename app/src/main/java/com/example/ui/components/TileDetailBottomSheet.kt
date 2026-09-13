@@ -49,6 +49,7 @@ fun TileDetailBottomSheet(
         containerColor = MaterialTheme.colorScheme.surface,
         dragHandle = { BottomSheetDefaults.DragHandle() }
     ) {
+        EnableWindowBlur(blurRadiusDp = 45)
         Column(
             modifier = Modifier
                 .fillMaxWidth()

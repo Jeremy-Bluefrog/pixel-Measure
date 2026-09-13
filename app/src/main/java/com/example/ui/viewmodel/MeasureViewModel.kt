@@ -1101,14 +1101,31 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         if (_isDepthAvailable.value != data.isDepthAvailable) _isDepthAvailable.value = data.isDepthAvailable
         if (_detectedPlanes.value !== data.planes) {
             _detectedPlanes.value = data.planes
-            _arPlanesCount.value = data.planes.count { it.isTracking }
+            val activePlanes = data.planes.count { it.isTracking }
+            if (_arPlanesCount.value != activePlanes) {
+                _arPlanesCount.value = activePlanes
+            }
         }
         if (_surfaceTypeAtCenter.value != data.surfaceTypeAtCenter) _surfaceTypeAtCenter.value = data.surfaceTypeAtCenter
         _lightIntensity.value = data.lightIntensity
-        _trackingStability.value = data.stability
+        
+        // Filter tracking stability updates: prevent high-frequency StateFlow emissions on subtle float jitter
+        val oldStab = _trackingStability.value
+        val newStab = data.stability
+        if (oldStab.level != newStab.level ||
+            oldStab.isDriftRisk != newStab.isDriftRisk ||
+            oldStab.isFeatureDeficient != newStab.isFeatureDeficient ||
+            oldStab.isMotionExcessive != newStab.isMotionExcessive ||
+            oldStab.warningMessage != newStab.warningMessage ||
+            oldStab.trackingPlanesCount != newStab.trackingPlanesCount ||
+            kotlin.math.abs(oldStab.confidenceScore - newStab.confidenceScore) > 0.08f ||
+            kotlin.math.abs(oldStab.cameraSpeedMps - newStab.cameraSpeedMps) > 0.20f) {
+            _trackingStability.value = newStab
+        }
+        
         updateDetectedWalls(data)
 
-        // Update active anchor positions to eliminate world drift
+        // Update active anchor positions to eliminate world drift with threshold to prevent SnapshotStateList churning
         if (capturedPoints.isNotEmpty() && data.trackingState == TrackingState.TRACKING) {
             for (i in capturedPoints.indices) {
                 val pt = capturedPoints[i]
@@ -1124,7 +1141,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                         val dx = abs(newX - pt.x)
                         val dy = abs(newY - pt.y)
                         val dz = abs(newZ - pt.z)
-                        if (dx > 0.0001 || dy > 0.0001 || dz > 0.0001) {
+                        if (dx > 0.015 || dy > 0.015 || dz > 0.015) {
                             capturedPoints[i] = candidate
                         }
                     }

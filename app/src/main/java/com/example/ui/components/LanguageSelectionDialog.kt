@@ -56,6 +56,7 @@ fun LanguageSelectionDialog(
         onDismissRequest = onDismissRequest,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
+        EnableWindowBlur(blurRadiusDp = 50)
         Card(
             shape = RoundedCornerShape(24.dp),
             colors = CardDefaults.cardColors(
