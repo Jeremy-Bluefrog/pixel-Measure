@@ -61,7 +61,9 @@ import com.example.logic.ai.ObjectronEngine
 import com.example.logic.ai.SegmentedObject
 import com.example.logic.ar.ArMath
 import com.example.logic.ar.ArTrackingStability
+import com.example.logic.ar.CachedScreenPoint
 import com.example.logic.ar.ModernArGlView
+import com.example.logic.ar.SpatialGridCache
 import com.example.logic.ar.StabilityLevel
 import com.example.logic.camera.HighSpeedCamera2Manager
 import com.example.ui.components.TileDetailBottomSheet
@@ -316,6 +318,7 @@ fun ModernArCameraView(
     // Reusable Path caches to prevent per-frame GC allocations in Canvas
     val samCachedPath = remember { Path() }
     val wallCachedPath = remember { Path() }
+    val spatialGridCache = remember { SpatialGridCache() }
 
     val isMeasurementAvailable by remember { derivedStateOf { trackingState == com.google.ar.core.TrackingState.TRACKING && liveTargetPointState.value != null } }
 
@@ -516,17 +519,33 @@ fun ModernArCameraView(
                 val screenH = size.height.toInt()
                 val screenCenter = Offset(size.width / 2f, size.height / 2f)
 
-                // Calculate real-time projected reticle position from 3D live target point
-                val liveTarget = liveTargetPointState.value
-                val projectedReticle = if (liveTarget != null && viewMatrixState.value.size >= 16 && projectionMatrixState.value.size >= 16) {
-                    ArMath.projectWorldToScreen(liveTarget, viewMatrixState.value, projectionMatrixState.value, screenW, screenH)
-                } else null
+                // Update spatial grid cache frame metrics & camera speed
+                spatialGridCache.updateCameraFrame(
+                    viewMatrix = viewMatrixState.value,
+                    projMatrix = projectionMatrixState.value,
+                    screenWidth = screenW,
+                    screenHeight = screenH,
+                    cameraSpeedMps = trackingStability.cameraSpeedMps
+                )
 
-                val currentReticlePos = if (projectedReticle != null &&
-                    projectedReticle.first in (-120f)..(size.width + 120f) &&
-                    projectedReticle.second in (-120f)..(size.height + 120f)
+                // Calculate real-time projected reticle position from 3D live target point using cache
+                val liveTarget = liveTargetPointState.value
+                val hasLiveTarget = if (liveTarget != null && viewMatrixState.value.size >= 16 && projectionMatrixState.value.size >= 16) {
+                    spatialGridCache.projectPoint(
+                        worldPoint = liveTarget,
+                        viewMatrix = viewMatrixState.value,
+                        projMatrix = projectionMatrixState.value,
+                        screenWidth = screenW,
+                        screenHeight = screenH,
+                        outPoint = spatialGridCache.liveTargetScreenPoint
+                    )
+                } else false
+
+                val currentReticlePos = if (hasLiveTarget && spatialGridCache.liveTargetScreenPoint.isValid &&
+                    spatialGridCache.liveTargetScreenPoint.x in (-120f)..(size.width + 120f) &&
+                    spatialGridCache.liveTargetScreenPoint.y in (-120f)..(size.height + 120f)
                 ) {
-                    Offset(projectedReticle.first, projectedReticle.second)
+                    spatialGridCache.liveTargetScreenPoint.toOffset()
                 } else {
                     screenCenter
                 }
@@ -542,10 +561,14 @@ fun ModernArCameraView(
                     )
                 }
 
-                // Project 3D points to 2D screen positions
-                val projectedPoints = capturedPoints.map { pt ->
-                    ArMath.projectWorldToScreen(pt, viewMatrixState.value, projectionMatrixState.value, screenW, screenH)
-                }
+                // Project 3D points to 2D screen positions via Zero-Allocation Spatial Grid Cache
+                val projectedPoints = spatialGridCache.batchProjectPoints(
+                    points = capturedPoints,
+                    viewMatrix = viewMatrixState.value,
+                    projMatrix = projectionMatrixState.value,
+                    screenWidth = screenW,
+                    screenHeight = screenH
+                )
 
                 // 2B. Draw confirmed connecting 3D virtual lines
                 // 兩點成一線，不要有共用的點：每兩點獨立成一線段 (step = 2)
@@ -555,9 +578,9 @@ fun ModernArCameraView(
                     for (i in 0 until projectedPoints.size - 1 step stepVal) {
                         val p1 = projectedPoints[i]
                         val p2 = projectedPoints[i + 1]
-                        if (p1 != null && p2 != null) {
-                            val startOffset = Offset(p1.first, p1.second)
-                            val endOffset = Offset(p2.first, p2.second)
+                        if (p1.isValid && p2.isValid) {
+                            val startOffset = p1.toOffset()
+                            val endOffset = p2.toOffset()
                             val dx = endOffset.x - startOffset.x
                             val dy = endOffset.y - startOffset.y
                             val segLen = sqrt(dx * dx + dy * dy)
@@ -613,8 +636,8 @@ fun ModernArCameraView(
                                     cap = StrokeCap.Round
                                 )
 
-                                // Holographic ruler scale hash marks along the segment
-                                val step = 28f
+                                // Holographic ruler scale hash marks along the segment (adaptive LOD during motion)
+                                val step = if (spatialGridCache.isFastMotion) 56f else 28f
                                 var d = step
                                 while (d < segLen - step) {
                                     val px = startOffset.x + (dx / segLen) * d
@@ -671,11 +694,11 @@ fun ModernArCameraView(
                     if (isArea && projectedPoints.size >= 3) {
                         val first = projectedPoints.first()
                         val last = projectedPoints.last()
-                        if (first != null && last != null) {
+                        if (first.isValid && last.isValid) {
                             drawLine(
                                 color = colorPrimary.copy(alpha = 0.85f),
-                                start = Offset(last.first, last.second),
-                                end = Offset(first.first, first.second),
+                                start = last.toOffset(),
+                                end = first.toOffset(),
                                 strokeWidth = 3.dp.toPx(),
                                 pathEffect = PathEffect.dashPathEffect(floatArrayOf(15f, 10f), dashPhase.value)
                             )
@@ -687,9 +710,9 @@ fun ModernArCameraView(
                 // 兩點成一線：僅在奇數個點（正在延伸該線段的終點）時繪製動態虛線
                 val isActivelyDrawingLine = projectedPoints.size % 2 == 1
                 if (isActivelyDrawingLine && projectedPoints.isNotEmpty()) {
-                    val lastPt = projectedPoints.last()
-                    if (lastPt != null) {
-                        val startOffset = Offset(lastPt.first, lastPt.second)
+                    val lastPt = projectedPoints.lastOrNull()
+                    if (lastPt != null && lastPt.isValid) {
+                        val startOffset = lastPt.toOffset()
                         val dx = currentReticlePos.x - startOffset.x
                         val dy = currentReticlePos.y - startOffset.y
                         val liveLen = sqrt(dx * dx + dy * dy)
@@ -804,69 +827,75 @@ fun ModernArCameraView(
                 // 2D. Draw MediaPipe Objectron 3D Bounding Box Wireframe & Oriented Cube
                 if (isObjectronMode && objectron3DBox != null) {
                     val box = objectron3DBox!!
-                    val boxScreenCorners = box.corners.map { cornerPt ->
-                        ArMath.projectWorldToScreen(cornerPt, viewMatrixState.value, projectionMatrixState.value, screenW, screenH)
-                    }
+                    val boxMesh = spatialGridCache.projectBox(
+                        corners = box.corners,
+                        center = box.center,
+                        viewMatrix = viewMatrixState.value,
+                        projMatrix = projectionMatrixState.value,
+                        screenWidth = screenW,
+                        screenHeight = screenH
+                    )
 
                     val boxCyan = colorPrimary
                     val boxAmber = colorTertiary
 
                     // Draw 12 Wireframe Edges
-                    ObjectronEngine.WIREFRAME_EDGES.forEach { (i1, i2) ->
-                        val p1 = boxScreenCorners.getOrNull(i1)
-                        val p2 = boxScreenCorners.getOrNull(i2)
-                        if (p1 != null && p2 != null) {
-                            // Bottom face (0,1,2,3) in cyan, Top face (4,5,6,7) in amber, vertical pillars in white/cyan
-                            val edgeColor = when {
-                                i1 < 4 && i2 < 4 -> boxCyan
-                                i1 >= 4 && i2 >= 4 -> boxAmber
-                                else -> Color.White.copy(alpha = 0.85f)
+                    if (boxMesh.isVisible) {
+                        ObjectronEngine.WIREFRAME_EDGES.forEach { (i1, i2) ->
+                            val p1 = boxMesh.corners.getOrNull(i1)
+                            val p2 = boxMesh.corners.getOrNull(i2)
+                            if (p1 != null && p2 != null && p1.isValid && p2.isValid) {
+                                // Bottom face (0,1,2,3) in cyan, Top face (4,5,6,7) in amber, vertical pillars in white/cyan
+                                val edgeColor = when {
+                                    i1 < 4 && i2 < 4 -> boxCyan
+                                    i1 >= 4 && i2 >= 4 -> boxAmber
+                                    else -> Color.White.copy(alpha = 0.85f)
+                                }
+                                drawLine(
+                                    color = edgeColor,
+                                    start = p1.toOffset(),
+                                    end = p2.toOffset(),
+                                    strokeWidth = 2.5.dp.toPx(),
+                                    cap = StrokeCap.Round
+                                )
                             }
-                            drawLine(
-                                color = edgeColor,
-                                start = Offset(p1.first, p1.second),
-                                end = Offset(p2.first, p2.second),
-                                strokeWidth = 2.5.dp.toPx(),
-                                cap = StrokeCap.Round
+                        }
+
+                        // Draw 8 Vertex Keypoints
+                        boxMesh.corners.forEachIndexed { vIdx, proj ->
+                            if (proj.isValid) {
+                                val vOffset = proj.toOffset()
+                                val isTopVertex = vIdx >= 4
+                                val vColor = if (isTopVertex) boxAmber else boxCyan
+
+                                drawCircle(
+                                    color = Color.Black.copy(alpha = 0.5f),
+                                    center = Offset(vOffset.x, vOffset.y + 1.5f),
+                                    radius = 5.dp.toPx()
+                                )
+                                drawCircle(
+                                    color = Color.White,
+                                    center = vOffset,
+                                    radius = 4.5.dp.toPx()
+                                )
+                                drawCircle(
+                                    color = vColor,
+                                    center = vOffset,
+                                    radius = 3.dp.toPx()
+                                )
+                            }
+                        }
+
+                        // Draw Center Ground Projection Reticle
+                        if (boxMesh.centerPoint.isValid) {
+                            val cOffset = boxMesh.centerPoint.toOffset()
+                            drawCircle(
+                                color = boxCyan.copy(alpha = 0.35f * reticlePulseScale.value),
+                                center = cOffset,
+                                radius = (16.dp * reticlePulseScale.value).toPx(),
+                                style = Stroke(width = 1.5.dp.toPx())
                             )
                         }
-                    }
-
-                    // Draw 8 Vertex Keypoints
-                    boxScreenCorners.forEachIndexed { vIdx, proj ->
-                        if (proj != null) {
-                            val vOffset = Offset(proj.first, proj.second)
-                            val isTopVertex = vIdx >= 4
-                            val vColor = if (isTopVertex) boxAmber else boxCyan
-
-                            drawCircle(
-                                color = Color.Black.copy(alpha = 0.5f),
-                                center = Offset(vOffset.x, vOffset.y + 1.5f),
-                                radius = 5.dp.toPx()
-                            )
-                            drawCircle(
-                                color = Color.White,
-                                center = vOffset,
-                                radius = 4.5.dp.toPx()
-                            )
-                            drawCircle(
-                                color = vColor,
-                                center = vOffset,
-                                radius = 3.dp.toPx()
-                            )
-                        }
-                    }
-
-                    // Draw Center Ground Projection Reticle
-                    val centerProj = ArMath.projectWorldToScreen(box.center, viewMatrixState.value, projectionMatrixState.value, screenW, screenH)
-                    if (centerProj != null) {
-                        val cOffset = Offset(centerProj.first, centerProj.second)
-                        drawCircle(
-                            color = boxCyan.copy(alpha = 0.35f * reticlePulseScale.value),
-                            center = cOffset,
-                            radius = (16.dp * reticlePulseScale.value).toPx(),
-                            style = Stroke(width = 1.5.dp.toPx())
-                        )
                     }
                 }
 
@@ -1003,33 +1032,30 @@ fun ModernArCameraView(
                 // 2D-4. Draw Simultaneous Wall Measurement Overlay (即時牆面測量與 3D 投影網格)
                 if (isSimultaneousWallMeasureActive && detectedWalls.isNotEmpty()) {
                     detectedWalls.forEach { wall ->
-                        val screenCorners = wall.corners3D.map { cornerPt ->
-                            ArMath.projectWorldToScreen(cornerPt, viewMatrixState.value, projectionMatrixState.value, screenW, screenH)
-                        }
-                        val pBL = screenCorners.getOrNull(0)
-                        val pBR = screenCorners.getOrNull(1)
-                        val pTR = screenCorners.getOrNull(2)
-                        val pTL = screenCorners.getOrNull(3)
+                        val wallMesh = spatialGridCache.getOrUpdateWallMesh(
+                            wallId = wall.id,
+                            corners3D = wall.corners3D,
+                            viewMatrix = viewMatrixState.value,
+                            projMatrix = projectionMatrixState.value,
+                            screenWidth = screenW,
+                            screenHeight = screenH
+                        )
 
-                        if (pBL != null && pBR != null && pTR != null && pTL != null) {
-                            val wallPath = wallCachedPath.apply {
-                                reset()
-                                moveTo(pBL.first, pBL.second)
-                                lineTo(pBR.first, pBR.second)
-                                lineTo(pTR.first, pTR.second)
-                                lineTo(pTL.first, pTL.second)
-                                close()
-                            }
+                        if (wallMesh != null && wallMesh.isVisible) {
+                            val pBL = wallMesh.corners[0]
+                            val pBR = wallMesh.corners[1]
+                            val pTR = wallMesh.corners[2]
+                            val pTL = wallMesh.corners[3]
 
                             // 1. Semi-transparent holographic wall mesh fill
                             drawPath(
-                                path = wallPath,
+                                path = wallMesh.fillPath,
                                 color = Color(0x2200E5FF)
                             )
 
                             // 2. Futuristic boundary outline with animated dash
                             drawPath(
-                                path = wallPath,
+                                path = wallMesh.fillPath,
                                 color = Color(0xFF00E5FF).copy(alpha = 0.85f),
                                 style = Stroke(
                                     width = 2.5.dp.toPx(),
@@ -1038,44 +1064,46 @@ fun ModernArCameraView(
                             )
 
                             // 3. Holographic grid lines inside wall surface
-                            for (fraction in listOf(0.33f, 0.66f)) {
-                                // Horizontal lines across the wall
-                                val hStart = Offset(
-                                    pBL.first + (pTL.first - pBL.first) * fraction,
-                                    pBL.second + (pTL.second - pBL.second) * fraction
-                                )
-                                val hEnd = Offset(
-                                    pBR.first + (pTR.first - pBR.first) * fraction,
-                                    pBR.second + (pTR.second - pBR.second) * fraction
-                                )
-                                drawLine(
-                                    color = Color(0xFF00E5FF).copy(alpha = 0.3f),
-                                    start = hStart,
-                                    end = hEnd,
-                                    strokeWidth = 1.2.dp.toPx()
-                                )
+                            if (pBL.isValid && pBR.isValid && pTR.isValid && pTL.isValid) {
+                                for (fraction in listOf(0.33f, 0.66f)) {
+                                    // Horizontal lines across the wall
+                                    val hStart = Offset(
+                                        pBL.x + (pTL.x - pBL.x) * fraction,
+                                        pBL.y + (pTL.y - pBL.y) * fraction
+                                    )
+                                    val hEnd = Offset(
+                                        pBR.x + (pTR.x - pBR.x) * fraction,
+                                        pBR.y + (pTR.y - pBR.y) * fraction
+                                    )
+                                    drawLine(
+                                        color = Color(0xFF00E5FF).copy(alpha = 0.3f),
+                                        start = hStart,
+                                        end = hEnd,
+                                        strokeWidth = 1.2.dp.toPx()
+                                    )
 
-                                // Vertical lines across the wall
-                                val vStart = Offset(
-                                    pBL.first + (pBR.first - pBL.first) * fraction,
-                                    pBL.second + (pBR.second - pBL.second) * fraction
-                                )
-                                val vEnd = Offset(
-                                    pTL.first + (pTR.first - pTL.first) * fraction,
-                                    pTL.second + (pTR.second - pTL.second) * fraction
-                                )
-                                drawLine(
-                                    color = Color(0xFF00E5FF).copy(alpha = 0.3f),
-                                    start = vStart,
-                                    end = vEnd,
-                                    strokeWidth = 1.2.dp.toPx()
-                                )
+                                    // Vertical lines across the wall
+                                    val vStart = Offset(
+                                        pBL.x + (pBR.x - pBL.x) * fraction,
+                                        pBL.y + (pBR.y - pBR.y) * fraction
+                                    )
+                                    val vEnd = Offset(
+                                        pTL.x + (pTR.x - pTL.x) * fraction,
+                                        pTL.y + (pTR.y - pTL.y) * fraction
+                                    )
+                                    drawLine(
+                                        color = Color(0xFF00E5FF).copy(alpha = 0.3f),
+                                        start = vStart,
+                                        end = vEnd,
+                                        strokeWidth = 1.2.dp.toPx()
+                                    )
+                                }
                             }
 
                             // 4. Corner bracket anchors (4 corners)
-                            screenCorners.forEach { cornerProj ->
-                                if (cornerProj != null) {
-                                    val cOffset = Offset(cornerProj.first, cornerProj.second)
+                            wallMesh.corners.forEach { cornerProj ->
+                                if (cornerProj.isValid) {
+                                    val cOffset = cornerProj.toOffset()
                                     drawCircle(
                                         color = Color.Black.copy(alpha = 0.5f),
                                         center = Offset(cOffset.x, cOffset.y + 1f),
@@ -1099,8 +1127,8 @@ fun ModernArCameraView(
 
                 // 2E. Draw start and confirmed anchor pin node markers (3D Spatial Anchors)
                 projectedPoints.forEachIndexed { index, proj ->
-                    if (proj != null) {
-                        val offset = Offset(proj.first, proj.second)
+                    if (proj.isValid) {
+                        val offset = proj.toOffset()
                         val isStartNode = index == 0
                         val isLastNode = index == projectedPoints.size - 1 && projectedPoints.size > 1
 
@@ -1580,27 +1608,25 @@ fun ModernArCameraView(
                 }
             }
 
-            // 5. Clean Minimal Top Bar with Gradient Blur (Clear / Status indicator, Torch, History, Settings)
+            // 5. Clean Minimal Top Bar with Translucent Glass Scrim & Status Bar Protection
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .align(Alignment.TopCenter)
             ) {
-                // Top Progressive Variable Blur Scrim (漸進式毛玻璃模糊取代黑漸層)
+                // Top Frosted Dark Glass Scrim (晶透暗色玻璃遮罩，確保狀態列與圖示清晰可讀)
                 GradientBlurScrim(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(130.dp),
-                    isTop = true,
-                    baseColor = Color.White.copy(alpha = 0.05f),
-                    blurRadius = 32.dp
+                        .height(140.dp),
+                    isTop = true
                 )
 
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .statusBarsPadding()
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -1625,11 +1651,18 @@ fun ModernArCameraView(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         if (isMeasuring) {
-                            // "測量中" active indicator badge
+                            // "測量中" active indicator badge with one-tap clear / reset
                             Surface(
-                                color = colorPrimary.copy(alpha = 0.9f),
+                                color = colorPrimary.copy(alpha = 0.92f),
                                 shape = RoundedCornerShape(20.dp),
-                                modifier = Modifier.shadow(4.dp, RoundedCornerShape(20.dp))
+                                border = BorderStroke(1.dp, colorPrimary.copy(alpha = 0.8f)),
+                                modifier = Modifier
+                                    .shadow(4.dp, RoundedCornerShape(20.dp))
+                                    .clickable {
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                        viewModel.clearActivePoints()
+                                    }
+                                    .testTag("clear_measurement_chip")
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
@@ -1637,15 +1670,21 @@ fun ModernArCameraView(
                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
                                     CircularProgressIndicator(
-                                        modifier = Modifier.size(10.dp),
+                                        modifier = Modifier.size(11.dp),
                                         strokeWidth = 2.dp,
                                         color = colorOnPrimary
                                     )
                                     Text(
-                                        text = "測量中...",
+                                        text = "測量中 (輕觸清除)",
                                         style = MaterialTheme.typography.labelMedium,
                                         fontWeight = FontWeight.Bold,
                                         color = colorOnPrimary
+                                    )
+                                    Icon(
+                                        Icons.Rounded.Close,
+                                        contentDescription = "清除測量",
+                                        tint = colorOnPrimary,
+                                        modifier = Modifier.size(15.dp)
                                     )
                                 }
                             }
@@ -2181,6 +2220,62 @@ fun ModernArCameraView(
                 }
             }
 
+            // 5B. Off-Screen Anchor Orientation Pointer: Guides the user back if the anchor point moves out of camera view
+            if (hasCapturedPoints && isWaitingForSecondPoint) {
+                val screenW = localView.width.takeIf { it > 0 } ?: 1080
+                val screenH = localView.height.takeIf { it > 0 } ?: 1920
+                val lastAnchor = capturedPoints.lastOrNull()
+                val lastProj = if (lastAnchor != null) {
+                    ArMath.projectWorldToScreen(
+                        lastAnchor,
+                        viewMatrixState.value,
+                        projectionMatrixState.value,
+                        screenW,
+                        screenH
+                    )
+                } else null
+
+                val isOffScreen = lastProj == null ||
+                        lastProj.first < 20f || lastProj.first > (screenW - 20f) ||
+                        lastProj.second < 60f || lastProj.second > (screenH - 120f)
+
+                if (isOffScreen) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 110.dp)
+                            .align(Alignment.TopCenter),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Surface(
+                            color = Color(0xEE1E293B),
+                            shape = RoundedCornerShape(20.dp),
+                            border = BorderStroke(1.dp, colorPrimary.copy(alpha = 0.7f)),
+                            modifier = Modifier.shadow(6.dp, RoundedCornerShape(20.dp))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    Icons.Rounded.Explore,
+                                    contentDescription = null,
+                                    tint = colorPrimary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = "起點已在畫面外，請將相機移向起點 (或點擊上方 ✕ 清除)",
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             // 6. Bottom Dynamic Control Deck (+ / ✓ Button & Camera Shutter)
             var isShutterFlash by remember { mutableStateOf(false) }
 
@@ -2193,24 +2288,74 @@ fun ModernArCameraView(
                 )
             }
 
-            // Bottom Progressive Variable Blur Scrim for camera control deck (漸進式毛玻璃模糊取代黑漸層)
+            // Bottom Frosted Dark Glass Scrim for camera control deck
             GradientBlurScrim(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(170.dp)
+                    .height(200.dp)
                     .align(Alignment.BottomCenter),
-                isTop = false,
-                baseColor = Color.White.copy(alpha = 0.05f),
-                blurRadius = 32.dp
+                isTop = false
             )
 
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = bottomPadding + 64.dp)
+                    .padding(bottom = bottomPadding + 14.dp)
                     .padding(horizontal = 20.dp, vertical = 6.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                // Dynamic Live Measurement Guidance & Status Pill
+                if (!isMobileSamMode && !isObjectronMode && (!isSimultaneousWallMeasureActive || detectedWalls.isEmpty())) {
+                    if (isWaitingForSecondPoint) {
+                        Surface(
+                            color = Color(0xDD002B36),
+                            shape = RoundedCornerShape(20.dp),
+                            border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.7f)),
+                            modifier = Modifier
+                                .shadow(6.dp, RoundedCornerShape(20.dp))
+                                .padding(bottom = 12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(Icons.Rounded.Straighten, null, tint = Color(0xFF00E5FF), modifier = Modifier.size(16.dp))
+                                val liveDistText = liveDistanceMetersState.value?.let { viewModel.formatLength(it, selectedUnit) } ?: "量測中..."
+                                Text(
+                                    text = "即時長度: $liveDistText • 輕觸 ✓ 釘選終點",
+                                    color = Color(0xFF00E5FF),
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    } else if (!hasCapturedPoints) {
+                        Surface(
+                            color = Color(0x990F172A),
+                            shape = RoundedCornerShape(20.dp),
+                            border = BorderStroke(0.8.dp, Color.White.copy(alpha = 0.20f)),
+                            modifier = Modifier
+                                .shadow(4.dp, RoundedCornerShape(20.dp))
+                                .padding(bottom = 12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(Icons.Rounded.CenterFocusWeak, null, tint = colorPrimary, modifier = Modifier.size(15.dp))
+                                Text(
+                                    text = "對準表面，輕觸 ＋ 釘選測量起點",
+                                    color = Color.White.copy(alpha = 0.92f),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // AI Specialized Guidance Pill (MobileSAM & Objectron & Wall if active)
                 if (isMobileSamMode || isObjectronMode || (isSimultaneousWallMeasureActive && detectedWalls.isNotEmpty())) {
                     Surface(

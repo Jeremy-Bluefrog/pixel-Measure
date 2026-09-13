@@ -13,7 +13,6 @@ import com.example.ui.viewmodel.MeasureViewModel
 import java.util.function.Consumer
 
 class MainActivity : ComponentActivity() {
-    private var crossWindowBlurListener: Consumer<Boolean>? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -29,27 +28,6 @@ class MainActivity : ComponentActivity() {
             window.attributes = params
         }
 
-        // Hardware-Accelerated Window Blur (Android 12 / API 31+ up to Android 17+)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            try {
-                window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
-                window.attributes = window.attributes.apply {
-                    blurBehindRadius = 40
-                }
-                val listener = Consumer<Boolean> { isBlurEnabled ->
-                    if (isBlurEnabled) {
-                        window.attributes = window.attributes.apply {
-                            blurBehindRadius = 40
-                        }
-                    }
-                }
-                crossWindowBlurListener = listener
-                windowManager.addCrossWindowBlurEnabledListener(listener)
-            } catch (e: Throwable) {
-                android.util.Log.w("MainActivity", "Window blur initialization error: ${e.message}")
-            }
-        }
-        
         // Initialize the measuring tool viewmodel
         viewModel = ViewModelProvider(this)[MeasureViewModel::class.java]
         
@@ -86,12 +64,5 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && crossWindowBlurListener != null) {
-            try {
-                windowManager.removeCrossWindowBlurEnabledListener(crossWindowBlurListener!!)
-            } catch (e: Throwable) {
-                // Ignore if already unregistered
-            }
-        }
     }
 }

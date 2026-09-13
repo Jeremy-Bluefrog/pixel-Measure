@@ -174,35 +174,51 @@ fun GradientBlurBottomBar(
 }
 
 /**
- * Pure optical specular scrim: keeps the camera view 100% crisp and crystal clear
- * while framing the UI with an ultra-subtle light rim, completely removing muddy black gradients.
+ * Elegant Frosted Glass Camera Scrim:
+ * Provides a clean, modern translucent HUD backdrop (deep slate glass gradient)
+ * that ensures 100% legibility for the status bar, buttons, and badges over any camera scene,
+ * with an ultra-subtle specular light edge to eliminate muddy black bands.
  */
 @Composable
 fun GradientBlurScrim(
     modifier: Modifier = Modifier,
     isTop: Boolean,
-    baseColor: Color = Color.Transparent,
-    blurRadius: Dp = 0.dp
+    baseColor: Color = Color(0xFF0F172A),
+    blurRadius: Dp = 16.dp
 ) {
+    val gradientBrush = if (isTop) {
+        Brush.verticalGradient(
+            0.0f to Color(0xCC0A0F1D), // 80% deep translucent slate glass
+            0.55f to Color(0x660A0F1D), // 40%
+            1.0f to Color.Transparent
+        )
+    } else {
+        Brush.verticalGradient(
+            0.0f to Color.Transparent,
+            0.40f to Color(0x660A0F1D),
+            1.0f to Color(0xDD0A0F1D)  // 86%
+        )
+    }
+
+    val rimHighlight = if (isTop) {
+        Brush.verticalGradient(
+            0.90f to Color.Transparent,
+            1.0f to Color.White.copy(alpha = 0.12f)
+        )
+    } else {
+        Brush.verticalGradient(
+            0.0f to Color.White.copy(alpha = 0.12f),
+            0.10f to Color.Transparent
+        )
+    }
+
     Box(
-        modifier = modifier
+        modifier = modifier.background(gradientBrush)
     ) {
-        // Specular ambient light edge (100% free of dark/black haze)
-        val borderHighlight = if (isTop) {
-            Brush.verticalGradient(
-                0.85f to Color.Transparent,
-                1.0f to Color.White.copy(alpha = 0.08f)
-            )
-        } else {
-            Brush.verticalGradient(
-                0.0f to Color.White.copy(alpha = 0.08f),
-                0.15f to Color.Transparent
-            )
-        }
         Box(
             modifier = Modifier
                 .matchParentSize()
-                .background(borderHighlight)
+                .background(rimHighlight)
         )
     }
 }
