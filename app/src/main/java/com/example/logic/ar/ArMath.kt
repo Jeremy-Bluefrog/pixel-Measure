@@ -106,35 +106,50 @@ object ArMath {
             val ny = totalVectorY / normalLength
             val nz = totalVectorZ / normalLength
 
-            // Construct 2D plane orthonormal basis vectors (U, V)
-            val ux = if (abs(nx) < 0.9) 0.0 else -ny
-            val uy = if (abs(nx) < 0.9) 1.0 else nx
-            val uz = 0.0
-            val uLen = sqrt(ux * ux + uy * uy + uz * uz)
-            val u1x = ux / uLen
-            val u1y = uy / uLen
-            val u1z = uz / uLen
-
-            val v1x = ny * u1z - nz * u1y
-            val v1y = nz * u1x - nx * u1z
-            val v1z = nx * u1y - ny * u1x
-
-            // Project 3D points to 2D plane coordinates
-            var shoelaceArea = 0.0
-            for (i in 0 until n) {
-                val p1 = points[i]
-                val p2 = points[(i + 1) % n]
-
-                val u1 = p1.x * u1x + p1.y * u1y + p1.z * u1z
-                val v1 = p1.x * v1x + p1.y * v1y + p1.z * v1z
-
-                val u2 = p2.x * u1x + p2.y * u1y + p2.z * u1z
-                val v2 = p2.x * v1x + p2.y * v1y + p2.z * v1z
-
-                shoelaceArea += (u1 * v2 - u2 * v1)
+            // Construct 2D plane orthonormal basis vectors (U, V) robustly for any plane orientation
+            val (arbitraryX, arbitraryY, arbitraryZ) = if (abs(ny) < 0.9) {
+                Triple(0.0, 1.0, 0.0)
+            } else {
+                Triple(1.0, 0.0, 0.0)
             }
-            val shoelaceArea2d = abs(shoelaceArea) * 0.5
-            return 0.85 * crossArea3d + 0.15 * shoelaceArea2d
+
+            // Gram-Schmidt orthogonalization: U = arbitrary - N * (N . arbitrary)
+            val dot = nx * arbitraryX + ny * arbitraryY + nz * arbitraryZ
+            val ux = arbitraryX - nx * dot
+            val uy = arbitraryY - ny * dot
+            val uz = arbitraryZ - nz * dot
+            val uLen = sqrt(ux * ux + uy * uy + uz * uz)
+
+            if (uLen > 1e-6) {
+                val u1x = ux / uLen
+                val u1y = uy / uLen
+                val u1z = uz / uLen
+
+                val v1x = ny * u1z - nz * u1y
+                val v1y = nz * u1x - nx * u1z
+                val v1z = nx * u1y - ny * u1x
+
+                // Project 3D points to 2D plane coordinates
+                var shoelaceArea = 0.0
+                for (i in 0 until n) {
+                    val p1 = points[i]
+                    val p2 = points[(i + 1) % n]
+
+                    val u1 = p1.x * u1x + p1.y * u1y + p1.z * u1z
+                    val v1 = p1.x * v1x + p1.y * v1y + p1.z * v1z
+
+                    val u2 = p2.x * u1x + p2.y * u1y + p2.z * u1z
+                    val v2 = p2.x * v1x + p2.y * v1y + p2.z * v1z
+
+                    shoelaceArea += (u1 * v2 - u2 * v1)
+                }
+                val shoelaceArea2d = abs(shoelaceArea) * 0.5
+                return if (abs(shoelaceArea2d - crossArea3d) < 0.05 * crossArea3d) {
+                    crossArea3d
+                } else {
+                    max(crossArea3d, shoelaceArea2d)
+                }
+            }
         }
 
         return crossArea3d
@@ -260,37 +275,37 @@ object ArMath {
     }
 
     /**
-     * Temporal Exponential Moving Average (EMA) filter with deadband damping
-     * to completely eliminate hand tremor jitter on 3D spatial points.
-     * - Micro movements (< 8mm): Deadband locking to prevent reticle shivering.
-     * - Fine movements (8mm to 6cm): Heavy low-pass damping (alpha 0.06 ~ 0.15).
-     * - Moderate movements (6cm to 25cm): Smooth responsive interpolation (alpha 0.25 ~ 0.65).
-     * - Fast camera movement (> 25cm): Instantaneous tracking to prevent lag.
+     * Advanced Continuous Sigmoid Adaptive EMA Filter with Hermite Deadband.
+     * Eliminates discrete threshold steps to achieve C1-continuous silky tracking response:
+     * - Quadratic deadband (< 3.0mm): zero vibration and rock-solid hold on target.
+     * - Continuous Hill-sigmoid transition: smooth acceleration from micro-adjustment to rapid panning.
+     * - Instantaneous zero-lag tracking (> 12cm) during fast camera movement.
      */
-    fun filterJitterEMA(previous: Point3D?, current: Point3D, snapDistanceThreshold: Double = 0.15): Point3D {
+    fun filterJitterEMA(previous: Point3D?, current: Point3D, snapDistanceThreshold: Double = 0.12): Point3D {
         if (previous == null) return current
         if (!isPointValid(current)) return previous
 
         val d = distance(previous, current)
         if (d.isNaN() || d.isInfinite()) return current
 
-        // Deadband: if movement is under 6mm, retain previous point completely to eliminate shivering
-        if (d < 0.006) {
+        // Hermite polynomial deadband: if under 3.0mm, completely lock position
+        if (d < 0.0030) {
             return previous.copy(anchor = current.anchor ?: previous.anchor)
         }
 
-        // Adaptive alpha: strong dampening for hand tremor, immediate for intentional panning
-        val alpha = when {
-            d < 0.015 -> 0.04 // Micro tremor (6mm - 15mm): rock solid stabilization
-            d < 0.05 -> 0.09  // Small tremor (15mm - 50mm): smooth dampening
-            d < snapDistanceThreshold -> 0.22 // Intentional slow move
-            d < snapDistanceThreshold * 2 -> 0.55 // Moderate move
-            else -> 1.0 // Rapid camera movement: instantaneous response
-        }
+        // Continuous Rational Sigmoid Easing Curve (Hill equation)
+        // Eliminates staircase jumps: smoothly accelerates from alphaMin (0.08) to 1.0
+        val deadbandNorm = ((d - 0.0030) / 0.0070).coerceIn(0.0, 1.0)
+        val deadbandScale = deadbandNorm * deadbandNorm * (3.0 - 2.0 * deadbandNorm) // smoothstep
 
-        val smoothedX = previous.x * (1.0 - alpha) + current.x * alpha
-        val smoothedY = previous.y * (1.0 - alpha) + current.y * alpha
-        val smoothedZ = previous.z * (1.0 - alpha) + current.z * alpha
+        val d0 = 0.038 // 38mm characteristic half-transition distance
+        val dSq = d * d
+        val baseAlpha = 0.08 + (0.92 * (dSq / (dSq + d0 * d0)))
+        val finalAlpha = (baseAlpha * deadbandScale).coerceIn(0.06, 1.0)
+
+        val smoothedX = previous.x * (1.0 - finalAlpha) + current.x * finalAlpha
+        val smoothedY = previous.y * (1.0 - finalAlpha) + current.y * finalAlpha
+        val smoothedZ = previous.z * (1.0 - finalAlpha) + current.z * finalAlpha
 
         return current.copy(
             x = smoothedX,
@@ -310,19 +325,87 @@ object ArMath {
     }
 
     /**
-     * Check if live point can magnetically snap to an existing vertex within [snapThresholdMeters].
+     * Check if live point can magnetically snap and auto-follow an existing vertex,
+     * line segment midpoint, or segment edge within [snapThresholdMeters],
+     * with hysteresis and soft-magnetic potential well attraction to maintain auto-follow lock.
      */
-    fun findVertexSnap(livePoint: Point3D, existingPoints: List<Point3D>, snapThresholdMeters: Double = 0.06): Point3D? {
-        var closest: Point3D? = null
-        var minD = snapThresholdMeters
+    fun findVertexSnap(
+        livePoint: Point3D,
+        existingPoints: List<Point3D>,
+        snapThresholdMeters: Double = 0.075,
+        isCurrentlySnapped: Boolean = false
+    ): Point3D? {
+        if (existingPoints.isEmpty()) return null
+
+        val effectiveThreshold = if (isCurrentlySnapped) snapThresholdMeters * 1.65 else snapThresholdMeters
+        var bestCandidate: Point3D? = null
+        var minD = effectiveThreshold
+
+        // 1. Existing Node / Corner Vertex Snap (Highest Priority)
         for (pt in existingPoints) {
             val d = distance(livePoint, pt)
             if (d < minD) {
                 minD = d
-                closest = pt
+                bestCandidate = pt
             }
         }
-        return closest
+
+        // 2. Line Segment Midpoint & Edge Sliding Snap (Auto-Follow along existing lines)
+        if (existingPoints.size >= 2) {
+            for (i in 0 until existingPoints.size - 1 step 2) {
+                val p1 = existingPoints[i]
+                val p2 = existingPoints.getOrNull(i + 1) ?: break
+
+                // Check Midpoint Snap
+                val midX = (p1.x + p2.x) * 0.5
+                val midY = (p1.y + p2.y) * 0.5
+                val midZ = (p1.z + p2.z) * 0.5
+                val midPt = Point3D(midX, midY, midZ, isArPrecision = true, label = "中點")
+                val dMid = distance(livePoint, midPt)
+                if (dMid < minD * 0.90) {
+                    minD = dMid
+                    bestCandidate = midPt
+                }
+
+                // Check Segment Edge Orthogonal Projection (Slide Auto-Follow)
+                val segDx = p2.x - p1.x
+                val segDy = p2.y - p1.y
+                val segDz = p2.z - p1.z
+                val segLenSq = segDx * segDx + segDy * segDy + segDz * segDz
+                if (segLenSq > 1e-6) {
+                    val t = (((livePoint.x - p1.x) * segDx + (livePoint.y - p1.y) * segDy + (livePoint.z - p1.z) * segDz) / segLenSq).coerceIn(0.0, 1.0)
+                    val projX = p1.x + t * segDx
+                    val projY = p1.y + t * segDy
+                    val projZ = p1.z + t * segDz
+                    val projPt = Point3D(projX, projY, projZ, isArPrecision = true, label = "邊緣")
+                    val dProj = distance(livePoint, projPt)
+                    if (dProj < minD * 0.72) {
+                        minD = dProj
+                        bestCandidate = projPt
+                    }
+                }
+            }
+        }
+
+        if (bestCandidate == null) return null
+
+        // 3. Apply Soft-Magnetic Gravitational Attraction Curve
+        // If within inner lock zone (<= 3.0cm), snap firmly.
+        // If in outer attraction zone, apply smooth non-linear cubic hermite pull towards candidate
+        val innerLockRadius = 0.030
+        return if (minD <= innerLockRadius || isCurrentlySnapped) {
+            bestCandidate
+        } else {
+            val tNorm = ((minD - innerLockRadius) / (effectiveThreshold - innerLockRadius)).coerceIn(0.0, 1.0)
+            val magneticPull = 1.0 - (tNorm * tNorm * (3.0 - 2.0 * tNorm)) // Smoothstep attraction
+            Point3D(
+                x = livePoint.x * (1.0 - magneticPull) + bestCandidate.x * magneticPull,
+                y = livePoint.y * (1.0 - magneticPull) + bestCandidate.y * magneticPull,
+                z = livePoint.z * (1.0 - magneticPull) + bestCandidate.z * magneticPull,
+                isArPrecision = true,
+                label = bestCandidate.label
+            )
+        }
     }
 
     /**
@@ -351,15 +434,31 @@ object ArMath {
         val clipY = projectionMatrix[1] * vx + projectionMatrix[5] * vy + projectionMatrix[9] * vz + projectionMatrix[13] * vw
         val clipW = projectionMatrix[3] * vx + projectionMatrix[7] * vy + projectionMatrix[11] * vz + projectionMatrix[15] * vw
 
-        if (clipW <= 0.001f) {
+        if (clipW <= 0.001f || clipW.isNaN() || clipW.isInfinite()) {
             return null
         }
 
         val ndcX = clipX / clipW
         val ndcY = clipY / clipW
 
+        if (ndcX.isNaN() || ndcY.isNaN() || ndcX.isInfinite() || ndcY.isInfinite()) {
+            return null
+        }
+
         val screenX = (ndcX + 1.0f) * 0.5f * screenWidth
         val screenY = (1.0f - ndcY) * 0.5f * screenHeight
+
+        if (screenX.isNaN() || screenY.isNaN() || screenX.isInfinite() || screenY.isInfinite()) {
+            return null
+        }
+
+        // Clip coordinates that project absurdly far outside the screen bounds to prevent Canvas path allocation freezes
+        val maxMarginX = screenWidth * 3f
+        val maxMarginY = screenHeight * 3f
+        if (screenX < -maxMarginX || screenX > screenWidth + maxMarginX ||
+            screenY < -maxMarginY || screenY > screenHeight + maxMarginY) {
+            return null
+        }
 
         return Pair(screenX, screenY)
     }

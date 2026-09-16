@@ -477,14 +477,20 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
         }
 
         // 4. Adaptive 3D Kalman Covariance Update
-        // Dynamic Process Noise Q and Measurement Noise R
-        val processNoiseQ = 0.00005
-        val measurementNoiseR = when {
-            isJerkRejectionEnabled && lastLinearAccel > JERK_THRESHOLD_MPS2 -> 0.08 // Sudden bump: heavy rejection
-            isBurstLocked -> 0.00015 // Steady locked: ultra-low noise trust
-            isSteady && distFromPrev < 0.02 -> 0.0005
-            distFromPrev < snapThresholdMeters -> 0.003
-            else -> 0.02 // Quick panning: high responsiveness
+        // Dynamic Process Noise Q and Measurement Noise R: scale continuously with camera angular velocity, acceleration and displacement
+        val motionFactor = ((distFromPrev / 0.04).pow(2) / (1.0 + (distFromPrev / 0.04).pow(2))) * 0.6 +
+                ((lastAngularVelocity / 0.25f).toDouble().pow(2) / (1.0 + (lastAngularVelocity / 0.25f).toDouble().pow(2))) * 0.4
+        val processNoiseQ = 0.00003 + 0.00072 * motionFactor
+
+        val measurementNoiseR = if (isJerkRejectionEnabled && lastLinearAccel > JERK_THRESHOLD_MPS2) {
+            0.08 // Sudden bump: heavy rejection
+        } else if (isBurstLocked) {
+            0.00012 // Steady locked: ultra-low noise trust
+        } else {
+            // Smooth continuous curve: low noise when steady hovering, responsive when panning
+            val hoverFactor = if (isSteady) (1.0 - (distFromPrev / 0.03).coerceIn(0.0, 1.0)) else 0.0
+            val baseR = 0.0010 + 0.0040 * (1.0 - motionFactor)
+            (baseR * (1.0 - hoverFactor * 0.75)).coerceIn(0.00025, 0.015)
         }
 
         // Predict Step
@@ -505,10 +511,21 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
         kalmanCovariance[1] *= (1.0 - ky)
         kalmanCovariance[2] *= (1.0 - kz)
 
-        // Deadband: micro-flutter under 2.5mm is clamped
-        val finalX = if (distFromPrev < 0.0025 && previousPoint != null) previousPoint.x else kalmanStateX
-        val finalY = if (distFromPrev < 0.0025 && previousPoint != null) previousPoint.y else kalmanStateY
-        val finalZ = if (distFromPrev < 0.0025 && previousPoint != null) previousPoint.z else kalmanStateZ
+        // Smooth Hermite deadband: micro-flutter under 2.5mm is smoothly blended to eliminate vibration
+        val finalX: Double
+        val finalY: Double
+        val finalZ: Double
+        if (distFromPrev < 0.0025 && previousPoint != null) {
+            val t = (distFromPrev / 0.0025).coerceIn(0.0, 1.0)
+            val blend = t * t * (3.0 - 2.0 * t)
+            finalX = previousPoint.x * (1.0 - blend) + kalmanStateX * blend
+            finalY = previousPoint.y * (1.0 - blend) + kalmanStateY * blend
+            finalZ = previousPoint.z * (1.0 - blend) + kalmanStateZ * blend
+        } else {
+            finalX = kalmanStateX
+            finalY = kalmanStateY
+            finalZ = kalmanStateZ
+        }
 
         return rawPoint.copy(
             x = finalX,

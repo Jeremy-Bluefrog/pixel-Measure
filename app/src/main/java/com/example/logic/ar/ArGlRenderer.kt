@@ -154,9 +154,9 @@ class ModernArGlView(
             void main() {
                 vec4 pos = u_ModelViewProjection * vec4(a_Position.xyz, 1.0);
                 gl_Position = pos;
-                // Scale point size based on depth for realistic perspective
-                float depth = max(0.4, pos.z);
-                gl_PointSize = clamp(u_PointSize * (1.2 / depth), 4.0, 16.0);
+                // Scale point size based on true view depth (pos.w) for realistic perspective
+                float depth = max(0.3, pos.w);
+                gl_PointSize = clamp(u_PointSize * (1.6 / depth), 8.0, 38.0);
                 v_Confidence = a_Position.w;
             }
         """.trimIndent()
@@ -171,10 +171,12 @@ class ModernArGlView(
                 if (dist > 0.5) {
                     discard;
                 }
-                // Soft glowing anti-aliased circular particle falloff
-                float edgeAlpha = smoothstep(0.5, 0.08, dist);
-                float alpha = edgeAlpha * u_Color.a * clamp(v_Confidence, 0.4, 1.0);
-                gl_FragColor = vec4(u_Color.rgb, alpha);
+                // High-visibility glowing circular particle with vibrant core and outer halo
+                float core = smoothstep(0.2, 0.0, dist);
+                float halo = smoothstep(0.5, 0.06, dist);
+                vec3 coreColor = mix(u_Color.rgb, vec3(1.0, 1.0, 1.0), core * 0.85);
+                float alpha = halo * u_Color.a * clamp(v_Confidence, 0.45, 1.0);
+                gl_FragColor = vec4(coreColor, alpha);
             }
         """.trimIndent()
 
@@ -216,11 +218,15 @@ class ModernArGlView(
             GLES20.glShaderSource(this, fragCode)
             GLES20.glCompileShader(this)
         }
-        return GLES20.glCreateProgram().apply {
+        val program = GLES20.glCreateProgram().apply {
             GLES20.glAttachShader(this, vertShader)
             GLES20.glAttachShader(this, fragShader)
             GLES20.glLinkProgram(this)
         }
+        // Shaders can be flagged for deletion once linked to save GPU resources
+        GLES20.glDeleteShader(vertShader)
+        GLES20.glDeleteShader(fragShader)
+        return program
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
@@ -279,7 +285,7 @@ class ModernArGlView(
                 viewModel.vulkanGraphicsPipeline.recordAndExecuteDrawPass(
                     viewMatrix = viewMat,
                     projectionMatrix = projMat,
-                    capturedPoints = viewModel.capturedPoints,
+                    capturedPoints = viewModel.getCapturedPointsSnapshot(),
                     liveTarget = viewModel.liveTargetPoint.value,
                     boxCorners = viewModel.objectron3DBox.value?.corners
                 )
@@ -298,14 +304,14 @@ class ModernArGlView(
 
                         GLES20.glUniformMatrix4fv(pointModelViewProjUniform, 1, false, modelViewProjectionMatrix, 0)
                         // Dynamic Laser Cyan glowing feature particles (#00E5FF / #38BDF8)
-                        GLES20.glUniform4f(pointColorUniform, 0.0f, 0.898f, 1.0f, 0.85f)
-                        GLES20.glUniform1f(pointPointSizeUniform, 9.0f)
+                        GLES20.glUniform4f(pointColorUniform, 0.0f, 0.898f, 1.0f, 0.90f)
+                        GLES20.glUniform1f(pointPointSizeUniform, 22.0f)
 
                         GLES20.glEnableVertexAttribArray(pointPosAttrib)
                         GLES20.glVertexAttribPointer(pointPosAttrib, 4, GLES20.GL_FLOAT, false, 16, pointsBuf)
 
                         val numPoints = pointsBuf.remaining() / 4
-                        val drawPointsCount = kotlin.math.min(numPoints, 250)
+                        val drawPointsCount = kotlin.math.min(numPoints, 200)
                         GLES20.glDrawArrays(GLES20.GL_POINTS, 0, drawPointsCount)
 
                         GLES20.glDisableVertexAttribArray(pointPosAttrib)
@@ -336,7 +342,8 @@ class ModernArGlView(
         } catch (e: com.google.ar.core.exceptions.CameraNotAvailableException) {
             // Camera currently busy or switching
             return
-        } catch (e: Exception) {
+        } catch (t: Throwable) {
+            // Safeguard against any transient rendering, buffer, or native exceptions
             return
         }
     }

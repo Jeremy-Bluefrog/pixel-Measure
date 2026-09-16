@@ -20,10 +20,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -61,9 +63,7 @@ import com.example.logic.ai.ObjectronEngine
 import com.example.logic.ai.SegmentedObject
 import com.example.logic.ar.ArMath
 import com.example.logic.ar.ArTrackingStability
-import com.example.logic.ar.CachedScreenPoint
 import com.example.logic.ar.ModernArGlView
-import com.example.logic.ar.SpatialGridCache
 import com.example.logic.ar.StabilityLevel
 import com.example.logic.camera.HighSpeedCamera2Manager
 import com.example.ui.components.TileDetailBottomSheet
@@ -207,20 +207,45 @@ fun ModernArCameraView(
         }
     }
 
-    // Modern Refined Haptic Feedback Handler (Pure Android 12+ / Modern Device API)
+    // Modern Refined Haptic Feedback Handler (Cross-Android version compatible)
     LaunchedEffect(Unit) {
         viewModel.hapticEvent.collect { type ->
-            val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
-            val vibrator = vibratorManager?.defaultVibrator
-            if (vibrator?.hasVibrator() == true) {
-                val effectId = when (type) {
-                    HapticType.SNAP -> VibrationEffect.EFFECT_TICK
-                    HapticType.CLICK -> VibrationEffect.EFFECT_CLICK
-                    HapticType.HEAVY -> VibrationEffect.EFFECT_HEAVY_CLICK
-                    HapticType.DOUBLE -> VibrationEffect.EFFECT_DOUBLE_CLICK
-                }
-                vibrator.vibrate(VibrationEffect.createPredefined(effectId))
+            val vibrator = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
+                vibratorManager?.defaultVibrator
             } else {
+                @Suppress("DEPRECATION")
+                context.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+            }
+
+            var didVibrate = false
+            if (vibrator?.hasVibrator() == true) {
+                try {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                        val effectId = when (type) {
+                            HapticType.SNAP -> VibrationEffect.EFFECT_TICK
+                            HapticType.CLICK -> VibrationEffect.EFFECT_CLICK
+                            HapticType.HEAVY -> VibrationEffect.EFFECT_HEAVY_CLICK
+                            HapticType.DOUBLE -> VibrationEffect.EFFECT_DOUBLE_CLICK
+                        }
+                        vibrator.vibrate(VibrationEffect.createPredefined(effectId))
+                        didVibrate = true
+                    } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        val duration = when (type) {
+                            HapticType.SNAP -> 10L
+                            HapticType.CLICK -> 20L
+                            HapticType.HEAVY -> 45L
+                            HapticType.DOUBLE -> 30L
+                        }
+                        vibrator.vibrate(VibrationEffect.createOneShot(duration, VibrationEffect.DEFAULT_AMPLITUDE))
+                        didVibrate = true
+                    }
+                } catch (e: Throwable) {
+                    didVibrate = false
+                }
+            }
+
+            if (!didVibrate) {
                 val feedbackType = when (type) {
                     HapticType.SNAP, HapticType.CLICK -> androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove
                     HapticType.HEAVY, HapticType.DOUBLE -> androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress
@@ -318,9 +343,8 @@ fun ModernArCameraView(
     // Reusable Path caches to prevent per-frame GC allocations in Canvas
     val samCachedPath = remember { Path() }
     val wallCachedPath = remember { Path() }
-    val spatialGridCache = remember { SpatialGridCache() }
 
-    val isMeasurementAvailable by remember { derivedStateOf { trackingState == com.google.ar.core.TrackingState.TRACKING && liveTargetPointState.value != null } }
+    val isMeasurementAvailable by viewModel.isMeasurementAvailable.collectAsState()
 
     val addFabContainerColor by animateColorAsState(
         targetValue = if (isMeasurementAvailable) colorPrimary else Color(0xFF3C3C3E),
@@ -514,749 +538,16 @@ fun ModernArCameraView(
             }
 
             // 2. 3D Augmented Overlay Canvas (Planes, Projected Points, Lines, Measurements, Pings, Reticle)
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val screenW = size.width.toInt()
-                val screenH = size.height.toInt()
-                val screenCenter = Offset(size.width / 2f, size.height / 2f)
-
-                // Update spatial grid cache frame metrics & camera speed
-                spatialGridCache.updateCameraFrame(
-                    viewMatrix = viewMatrixState.value,
-                    projMatrix = projectionMatrixState.value,
-                    screenWidth = screenW,
-                    screenHeight = screenH,
-                    cameraSpeedMps = trackingStability.cameraSpeedMps
-                )
-
-                // Calculate real-time projected reticle position from 3D live target point using cache
-                val liveTarget = liveTargetPointState.value
-                val hasLiveTarget = if (liveTarget != null && viewMatrixState.value.size >= 16 && projectionMatrixState.value.size >= 16) {
-                    spatialGridCache.projectPoint(
-                        worldPoint = liveTarget,
-                        viewMatrix = viewMatrixState.value,
-                        projMatrix = projectionMatrixState.value,
-                        screenWidth = screenW,
-                        screenHeight = screenH,
-                        outPoint = spatialGridCache.liveTargetScreenPoint
-                    )
-                } else false
-
-                val currentReticlePos = if (hasLiveTarget && spatialGridCache.liveTargetScreenPoint.isValid &&
-                    spatialGridCache.liveTargetScreenPoint.x in (-120f)..(size.width + 120f) &&
-                    spatialGridCache.liveTargetScreenPoint.y in (-120f)..(size.height + 120f)
-                ) {
-                    spatialGridCache.liveTargetScreenPoint.toOffset()
-                } else {
-                    screenCenter
-                }
-
-                // Draw touch ripples
-                pings.forEach { (offset, anim) ->
-                    val progress = anim.value
-                    drawCircle(
-                        color = colorPrimary.copy(alpha = 0.5f * (1f - progress)),
-                        center = offset,
-                        radius = 8.dp.toPx() + 36.dp.toPx() * progress,
-                        style = Stroke(width = 2.5.dp.toPx())
-                    )
-                }
-
-                // Project 3D points to 2D screen positions via Zero-Allocation Spatial Grid Cache
-                val projectedPoints = spatialGridCache.batchProjectPoints(
-                    points = capturedPoints,
-                    viewMatrix = viewMatrixState.value,
-                    projMatrix = projectionMatrixState.value,
-                    screenWidth = screenW,
-                    screenHeight = screenH
-                )
-
-                // 2B. Draw confirmed connecting 3D virtual lines
-                // 兩點成一線，不要有共用的點：每兩點獨立成一線段 (step = 2)
-                val isAreaMode = subMode == 1 || (subMode == 0 && autoDetectedType == "AREA")
-                val stepVal = if (isAreaMode) 1 else 2
-                if (projectedPoints.size >= 2) {
-                    for (i in 0 until projectedPoints.size - 1 step stepVal) {
-                        val p1 = projectedPoints[i]
-                        val p2 = projectedPoints[i + 1]
-                        if (p1.isValid && p2.isValid) {
-                            val startOffset = p1.toOffset()
-                            val endOffset = p2.toOffset()
-                            val dx = endOffset.x - startOffset.x
-                            val dy = endOffset.y - startOffset.y
-                            val segLen = sqrt(dx * dx + dy * dy)
-
-                            // 1. Ambient dark drop shadow for maximum contrast
-                            drawLine(
-                                color = Color.Black.copy(alpha = 0.45f),
-                                start = Offset(startOffset.x + 1f, startOffset.y + 2f),
-                                end = Offset(endOffset.x + 1f, endOffset.y + 2f),
-                                strokeWidth = 7.dp.toPx(),
-                                cap = StrokeCap.Round
-                            )
-
-                            // 2. Luminous glow halo
-                            drawLine(
-                                color = colorPrimary.copy(alpha = 0.35f),
-                                start = startOffset,
-                                end = endOffset,
-                                strokeWidth = 8.5.dp.toPx(),
-                                cap = StrokeCap.Round
-                            )
-
-                            // 3. Core solid laser line
-                            drawLine(
-                                color = colorPrimary,
-                                start = startOffset,
-                                end = endOffset,
-                                strokeWidth = 4.5.dp.toPx(),
-                                cap = StrokeCap.Round
-                            )
-
-                            // 4. Perpendicular dimension ticks (Blueprint end-caps & scale ticks)
-                            if (segLen > 20f) {
-                                val nx = -dy / segLen
-                                val ny = dx / segLen
-                                val tickHalfLen = 9.dp.toPx()
-
-                                // End-cap at Start Point
-                                drawLine(
-                                    color = Color.White,
-                                    start = Offset(startOffset.x - nx * tickHalfLen, startOffset.y - ny * tickHalfLen),
-                                    end = Offset(startOffset.x + nx * tickHalfLen, startOffset.y + ny * tickHalfLen),
-                                    strokeWidth = 3.dp.toPx(),
-                                    cap = StrokeCap.Round
-                                )
-
-                                // End-cap at End Point
-                                drawLine(
-                                    color = Color.White,
-                                    start = Offset(endOffset.x - nx * tickHalfLen, endOffset.y - ny * tickHalfLen),
-                                    end = Offset(endOffset.x + nx * tickHalfLen, endOffset.y + ny * tickHalfLen),
-                                    strokeWidth = 3.dp.toPx(),
-                                    cap = StrokeCap.Round
-                                )
-
-                                // Holographic ruler scale hash marks along the segment (adaptive LOD during motion)
-                                val step = if (spatialGridCache.isFastMotion) 56f else 28f
-                                var d = step
-                                while (d < segLen - step) {
-                                    val px = startOffset.x + (dx / segLen) * d
-                                    val py = startOffset.y + (dy / segLen) * d
-                                    val subTickLen = 4.dp.toPx()
-                                    drawLine(
-                                        color = Color.White.copy(alpha = 0.7f),
-                                        start = Offset(px - nx * subTickLen, py - ny * subTickLen),
-                                        end = Offset(px + nx * subTickLen, py + ny * subTickLen),
-                                        strokeWidth = 1.8.dp.toPx()
-                                    )
-                                    d += step
-                                }
-
-                                // 3D In-Canvas Hardware Accelerated Floating Segment Capsule
-                                val midX = (startOffset.x + endOffset.x) / 2f
-                                val midY = (startOffset.y + endOffset.y) / 2f
-                                val segDist = ArMath.distance(capturedPoints[i], capturedPoints[i + 1])
-                                val distText = viewModel.formatLength(segDist, selectedUnit)
-
-                                drawContext.canvas.nativeCanvas.apply {
-                                    val textWidth = badgeTextPaint.measureText(distText)
-                                    val textHeight = badgeTextPaint.textSize
-                                    val padH = 32f
-                                    val padV = 16f
-                                    val left = midX - textWidth / 2f - padH
-                                    val top = midY - textHeight / 2f - padV
-                                    val right = midX + textWidth / 2f + padH
-                                    val bottom = midY + textHeight / 2f + padV
-                                    val radius = 36f
-
-                                    // Shadow
-                                    badgeBgPaint.color = 0x55000000
-                                    drawRoundRect(left + 2f, top + 4f, right + 2f, bottom + 4f, radius, radius, badgeBgPaint)
-
-                                    // Capsule background
-                                    badgeBgPaint.color = colorPrimaryContainer.toArgb()
-                                    drawRoundRect(left, top, right, bottom, radius, radius, badgeBgPaint)
-
-                                    // Border
-                                    badgeBorderPaint.color = colorPrimary.copy(alpha = 0.5f).toArgb()
-                                    drawRoundRect(left, top, right, bottom, radius, radius, badgeBorderPaint)
-
-                                    // Text
-                                    badgeTextPaint.color = colorOnPrimaryContainer.toArgb()
-                                    drawText(distText, midX, midY + textHeight * 0.35f, badgeTextPaint)
-                                }
-                            }
-                        }
-                    }
-
-                    // Closed Polygon in Area mode or Auto-Detected Area
-                    val isArea = subMode == 1 || (subMode == 0 && autoDetectedType == "AREA")
-                    if (isArea && projectedPoints.size >= 3) {
-                        val first = projectedPoints.first()
-                        val last = projectedPoints.last()
-                        if (first.isValid && last.isValid) {
-                            drawLine(
-                                color = colorPrimary.copy(alpha = 0.85f),
-                                start = last.toOffset(),
-                                end = first.toOffset(),
-                                strokeWidth = 3.dp.toPx(),
-                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(15f, 10f), dashPhase.value)
-                            )
-                        }
-                    }
-                }
-
-                // 2C. Draw active dynamic virtual line from last anchor point to current dynamic 3D surface reticle
-                // 兩點成一線：僅在奇數個點（正在延伸該線段的終點）時繪製動態虛線
-                val isActivelyDrawingLine = projectedPoints.size % 2 == 1
-                if (isActivelyDrawingLine && projectedPoints.isNotEmpty()) {
-                    val lastPt = projectedPoints.lastOrNull()
-                    if (lastPt != null && lastPt.isValid) {
-                        val startOffset = lastPt.toOffset()
-                        val dx = currentReticlePos.x - startOffset.x
-                        val dy = currentReticlePos.y - startOffset.y
-                        val liveLen = sqrt(dx * dx + dy * dy)
-
-                        // 1. Shadow under active line
-                        drawLine(
-                            color = Color.Black.copy(alpha = 0.4f),
-                            start = Offset(startOffset.x + 1f, startOffset.y + 2f),
-                            end = Offset(currentReticlePos.x + 1f, currentReticlePos.y + 2f),
-                            strokeWidth = 7.dp.toPx(),
-                            cap = StrokeCap.Round
-                        )
-
-                        // 2. Luminous animated laser stream
-                        drawLine(
-                            color = colorPrimary.copy(alpha = 0.35f),
-                            start = startOffset,
-                            end = currentReticlePos,
-                            strokeWidth = 8.5.dp.toPx(),
-                            cap = StrokeCap.Round
-                        )
-
-                        // 3. Flowing dynamic fine dashed scale line
-                        drawLine(
-                            color = colorPrimary,
-                            start = startOffset,
-                            end = currentReticlePos,
-                            strokeWidth = 4.dp.toPx(),
-                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), dashPhase.value),
-                            cap = StrokeCap.Round
-                        )
-
-                        // Solid endpoint cap at the moving end (currentReticlePos)
-                        drawCircle(
-                            color = Color.White,
-                            center = currentReticlePos,
-                            radius = 5.dp.toPx()
-                        )
-                        drawCircle(
-                            color = colorSecondary,
-                            center = currentReticlePos,
-                            radius = 2.5.dp.toPx()
-                        )
-
-                        // 4. Live perpendicular fine scale tick marks along the dynamic active connection path
-                        if (liveLen > 25f) {
-                            val nx = -dy / liveLen
-                            val ny = dx / liveLen
-                            val tickHalfLen = 6.dp.toPx()
-
-                            // End tick at start point
-                            drawLine(
-                                color = Color.White,
-                                start = Offset(startOffset.x - nx * tickHalfLen, startOffset.y - ny * tickHalfLen),
-                                end = Offset(startOffset.x + nx * tickHalfLen, startOffset.y + ny * tickHalfLen),
-                                strokeWidth = 2.2.dp.toPx(),
-                                cap = StrokeCap.Round
-                            )
-
-                            // Fine dashed scale ticks along the live path
-                            val step = 24f
-                            var d = step
-                            while (d < liveLen - step) {
-                                val px = startOffset.x + (dx / liveLen) * d
-                                val py = startOffset.y + (dy / liveLen) * d
-                                val subTickLen = 3f.dp.toPx()
-                                drawLine(
-                                    color = Color.White.copy(alpha = 0.75f),
-                                    start = Offset(px - nx * subTickLen, py - ny * subTickLen),
-                                    end = Offset(px + nx * subTickLen, py + ny * subTickLen),
-                                    strokeWidth = 1.4.dp.toPx()
-                                )
-                                d += step
-                            }
-                        }
-
-                        // 3D In-Canvas Hardware Accelerated Live Distance Badge
-                        val liveDist = liveDistanceMetersState.value
-                        if (liveDist != null && liveDist > 0.0) {
-                            val midX = (startOffset.x + currentReticlePos.x) / 2f
-                            val midY = (startOffset.y + currentReticlePos.y) / 2f
-                            val rawDistText = viewModel.formatLength(liveDist, selectedUnit)
-                            val distText = if (isSnapped) "吸附 $rawDistText" else rawDistText
-
-                            drawContext.canvas.nativeCanvas.apply {
-                                val textWidth = badgeTextPaint.measureText(distText)
-                                val textHeight = badgeTextPaint.textSize
-                                val padH = 34f
-                                val padV = 18f
-                                val left = midX - textWidth / 2f - padH
-                                val top = midY - textHeight / 2f - padV
-                                val right = midX + textWidth / 2f + padH
-                                val bottom = midY + textHeight / 2f + padV
-                                val radius = 38f
-
-                                // Shadow
-                                badgeBgPaint.color = 0x55000000
-                                drawRoundRect(left + 2f, top + 4f, right + 2f, bottom + 4f, radius, radius, badgeBgPaint)
-
-                                // Capsule background
-                                badgeBgPaint.color = colorPrimary.toArgb()
-                                drawRoundRect(left, top, right, bottom, radius, radius, badgeBgPaint)
-
-                                // Text
-                                badgeTextPaint.color = colorOnPrimary.toArgb()
-                                drawText(distText, midX, midY + textHeight * 0.35f, badgeTextPaint)
-                            }
-                        }
-                    }
-                }
-
-                // 2D. Draw MediaPipe Objectron 3D Bounding Box Wireframe & Oriented Cube
-                if (isObjectronMode && objectron3DBox != null) {
-                    val box = objectron3DBox!!
-                    val boxMesh = spatialGridCache.projectBox(
-                        corners = box.corners,
-                        center = box.center,
-                        viewMatrix = viewMatrixState.value,
-                        projMatrix = projectionMatrixState.value,
-                        screenWidth = screenW,
-                        screenHeight = screenH
-                    )
-
-                    val boxCyan = colorPrimary
-                    val boxAmber = colorTertiary
-
-                    // Draw 12 Wireframe Edges
-                    if (boxMesh.isVisible) {
-                        ObjectronEngine.WIREFRAME_EDGES.forEach { (i1, i2) ->
-                            val p1 = boxMesh.corners.getOrNull(i1)
-                            val p2 = boxMesh.corners.getOrNull(i2)
-                            if (p1 != null && p2 != null && p1.isValid && p2.isValid) {
-                                // Bottom face (0,1,2,3) in cyan, Top face (4,5,6,7) in amber, vertical pillars in white/cyan
-                                val edgeColor = when {
-                                    i1 < 4 && i2 < 4 -> boxCyan
-                                    i1 >= 4 && i2 >= 4 -> boxAmber
-                                    else -> Color.White.copy(alpha = 0.85f)
-                                }
-                                drawLine(
-                                    color = edgeColor,
-                                    start = p1.toOffset(),
-                                    end = p2.toOffset(),
-                                    strokeWidth = 2.5.dp.toPx(),
-                                    cap = StrokeCap.Round
-                                )
-                            }
-                        }
-
-                        // Draw 8 Vertex Keypoints
-                        boxMesh.corners.forEachIndexed { vIdx, proj ->
-                            if (proj.isValid) {
-                                val vOffset = proj.toOffset()
-                                val isTopVertex = vIdx >= 4
-                                val vColor = if (isTopVertex) boxAmber else boxCyan
-
-                                drawCircle(
-                                    color = Color.Black.copy(alpha = 0.5f),
-                                    center = Offset(vOffset.x, vOffset.y + 1.5f),
-                                    radius = 5.dp.toPx()
-                                )
-                                drawCircle(
-                                    color = Color.White,
-                                    center = vOffset,
-                                    radius = 4.5.dp.toPx()
-                                )
-                                drawCircle(
-                                    color = vColor,
-                                    center = vOffset,
-                                    radius = 3.dp.toPx()
-                                )
-                            }
-                        }
-
-                        // Draw Center Ground Projection Reticle
-                        if (boxMesh.centerPoint.isValid) {
-                            val cOffset = boxMesh.centerPoint.toOffset()
-                            drawCircle(
-                                color = boxCyan.copy(alpha = 0.35f * reticlePulseScale.value),
-                                center = cOffset,
-                                radius = (16.dp * reticlePulseScale.value).toPx(),
-                                style = Stroke(width = 1.5.dp.toPx())
-                            )
-                        }
-                    }
-                }
-
-                // 2D-2. Draw MobileSAM / FastSAM Segment Anything Mask & Boundary Polyline
-                if (isMobileSamMode && segmentedObject != null) {
-                    val seg = segmentedObject!!
-                    if (seg.contour2D.size >= 3) {
-                        val samPath = samCachedPath.apply {
-                            reset()
-                            moveTo(seg.contour2D[0].x, seg.contour2D[0].y)
-                            for (i in 1 until seg.contour2D.size) {
-                                lineTo(seg.contour2D[i].x, seg.contour2D[i].y)
-                            }
-                            close()
-                        }
-                        val samEmerald = colorPrimary
-                        val samCyan = colorSecondary
-
-                        // Translucent radial gradient fill mask
-                        drawPath(
-                            path = samPath,
-                            brush = Brush.radialGradient(
-                                colors = listOf(samEmerald.copy(alpha = 0.35f), samCyan.copy(alpha = 0.12f)),
-                                center = seg.promptPoint,
-                                radius = 220.dp.toPx()
-                            )
-                        )
-
-                        // Glowing neon border stroke with dashes
-                        drawPath(
-                            path = samPath,
-                            color = samEmerald,
-                            style = Stroke(
-                                width = 3.dp.toPx(),
-                                cap = StrokeCap.Round,
-                                join = StrokeJoin.Round,
-                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(24f, 12f), 0f)
-                            )
-                        )
-
-                        // Vertex pinpoints
-                        seg.contour2D.forEach { pt ->
-                            drawCircle(color = Color.White, center = pt, radius = 4.dp.toPx())
-                            drawCircle(color = samEmerald, center = pt, radius = 2.5.dp.toPx())
-                        }
-
-                        // Prompt point radar beacon
-                        drawCircle(
-                            color = Color.White,
-                            center = seg.promptPoint,
-                            radius = 5.dp.toPx()
-                        )
-                        drawCircle(
-                            color = samEmerald,
-                            center = seg.promptPoint,
-                            radius = (14.dp * reticlePulseScale.value).toPx(),
-                            style = Stroke(width = 2.dp.toPx())
-                        )
-                    }
-                }
-
-                // 2F. Draw AI Detected Tiles AR Bounding Frame (Only if tiles are genuinely detected)
-                if (detectedTiles.isNotEmpty()) {
-                    val tilesToDraw = detectedTiles
-
-                    val tileGold = colorPrimary
-                    val tileCyan = colorSecondary
-
-                    tilesToDraw.forEach { tile ->
-                        val leftPx = tile.leftNorm * screenW
-                        val topPx = tile.topNorm * screenH
-                        val rightPx = tile.rightNorm * screenW
-                        val bottomPx = tile.bottomNorm * screenH
-
-                        val tWidth = rightPx - leftPx
-                        val tHeight = bottomPx - topPx
-                        val isRevealed = revealedTileIds[tile.id] == true
-
-                        if (tWidth > 30f && tHeight > 30f) {
-                            if (isRevealed) {
-                                // Translucent Surface Fill when revealed
-                                drawRoundRect(
-                                    color = tileGold.copy(alpha = 0.16f),
-                                    topLeft = Offset(leftPx, topPx),
-                                    size = androidx.compose.ui.geometry.Size(tWidth, tHeight),
-                                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(16f, 16f)
-                                )
-
-                                // Glowing Dashed Border when revealed
-                                drawRoundRect(
-                                    color = tileGold,
-                                    topLeft = Offset(leftPx, topPx),
-                                    size = androidx.compose.ui.geometry.Size(tWidth, tHeight),
-                                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(16f, 16f),
-                                    style = Stroke(
-                                        width = 3.dp.toPx(),
-                                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(20f, 10f), 0f)
-                                    )
-                                )
-                            } else {
-                                // Subtle boundary guide before clicking
-                                drawRoundRect(
-                                    color = Color.White.copy(alpha = 0.28f),
-                                    topLeft = Offset(leftPx, topPx),
-                                    size = androidx.compose.ui.geometry.Size(tWidth, tHeight),
-                                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(16f, 16f),
-                                    style = Stroke(
-                                        width = 1.5.dp.toPx(),
-                                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 12f), 0f)
-                                    )
-                                )
-                            }
-
-                            // Corner L-Brackets
-                            val bracketLen = minOf(tWidth, tHeight) * 0.20f
-                            val bracketColor = if (isRevealed) tileCyan else Color.White.copy(alpha = 0.65f)
-                            val bracketStroke = if (isRevealed) 3.5.dp.toPx() else 2.dp.toPx()
-                            // Top-Left
-                            drawLine(bracketColor, Offset(leftPx, topPx), Offset(leftPx + bracketLen, topPx), bracketStroke, StrokeCap.Round)
-                            drawLine(bracketColor, Offset(leftPx, topPx), Offset(leftPx, topPx + bracketLen), bracketStroke, StrokeCap.Round)
-                            // Top-Right
-                            drawLine(bracketColor, Offset(rightPx, topPx), Offset(rightPx - bracketLen, topPx), bracketStroke, StrokeCap.Round)
-                            drawLine(bracketColor, Offset(rightPx, topPx), Offset(rightPx, topPx + bracketLen), bracketStroke, StrokeCap.Round)
-                            // Bottom-Left
-                            drawLine(bracketColor, Offset(leftPx, bottomPx), Offset(leftPx + bracketLen, bottomPx), bracketStroke, StrokeCap.Round)
-                            drawLine(bracketColor, Offset(leftPx, bottomPx), Offset(leftPx, bottomPx - bracketLen), bracketStroke, StrokeCap.Round)
-                            // Bottom-Right
-                            drawLine(bracketColor, Offset(rightPx, bottomPx), Offset(rightPx - bracketLen, bottomPx), bracketStroke, StrokeCap.Round)
-                            drawLine(bracketColor, Offset(rightPx, bottomPx), Offset(rightPx, bottomPx - bracketLen), bracketStroke, StrokeCap.Round)
-                        }
-                    }
-                }
-
-                // 2D-4. Draw Simultaneous Wall Measurement Overlay (即時牆面測量與 3D 投影網格)
-                if (isSimultaneousWallMeasureActive && detectedWalls.isNotEmpty()) {
-                    detectedWalls.forEach { wall ->
-                        val wallMesh = spatialGridCache.getOrUpdateWallMesh(
-                            wallId = wall.id,
-                            corners3D = wall.corners3D,
-                            viewMatrix = viewMatrixState.value,
-                            projMatrix = projectionMatrixState.value,
-                            screenWidth = screenW,
-                            screenHeight = screenH
-                        )
-
-                        if (wallMesh != null && wallMesh.isVisible) {
-                            val pBL = wallMesh.corners[0]
-                            val pBR = wallMesh.corners[1]
-                            val pTR = wallMesh.corners[2]
-                            val pTL = wallMesh.corners[3]
-
-                            // 1. Semi-transparent holographic wall mesh fill
-                            drawPath(
-                                path = wallMesh.fillPath,
-                                color = Color(0x2200E5FF)
-                            )
-
-                            // 2. Futuristic boundary outline with animated dash
-                            drawPath(
-                                path = wallMesh.fillPath,
-                                color = Color(0xFF00E5FF).copy(alpha = 0.85f),
-                                style = Stroke(
-                                    width = 2.5.dp.toPx(),
-                                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(16f, 10f), dashPhase.value)
-                                )
-                            )
-
-                            // 3. Holographic grid lines inside wall surface
-                            if (pBL.isValid && pBR.isValid && pTR.isValid && pTL.isValid) {
-                                for (fraction in listOf(0.33f, 0.66f)) {
-                                    // Horizontal lines across the wall
-                                    val hStart = Offset(
-                                        pBL.x + (pTL.x - pBL.x) * fraction,
-                                        pBL.y + (pTL.y - pBL.y) * fraction
-                                    )
-                                    val hEnd = Offset(
-                                        pBR.x + (pTR.x - pBR.x) * fraction,
-                                        pBR.y + (pTR.y - pBR.y) * fraction
-                                    )
-                                    drawLine(
-                                        color = Color(0xFF00E5FF).copy(alpha = 0.3f),
-                                        start = hStart,
-                                        end = hEnd,
-                                        strokeWidth = 1.2.dp.toPx()
-                                    )
-
-                                    // Vertical lines across the wall
-                                    val vStart = Offset(
-                                        pBL.x + (pBR.x - pBL.x) * fraction,
-                                        pBL.y + (pBR.y - pBR.y) * fraction
-                                    )
-                                    val vEnd = Offset(
-                                        pTL.x + (pTR.x - pTL.x) * fraction,
-                                        pTL.y + (pTR.y - pTL.y) * fraction
-                                    )
-                                    drawLine(
-                                        color = Color(0xFF00E5FF).copy(alpha = 0.3f),
-                                        start = vStart,
-                                        end = vEnd,
-                                        strokeWidth = 1.2.dp.toPx()
-                                    )
-                                }
-                            }
-
-                            // 4. Corner bracket anchors (4 corners)
-                            wallMesh.corners.forEach { cornerProj ->
-                                if (cornerProj.isValid) {
-                                    val cOffset = cornerProj.toOffset()
-                                    drawCircle(
-                                        color = Color.Black.copy(alpha = 0.5f),
-                                        center = Offset(cOffset.x, cOffset.y + 1f),
-                                        radius = 6.dp.toPx()
-                                    )
-                                    drawCircle(
-                                        color = Color.White,
-                                        center = cOffset,
-                                        radius = 5.dp.toPx()
-                                    )
-                                    drawCircle(
-                                        color = Color(0xFF00E5FF),
-                                        center = cOffset,
-                                        radius = 3.5.dp.toPx()
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // 2E. Draw start and confirmed anchor pin node markers (3D Spatial Anchors)
-                projectedPoints.forEachIndexed { index, proj ->
-                    if (proj.isValid) {
-                        val offset = proj.toOffset()
-                        val isStartNode = index == 0
-                        val isLastNode = index == projectedPoints.size - 1 && projectedPoints.size > 1
-
-                        // 1. Beacon pulse halo ring
-                        drawCircle(
-                            color = colorPrimary.copy(alpha = 0.25f * (2f - reticlePulseScale.value)),
-                            center = offset,
-                            radius = (14.dp * reticlePulseScale.value).toPx()
-                        )
-
-                        // 2. High-contrast ground shadow
-                        drawCircle(
-                            color = Color.Black.copy(alpha = 0.45f),
-                            center = Offset(offset.x, offset.y + 2f),
-                            radius = 9.dp.toPx()
-                        )
-
-                        // 3. Solid Pin Outer Ring
-                        drawCircle(
-                            color = colorPrimary,
-                            center = offset,
-                            radius = 9.dp.toPx()
-                        )
-
-                        // 4. White Contrast Ring
-                        drawCircle(
-                            color = Color.White,
-                            center = offset,
-                            radius = 6.dp.toPx()
-                        )
-
-                        // 5. Center Core Pinpoint Dot
-                        drawCircle(
-                            color = if (isStartNode) colorPrimary else if (isLastNode) colorSecondary else colorPrimary,
-                            center = offset,
-                            radius = 3.5.dp.toPx()
-                        )
-                    }
-                }
-
-                // 4. Google Measure Style Dynamic 3D Target Reticle (Surface Locked & Spring Snapped)
-                val reticleCenter = currentReticlePos
-                val baseRadius = 14.dp.toPx()
-                val currentRadius = baseRadius * snapScaleAnimated.value * reticlePulseScale.value
-
-                // 1. Snapped Target Lock Radial Aura Glow
-                if (isSnapped) {
-                    drawCircle(
-                        color = Color(0xFFFBBF24).copy(alpha = snapGlowAlphaAnimated.value * 0.45f),
-                        center = reticleCenter,
-                        radius = currentRadius * 1.6f
-                    )
-                    drawCircle(
-                        color = Color(0xFFFBBF24).copy(alpha = snapGlowAlphaAnimated.value * 0.25f),
-                        center = reticleCenter,
-                        radius = currentRadius * 2.2f
-                    )
-                }
-
-                // 2. High-contrast ground shadow
-                drawCircle(
-                    color = Color.Black.copy(alpha = 0.35f),
-                    center = Offset(reticleCenter.x + 1f, reticleCenter.y + 1.5f),
-                    radius = currentRadius,
-                    style = Stroke(width = 3.dp.toPx())
-                )
-
-                // 3. Clean Elegant Outer Gold Ring
-                drawCircle(
-                    color = if (isSnapped) Color(0xFFFFD54F) else Color(0xFFFBBF24),
-                    center = reticleCenter,
-                    radius = currentRadius,
-                    style = Stroke(
-                        width = if (isSnapped) 2.6.dp.toPx() else 2.0.dp.toPx()
-                    )
-                )
-
-                // 3.1 Multi-Sample Burst Averaging Dynamic Progress Arc (Precision Lock)
-                if (sensorTelemetryState.value.multiSampleProgress > 0f) {
-                    val arcRadius = currentRadius + 5.dp.toPx()
-                    drawArc(
-                        color = if (sensorTelemetryState.value.isMultiSampleLocked) colorTertiary else colorPrimary,
-                        startAngle = -90f,
-                        sweepAngle = sensorTelemetryState.value.multiSampleProgress * 360f,
-                        useCenter = false,
-                        topLeft = Offset(reticleCenter.x - arcRadius, reticleCenter.y - arcRadius),
-                        size = androidx.compose.ui.geometry.Size(arcRadius * 2f, arcRadius * 2f),
-                        style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
-                    )
-                }
-
-                // 5. Solid Center White & Gold Accent Core Pinpoint Dot
-                drawCircle(
-                    color = Color.Black.copy(alpha = 0.4f),
-                    center = Offset(reticleCenter.x + 0.5f, reticleCenter.y + 0.5f),
-                    radius = 4.5.dp.toPx()
-                )
-                drawCircle(
-                    color = Color.White,
-                    center = reticleCenter,
-                    radius = 4.0.dp.toPx()
-                )
-                drawCircle(
-                    color = if (isSnapped) Color(0xFFFFD54F) else Color(0xFFFBBF24),
-                    center = reticleCenter,
-                    radius = 2.2.dp.toPx()
-                )
-
-                // 6. Plane Locked Center Micro Particle Feedback Ring
-                if (planesCount > 0) {
-                    val particleCount = 8
-                    for (i in 0 until particleCount) {
-                        val angle = (i * (360f / particleCount)) + (planeLockedParticleAnim.value * 360f)
-                        val rad = Math.toRadians(angle.toDouble())
-                        val orbitRadius = (18.dp.toPx()) + (kotlin.math.sin(planeLockedParticleAnim.value * 6.28318f + i).toFloat() * 2.5.dp.toPx())
-                        val px = reticleCenter.x + (kotlin.math.cos(rad).toFloat() * orbitRadius)
-                        val py = reticleCenter.y + (kotlin.math.sin(rad).toFloat() * orbitRadius)
-                        val sineVal = kotlin.math.sin(planeLockedParticleAnim.value * 6.28318f + i)
-                        val pAlpha = ((sineVal + 1f) / 2f).coerceIn(0.25f, 0.9f)
-
-                        drawCircle(
-                            color = Color(0xFFFBBF24).copy(alpha = pAlpha),
-                            center = Offset(px, py),
-                            radius = 2f * density
-                        )
-                    }
-                }
-            }
+            ArMeasurementCanvasOverlay(
+                viewModel = viewModel,
+                pings = pings,
+                revealedTileIds = revealedTileIds,
+                dashPhase = dashPhase,
+                reticlePulseScale = reticlePulseScale,
+                snapScaleAnimated = snapScaleAnimated,
+                snapGlowAlphaAnimated = snapGlowAlphaAnimated,
+                planeLockedParticleAnim = planeLockedParticleAnim
+            )
 
             // 3. Dynamic Floating Measurement & Node Badges Overlay
             Box(modifier = Modifier.fillMaxSize()) {
@@ -1630,22 +921,26 @@ fun ModernArCameraView(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                // Left: Status badge or clear button with Material 3 AnimatedContent transition
-                AnimatedContent(
-                    targetState = hasCapturedPoints,
-                    transitionSpec = {
-                        (fadeIn(animationSpec = tween(220)) + scaleIn(
-                            initialScale = 0.92f,
-                            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow)
-                        )).togetherWith(
-                            fadeOut(animationSpec = tween(160)) + scaleOut(
-                                targetScale = 0.92f,
-                                animationSpec = tween(160)
+                // Left: Status badge or clear button, accompanied by quick unit switcher
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    AnimatedContent(
+                        targetState = hasCapturedPoints,
+                        transitionSpec = {
+                            (fadeIn(animationSpec = tween(220)) + scaleIn(
+                                initialScale = 0.92f,
+                                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow)
+                            )).togetherWith(
+                                fadeOut(animationSpec = tween(160)) + scaleOut(
+                                    targetScale = 0.92f,
+                                    animationSpec = tween(160)
+                                )
                             )
-                        )
-                    },
-                    label = "TopStatusChipAnim"
-                ) { isMeasuring ->
+                        },
+                        label = "TopStatusChipAnim"
+                    ) { isMeasuring ->
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1749,6 +1044,42 @@ fun ModernArCameraView(
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+
+                // Quick Unit Switcher Badge (One-tap rotate: CM -> M -> IN -> FT)
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
+                        shape = RoundedCornerShape(20.dp),
+                        border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+                        modifier = Modifier
+                            .shadow(2.dp, RoundedCornerShape(20.dp))
+                            .clickable {
+                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                val units = listOf("cm", "m", "in", "ft")
+                                val nextIdx = (units.indexOf(selectedUnit) + 1) % units.size
+                                viewModel.setSelectedUnit(units[nextIdx])
+                            }
+                            .testTag("quick_unit_toggle_chip")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                Icons.Rounded.Straighten,
+                                contentDescription = "切換單位",
+                                tint = colorPrimary,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Text(
+                                text = selectedUnit.uppercase(),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
                         }
                     }
                 }
@@ -2276,6 +1607,24 @@ fun ModernArCameraView(
                 }
             }
 
+            // Plane Detection Guidance Overlay (When planesCount == 0 and not measuring)
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showPlaneGuidanceOverlay && planesCount == 0 && !hasCapturedPoints,
+                enter = fadeIn(animationSpec = tween(250)) + slideInVertically(animationSpec = tween(300)) { -it / 2 },
+                exit = fadeOut(animationSpec = tween(200)) + slideOutVertically(animationSpec = tween(250)) { -it / 2 },
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 76.dp, start = 16.dp, end = 16.dp)
+            ) {
+                PlaneDetectionInstructionOverlay(
+                    trackingState = trackingState,
+                    trackingFailureReason = trackingFailureReason,
+                    planesCount = planesCount,
+                    onDismiss = { showPlaneGuidanceOverlay = false }
+                )
+            }
+
             // 6. Bottom Dynamic Control Deck (+ / ✓ Button & Camera Shutter)
             var isShutterFlash by remember { mutableStateOf(false) }
 
@@ -2327,29 +1676,6 @@ fun ModernArCameraView(
                                     color = Color(0xFF00E5FF),
                                     fontSize = 12.5.sp,
                                     fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    } else if (!hasCapturedPoints) {
-                        Surface(
-                            color = Color(0x990F172A),
-                            shape = RoundedCornerShape(20.dp),
-                            border = BorderStroke(0.8.dp, Color.White.copy(alpha = 0.20f)),
-                            modifier = Modifier
-                                .shadow(4.dp, RoundedCornerShape(20.dp))
-                                .padding(bottom = 12.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Icon(Icons.Rounded.CenterFocusWeak, null, tint = colorPrimary, modifier = Modifier.size(15.dp))
-                                Text(
-                                    text = "對準表面，輕觸 ＋ 釘選測量起點",
-                                    color = Color.White.copy(alpha = 0.92f),
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium
                                 )
                             }
                         }
@@ -2436,6 +1762,89 @@ fun ModernArCameraView(
                     Spacer(modifier = Modifier.height(18.dp))
                 }
 
+                // 1B. Dynamic Mode Selector Carousel Strip (Auto, Length, Area, Height, Angle, 3D Box, Tile)
+                val modes = listOf(
+                    Triple(0, "自動", Icons.Rounded.AutoAwesome),
+                    Triple(0, "長度", Icons.Rounded.Straighten),
+                    Triple(1, "面積", Icons.Rounded.SquareFoot),
+                    Triple(2, "高度", Icons.Rounded.Height),
+                    Triple(5, "角度", Icons.Rounded.Architecture),
+                    Triple(3, "3D方框", Icons.Rounded.ViewInAr),
+                    Triple(99, "磁磚", Icons.Rounded.GridOn)
+                )
+
+                Surface(
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
+                    shape = RoundedCornerShape(22.dp),
+                    border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+                    shadowElevation = 6.dp,
+                    modifier = Modifier
+                        .padding(bottom = 14.dp)
+                        .testTag("ar_mode_selector_strip")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 6.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        modes.forEach { (modeId, modeTitle, modeIcon) ->
+                            val isSelected = when {
+                                modeId == 99 -> isAiTileMode
+                                modeId == 0 && modeTitle == "自動" -> subMode == 0 && autoDetectedType != "DISTANCE"
+                                modeId == 0 && modeTitle == "長度" -> subMode == 0 && (autoDetectedType == "DISTANCE" || !hasCapturedPoints)
+                                else -> subMode == modeId && !isAiTileMode
+                            }
+
+                            val pillBg by animateColorAsState(
+                                targetValue = if (isSelected) colorPrimary else Color.Transparent,
+                                animationSpec = tween(180),
+                                label = "pillBg_$modeTitle"
+                            )
+                            val contentColor by animateColorAsState(
+                                targetValue = if (isSelected) colorOnPrimary else Color.White.copy(alpha = 0.75f),
+                                animationSpec = tween(180),
+                                label = "contentColor_$modeTitle"
+                            )
+
+                            Surface(
+                                color = pillBg,
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier
+                                    .clickable {
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                        if (modeId == 99) {
+                                            viewModel.toggleAiTileMode()
+                                        } else {
+                                            if (isAiTileMode) viewModel.toggleAiTileMode()
+                                            viewModel.setCameraSubMode(modeId)
+                                        }
+                                    }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = modeIcon,
+                                        contentDescription = modeTitle,
+                                        tint = contentColor,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Text(
+                                        text = modeTitle,
+                                        fontSize = 12.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                        color = contentColor
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // 2. Interactive Bottom Action Deck (Left, Center, Right Symmetrical Layout)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -2463,23 +1872,49 @@ fun ModernArCameraView(
                                 animationSpec = tween(180)
                             )
                         ) {
-                            IconButton(
-                                onClick = {
-                                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
-                                    viewModel.undo()
-                                },
-                                modifier = Modifier
-                                    .size(46.dp)
-                                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.70f), CircleShape)
-                                    .border(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f), CircleShape)
-                                    .shadow(4.dp, CircleShape)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Icon(
-                                    Icons.Rounded.Undo,
-                                    contentDescription = "Undo",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(20.dp)
-                                )
+                                IconButton(
+                                    onClick = {
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                        viewModel.undo()
+                                    },
+                                    modifier = Modifier
+                                        .size(46.dp)
+                                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.70f), CircleShape)
+                                        .border(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f), CircleShape)
+                                        .shadow(4.dp, CircleShape)
+                                        .testTag("undo_button")
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.Undo,
+                                        contentDescription = "復原上一點",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+
+                                IconButton(
+                                    onClick = {
+                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                        viewModel.clearActivePoints()
+                                    },
+                                    modifier = Modifier
+                                        .size(46.dp)
+                                        .background(Color(0xFFE53935).copy(alpha = 0.22f), CircleShape)
+                                        .border(0.8.dp, Color(0xFFE53935).copy(alpha = 0.55f), CircleShape)
+                                        .shadow(4.dp, CircleShape)
+                                        .testTag("clear_all_button")
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.DeleteOutline,
+                                        contentDescription = "全部清除",
+                                        tint = Color(0xFFFF8A80),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
                             }
                         }
                     }

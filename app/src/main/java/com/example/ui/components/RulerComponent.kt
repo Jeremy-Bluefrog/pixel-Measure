@@ -7,7 +7,6 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,7 +20,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
@@ -35,15 +33,13 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
- * 專業高精度雙邊螢幕游標卡鉗直尺 (Precision Dual-Edge Screen Vernier Caliper)
+ * 專業高精度雙邊螢幕直尺 (Precision Dual-Edge Screen Ruler)
  *
  * 核心功能：
  * 1. 左右雙邊獨立刻度：左側公制 (mm/cm)，右側可一鍵切換公制 (cm) 或英制 (inch, 1/16" 精準刻度)。
- * 2. 游標卡鉗手勢跟手流暢：單一流水線手勢處理，點擊或拖曳即時響應，無任何延遲與掉幀。
- * 3. 齒輪段落觸感回饋 (Mechanical Tick Haptics)：滑過 1cm、0.5cm 整數刻度時提供輕快段落震動反饋。
- * 4. 游標鎖定 (Lock) 與 ±0.1mm 微調按鈕：支援游標鎖定防止誤碰，並具備 ±0.1mm 微調步進達到游標卡鉗等級精度。
- * 5. 極致流暢校準面板：支援 0.002x 精密步進與連續平滑滑桿（非同步寫入快取，鬆手持久化）。
- * 6. 自適應螢幕密度排版：文字依 sp 向量縮放，垂直基準線以 FontMetrics 完美居中對齊。
+ * 2. 零點對齊基準線：貫穿左右尺身，方便實體待測物件邊緣頂齊起點直接對比量測。
+ * 3. 極致流暢校準面板：支援 0.002x 精密步進與連續平滑滑桿（非同步寫入快取，鬆手持久化）。
+ * 4. 自適應螢幕密度排版：文字依 sp 向量縮放，垂直基準線以 FontMetrics 完美居中對齊。
  */
 @Composable
 fun RulerComponent(
@@ -67,8 +63,9 @@ fun RulerComponent(
         val y = displayMetrics.ydpi
         if (y > 50f && !y.isNaN() && !y.isInfinite()) y else displayMetrics.densityDpi.toFloat()
     }
-    val mmInPx = (ydpi / 25.4f) * calibrationFactor
-    val inchInPx = ydpi * calibrationFactor
+    val safeFactor = if (calibrationFactor > 0.05f && !calibrationFactor.isNaN() && !calibrationFactor.isInfinite()) calibrationFactor else 1.0f
+    val mmInPx = ((ydpi / 25.4f) * safeFactor).coerceIn(1.5f, 50.0f)
+    val inchInPx = (ydpi * safeFactor).coerceIn(40.0f, 1200.0f)
 
     // Zero Y baseline: positioned comfortably below top status/controls bar
     val zeroY = with(density) { 86.dp.toPx() }
@@ -124,50 +121,14 @@ fun RulerComponent(
         (textPaintLeft.descent() + textPaintLeft.ascent()) / 2f
     }
 
-    // Caliper horizontal guide touch state and lock state
-    var caliperY by remember { mutableStateOf<Float?>(null) }
-    var isCaliperLocked by remember { mutableStateOf(false) }
-
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        // Dual-Edge Canvas with High-Responsiveness Gesture Handler
+        // Dual-Edge Ruler Canvas
         Canvas(
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(zeroY, isCaliperLocked, isCalibrationActive) {
-                    if (!isCalibrationActive) {
-                        detectDragGestures(
-                            onDragStart = { offset ->
-                                if (!isCaliperLocked && offset.y >= zeroY) {
-                                    caliperY = offset.y
-                                    viewModel.triggerHapticFeedback(HapticType.SNAP)
-                                }
-                            },
-                            onDrag = { change, _ ->
-                                if (!isCaliperLocked) {
-                                    change.consume()
-                                    val newY = change.position.y.coerceAtLeast(zeroY)
-                                    val prevY = caliperY ?: zeroY
-                                    val prevMm = ((prevY - zeroY) / mmInPx).roundToInt()
-                                    val newMm = ((newY - zeroY) / mmInPx).roundToInt()
-                                    
-                                    // Mechanical Gear Tick Haptics
-                                    if (prevMm != newMm) {
-                                        if (newMm % 10 == 0) {
-                                            viewModel.triggerHapticFeedback(HapticType.SNAP)
-                                        } else if (newMm % 5 == 0) {
-                                            viewModel.triggerHapticFeedback(HapticType.CLICK)
-                                        }
-                                    }
-                                    caliperY = newY
-                                }
-                            }
-                        )
-                    }
-                }
+            modifier = Modifier.fillMaxSize()
         ) {
             val w = size.width
             val h = size.height
@@ -217,7 +178,7 @@ fun RulerComponent(
             // 4. Left Edge Graduations (Centimeter & Millimeter ticks)
             var leftCurY = zeroY
             var leftMm = 0
-            while (leftCurY < h) {
+            while (leftCurY < h && leftMm < 3000) {
                 val isCm = (leftMm % 10 == 0)
                 val isHalfCm = (leftMm % 5 == 0)
 
@@ -256,7 +217,7 @@ fun RulerComponent(
                 // Right side Metric
                 var rightCurY = zeroY
                 var rightMm = 0
-                while (rightCurY < h) {
+                while (rightCurY < h && rightMm < 3000) {
                     val isCm = (rightMm % 10 == 0)
                     val isHalfCm = (rightMm % 5 == 0)
 
@@ -291,10 +252,10 @@ fun RulerComponent(
                 }
             } else {
                 // Right side Imperial (Inches with 1/16" precision)
-                val sixteenthInPx = inchInPx / 16f
+                val sixteenthInPx = (inchInPx / 16f).coerceIn(2.0f, 100.0f)
                 var rightCurY = zeroY
                 var step = 0
-                while (rightCurY < h) {
+                while (rightCurY < h && step < 3000) {
                     val isWhole = (step % 16 == 0)
                     val isHalf = (step % 8 == 0)
                     val isQuarter = (step % 4 == 0)
@@ -331,25 +292,6 @@ fun RulerComponent(
                     rightCurY += sixteenthInPx
                     step++
                 }
-            }
-
-            // 6. Interactive Caliper Guideline & Grips
-            caliperY?.let { yPos ->
-                // Main Caliper Baseline
-                drawLine(
-                    color = colorPrimary,
-                    start = Offset(0f, yPos),
-                    end = Offset(w, yPos),
-                    strokeWidth = 2.dp.toPx()
-                )
-
-                // High-precision jaw handles
-                val gripRadius = 7.dp.toPx()
-                drawCircle(color = colorPrimary, radius = gripRadius, center = Offset(rulerWidth, yPos))
-                drawCircle(color = colorSurface, radius = gripRadius * 0.45f, center = Offset(rulerWidth, yPos))
-
-                drawCircle(color = colorPrimary, radius = gripRadius, center = Offset(w - rulerWidth, yPos))
-                drawCircle(color = colorSurface, radius = gripRadius * 0.45f, center = Offset(w - rulerWidth, yPos))
             }
         }
 
@@ -667,189 +609,6 @@ fun RulerComponent(
                             Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(15.dp))
                             Spacer(modifier = Modifier.width(4.dp))
                             Text("完成校準", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-        }
-
-        // 2. CALIPER REAL-TIME READOUT & VERNIER CONTROLS (Measurement Mode only)
-        AnimatedVisibility(
-            visible = !isCalibrationActive && caliperY != null,
-            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = bottomPadding + 10.dp, start = 14.dp, end = 14.dp)
-        ) {
-            caliperY?.let { yPos ->
-                val measuredPx = (yPos - zeroY).coerceAtLeast(0f)
-                val measuredMm = measuredPx / mmInPx
-                val measuredCm = measuredMm / 10.0
-                val measuredIn = measuredPx / inchInPx
-
-                Surface(
-                    shape = RoundedCornerShape(20.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    tonalElevation = 6.dp,
-                    shadowElevation = 8.dp,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                    ) {
-                        // Top Row: Measurement Values & Lock/Clear Actions
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = "量測讀數",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.outline
-                                    )
-                                    if (isCaliperLocked) {
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Surface(
-                                            shape = RoundedCornerShape(4.dp),
-                                            color = MaterialTheme.colorScheme.errorContainer
-                                        ) {
-                                            Text(
-                                                text = "已鎖定",
-                                                fontSize = 10.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                            )
-                                        }
-                                    }
-                                }
-                                Row(verticalAlignment = Alignment.Bottom) {
-                                    Text(
-                                        text = String.format(Locale.US, "%.2f", measuredCm),
-                                        style = MaterialTheme.typography.headlineSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = colorPrimary
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = "cm",
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = colorPrimary,
-                                        modifier = Modifier.padding(bottom = 2.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = "(${String.format(Locale.US, "%.1f", measuredMm)} mm · ${String.format(Locale.US, "%.2f", measuredIn)} in)",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.padding(bottom = 4.dp)
-                                    )
-                                }
-                            }
-
-                            // Primary Action Buttons (Lock, Clear, Save)
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                // Lock Toggle Button
-                                IconButton(
-                                    onClick = {
-                                        isCaliperLocked = !isCaliperLocked
-                                        viewModel.triggerHapticFeedback(HapticType.CLICK)
-                                    },
-                                    modifier = Modifier.size(36.dp)
-                                ) {
-                                    Icon(
-                                        if (isCaliperLocked) Icons.Rounded.Lock else Icons.Rounded.LockOpen,
-                                        contentDescription = if (isCaliperLocked) "解除鎖定" else "鎖定刻度",
-                                        tint = if (isCaliperLocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-
-                                // Clear Marker Button
-                                IconButton(
-                                    onClick = {
-                                        caliperY = null
-                                        isCaliperLocked = false
-                                        viewModel.triggerHapticFeedback(HapticType.CLICK)
-                                    },
-                                    modifier = Modifier.size(36.dp)
-                                ) {
-                                    Icon(Icons.Rounded.Close, contentDescription = "清除游標")
-                                }
-
-                                // Save Record Button
-                                Button(
-                                    onClick = {
-                                        viewModel.saveRulerRecord(measuredCm)
-                                    },
-                                    shape = RoundedCornerShape(12.dp),
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                                    modifier = Modifier.height(36.dp)
-                                ) {
-                                    Icon(Icons.Rounded.BookmarkAdd, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("儲存", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
-
-                        // Bottom Row: Vernier Fine-Tuning Controls (±0.1 mm steppers)
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = "卡鉗微調:",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.outline
-                            )
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                // -0.1 mm stepper
-                                OutlinedButton(
-                                    onClick = {
-                                        if (!isCaliperLocked) {
-                                            val stepPx = mmInPx * 0.1f
-                                            caliperY = ((caliperY ?: zeroY) - stepPx).coerceAtLeast(zeroY)
-                                            viewModel.triggerHapticFeedback(HapticType.CLICK)
-                                        }
-                                    },
-                                    enabled = !isCaliperLocked,
-                                    shape = RoundedCornerShape(8.dp),
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                    modifier = Modifier.height(28.dp)
-                                ) {
-                                    Text("-0.1 mm", fontSize = 11.sp, fontWeight = FontWeight.Medium)
-                                }
-
-                                // +0.1 mm stepper
-                                OutlinedButton(
-                                    onClick = {
-                                        if (!isCaliperLocked) {
-                                            val stepPx = mmInPx * 0.1f
-                                            caliperY = (caliperY ?: zeroY) + stepPx
-                                            viewModel.triggerHapticFeedback(HapticType.CLICK)
-                                        }
-                                    },
-                                    enabled = !isCaliperLocked,
-                                    shape = RoundedCornerShape(8.dp),
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                    modifier = Modifier.height(28.dp)
-                                ) {
-                                    Text("+0.1 mm", fontSize = 11.sp, fontWeight = FontWeight.Medium)
-                                }
-                            }
                         }
                     }
                 }

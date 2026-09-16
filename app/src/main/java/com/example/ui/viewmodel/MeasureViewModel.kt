@@ -93,7 +93,8 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
         // 3. Fallback to device system locale
         return try {
-            val systemLocale = app.resources.configuration.locales.get(0)
+            val locales = app.resources.configuration.locales
+            val systemLocale = if (!locales.isEmpty) locales.get(0) else Locale.getDefault()
             val matched = TranslationManager.matchLanguageCode(systemLocale.toLanguageTag())
             prefs.edit().putString("selected_language", matched).apply()
             matched
@@ -238,6 +239,9 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     private val _surfaceTypeAtCenter = MutableStateFlow("尋找空間特徵中...")
     val surfaceTypeAtCenter: StateFlow<String> = _surfaceTypeAtCenter.asStateFlow()
 
+    private val _isMeasurementAvailable = MutableStateFlow(false)
+    val isMeasurementAvailable: StateFlow<Boolean> = _isMeasurementAvailable.asStateFlow()
+
     private val _lightIntensity = MutableStateFlow(1.0f)
     val lightIntensity: StateFlow<Float> = _lightIntensity.asStateFlow()
 
@@ -246,6 +250,12 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private val _projectionMatrix = MutableStateFlow(FloatArray(16))
     val projectionMatrix: StateFlow<FloatArray> = _projectionMatrix.asStateFlow()
+
+    private val glViewMatrixBuffer = FloatArray(16)
+    private val glProjMatrixBuffer = FloatArray(16)
+    private val _liveTargetScreenPos = MutableStateFlow<androidx.compose.ui.geometry.Offset?>(null)
+    val liveTargetScreenPos: StateFlow<androidx.compose.ui.geometry.Offset?> = _liveTargetScreenPos.asStateFlow()
+    private var lastValidHitTimestampMs: Long = 0L
 
     // Screen dimensions
     var displayWidth: Int = 1080
@@ -258,9 +268,16 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         displayHeight = height
     }
 
-    // Active placed points in 3D space
+    // Active placed points in 3D space with concurrency lock
+    private val pointsLock = Any()
     val capturedPoints = mutableStateListOf<Point3D>()
     private val undoStack = mutableListOf<List<Point3D>>()
+
+    fun getCapturedPointsSnapshot(): List<Point3D> {
+        return synchronized(pointsLock) {
+            capturedPoints.toList()
+        }
+    }
 
     // Real-time live targeting preview from current reticle position
     private val _liveTargetPoint = MutableStateFlow<Point3D?>(null)
@@ -890,7 +907,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         sensorCorrectionEngine.startListening()
     }
 
-    // Ruler calibration & Vernier caliper positions
+    // Ruler calibration & physical screen scale
     private val _rulerCalibration = MutableStateFlow(prefs.getFloat("ruler_calibration", 1.0f))
     val rulerCalibration: StateFlow<Float> = _rulerCalibration.asStateFlow()
 
@@ -917,6 +934,13 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     // AR Frame Processing on GL Thread
     fun processGlFrame(frame: Frame, engine: ModernArEngine): HitTestResult? {
+        // Synchronously extract frame camera matrices to prevent any frame phase skew between 3D and 2D
+        val camera = frame.camera
+        camera.getViewMatrix(glViewMatrixBuffer, 0)
+        camera.getProjectionMatrix(glProjMatrixBuffer, 0, 0.05f, 50.0f)
+        _viewMatrix.value = glViewMatrixBuffer.clone()
+        _projectionMatrix.value = glProjMatrixBuffer.clone()
+
         // 1. Process any pending tap hit-test (creates persistent anchor only on tap)
         val tapRequest = pendingHitTestQueue.getAndSet(null)
         val isTap = tapRequest != null
@@ -929,6 +953,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         val centerHit = if (!isTap) hitResult else engine.performHitTest(frame, displayWidth / 2f, displayHeight / 2f, createAnchor = false)
 
         if (centerHit != null) {
+            lastValidHitTimestampMs = System.currentTimeMillis()
             val pose = centerHit.pose
             val rawPoint = Point3D(
                 x = pose.tx().toDouble(),
@@ -956,15 +981,22 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
             // 3. Gravity-aligned orthogonal leveling & 45/90-deg snapping
             // 兩點成一線，不共用點：只有在繪製該線段終點（capturedPoints 奇數個點）時，才對起點進行正交對齊校正
-            val isActivelyDrawingLine = capturedPoints.size % 2 == 1
-            val orthogonalAdjustedPoint = if (isActivelyDrawingLine && (_cameraSubMode.value == 0 || _cameraSubMode.value == 1)) {
-                sensorCorrectionEngine.correctOrthogonalAlignment(capturedPoints.last(), smoothedPoint)
+            val pointsSnapshot = getCapturedPointsSnapshot()
+            val isActivelyDrawingLine = pointsSnapshot.size % 2 == 1
+            val lastConfirmedPoint = pointsSnapshot.lastOrNull()
+            val orthogonalAdjustedPoint = if (isActivelyDrawingLine && lastConfirmedPoint != null && (_cameraSubMode.value == 0 || _cameraSubMode.value == 1)) {
+                sensorCorrectionEngine.correctOrthogonalAlignment(lastConfirmedPoint, smoothedPoint)
             } else {
                 smoothedPoint
             }
 
-            // 4. Magnetic Snapping check (Physical Plane Edges/Corners + Existing Vertices)
-            val snappedVertex = ArMath.findVertexSnap(orthogonalAdjustedPoint, capturedPoints, 0.07)
+            // 4. Magnetic Snapping check (Physical Plane Edges/Corners + Existing Vertices with Auto-Follow Hysteresis)
+            val snappedVertex = ArMath.findVertexSnap(
+                livePoint = orthogonalAdjustedPoint,
+                existingPoints = pointsSnapshot,
+                snapThresholdMeters = 0.075,
+                isCurrentlySnapped = _isSnapped.value
+            )
             val finalTargetPoint: Point3D
             val isFeatureSnapped = centerHit.isSnappedToFeature || (snappedVertex != null)
 
@@ -984,21 +1016,44 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             }
 
             _liveTargetPoint.value = finalTargetPoint
+            if (displayWidth > 0 && displayHeight > 0) {
+                val proj = ArMath.projectWorldToScreen(
+                    worldPoint = finalTargetPoint,
+                    viewMatrix = glViewMatrixBuffer,
+                    projectionMatrix = glProjMatrixBuffer,
+                    screenWidth = displayWidth,
+                    screenHeight = displayHeight
+                )
+                if (proj != null) {
+                    _liveTargetScreenPos.value = androidx.compose.ui.geometry.Offset(proj.first, proj.second)
+                }
+            }
+
+            if (!_isMeasurementAvailable.value) {
+                _isMeasurementAvailable.value = true
+            }
 
             // 5. Calculate live real-time distance with stability & Dual-Camera Stereo Parallax scale calibration
             // 兩點成一線：若處於線段繪製中（奇數個點），量測最後一個起點至準心即時距離；若已成線或無點，則顯示相機至表面雷達景深
-            if (isActivelyDrawingLine) {
-                val lastPoint = capturedPoints.last()
+            if (isActivelyDrawingLine && lastConfirmedPoint != null) {
                 val dist = if (_cameraSubMode.value == 2) {
-                    sensorCorrectionEngine.correctVerticalHeightWithGravity(lastPoint, finalTargetPoint)
+                    sensorCorrectionEngine.correctVerticalHeightWithGravity(lastConfirmedPoint, finalTargetPoint)
                 } else {
-                    val rawD = ArMath.distance(lastPoint, finalTargetPoint)
+                    val rawD = ArMath.distance(lastConfirmedPoint, finalTargetPoint)
                     sensorCorrectionEngine.correctDistanceWithStereoParallax(rawD)
                 }
                 _liveDistanceMeters.value = smoothLiveDistance(dist)
             } else {
                 val centerDist = sensorCorrectionEngine.correctDistanceWithStereoParallax(centerHit.distance.toDouble())
                 _liveDistanceMeters.value = smoothLiveDistance(centerDist)
+            }
+        } else {
+            // Surface tracking grace window: hold previous live target for up to 350ms during fast pan
+            val now = System.currentTimeMillis()
+            if (now - lastValidHitTimestampMs > 350L) {
+                if (_isMeasurementAvailable.value) {
+                    _isMeasurementAvailable.value = false
+                }
             }
         }
 
@@ -1024,22 +1079,26 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             } else {
                 planarP
             }
-            val isActivelyDrawingLine = capturedPoints.size % 2 == 1
-            val correctedP = if (isActivelyDrawingLine && (_cameraSubMode.value == 0 || _cameraSubMode.value == 1)) {
-                sensorCorrectionEngine.correctOrthogonalAlignment(capturedPoints.last(), baseP)
+            val pointsSnapshot = getCapturedPointsSnapshot()
+            val isActivelyDrawingLine = pointsSnapshot.size % 2 == 1
+            val lastPoint = pointsSnapshot.lastOrNull()
+            val correctedP = if (isActivelyDrawingLine && lastPoint != null && (_cameraSubMode.value == 0 || _cameraSubMode.value == 1)) {
+                sensorCorrectionEngine.correctOrthogonalAlignment(lastPoint, baseP)
             } else {
                 baseP
             }
 
-            val nextIndex = capturedPoints.size
+            val nextIndex = pointsSnapshot.size
             val lineNum = (nextIndex / 2) + 1
             val role = if (nextIndex % 2 == 0) "起點" else "終點"
             val charCode = ('A'.code + nextIndex).toChar()
             val namedP = correctedP.copy(label = "線段$lineNum $role $charCode")
 
             android.os.Handler(android.os.Looper.getMainLooper()).post {
-                saveUndoState()
-                capturedPoints.add(namedP)
+                synchronized(pointsLock) {
+                    saveUndoState()
+                    capturedPoints.add(namedP)
+                }
                 triggerHapticFeedback(if (isActivelyDrawingLine) HapticType.HEAVY else HapticType.CLICK)
                 if (isActivelyDrawingLine) {
                     _toastMessage.tryEmit("線段 $lineNum 完成（兩點成一線）")
@@ -1058,14 +1117,12 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     private fun smoothLiveDistance(targetDist: Double): Double {
         val prev = _liveDistanceMeters.value ?: return targetDist
         val diff = abs(targetDist - prev)
-        // Deadband: within 4mm, completely hold previous distance to prevent digit flickering
-        if (diff < 0.004) return prev
-        val alpha = when {
-            diff < 0.02 -> 0.08 // Micro flutter: strong dampening
-            diff < 0.08 -> 0.20 // Minor change: smooth ease
-            diff < 0.30 -> 0.50 // Moderate shift
-            else -> 1.0         // Big move: immediate
-        }
+        // Deadband: within 3.5mm, completely hold previous distance to prevent digit flickering
+        if (diff < 0.0035) return prev
+        // Continuous Rational Sigmoid Curve: seamless transition from micro-ease (0.08) to fast (1.0)
+        val d0 = 0.06 // 6cm characteristic distance
+        val dSq = diff * diff
+        val alpha = (0.08 + (0.92 * (dSq / (dSq + d0 * d0)))).coerceIn(0.06, 1.0)
         return prev * (1.0 - alpha) + targetDist * alpha
     }
 
@@ -1151,11 +1208,11 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     init {
-        // Start Fallback Sensor-Driven Spatial Engine when ARCore GL frames are inactive
+        // Start Fallback Sensor-Driven Spatial Engine only when ARCore is unsupported / no active session
         viewModelScope.launch {
             while (true) {
-                kotlinx.coroutines.delay(33) // ~30 FPS fallback updater
-                if (modernArEngine.session == null || _arTrackingState.value != TrackingState.TRACKING) {
+                kotlinx.coroutines.delay(40) // ~25 FPS fallback updater
+                if (modernArEngine.session == null) {
                     updateFallbackSpatialFrame()
                 }
             }
@@ -1233,8 +1290,10 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             val charCode = ('A'.code + nextIndex).toChar()
             val namedP = target.copy(label = "線段$lineNum $role $charCode")
 
-            saveUndoState()
-            capturedPoints.add(namedP)
+            synchronized(pointsLock) {
+                saveUndoState()
+                capturedPoints.add(namedP)
+            }
             triggerHapticFeedback(if (isActivelyDrawingLine) HapticType.HEAVY else HapticType.CLICK)
             if (isActivelyDrawingLine) {
                 _toastMessage.tryEmit("線段 $lineNum 完成（兩點成一線）")
@@ -1251,23 +1310,27 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun undo() {
-        if (undoStack.isNotEmpty()) {
-            val previous = undoStack.removeAt(undoStack.size - 1)
-            capturedPoints.clear()
-            capturedPoints.addAll(previous)
-            triggerHapticFeedback()
-            updateAutoDetectedGeometry()
-        } else if (capturedPoints.isNotEmpty()) {
-            capturedPoints.removeAt(capturedPoints.size - 1)
-            triggerHapticFeedback()
-            updateAutoDetectedGeometry()
+        synchronized(pointsLock) {
+            if (undoStack.isNotEmpty()) {
+                val previous = undoStack.removeAt(undoStack.size - 1)
+                capturedPoints.clear()
+                capturedPoints.addAll(previous)
+                triggerHapticFeedback()
+                updateAutoDetectedGeometry()
+            } else if (capturedPoints.isNotEmpty()) {
+                capturedPoints.removeAt(capturedPoints.size - 1)
+                triggerHapticFeedback()
+                updateAutoDetectedGeometry()
+            }
         }
     }
 
     fun clearActivePoints() {
-        saveUndoState()
-        capturedPoints.forEach { it.anchor?.detach() }
-        capturedPoints.clear()
+        synchronized(pointsLock) {
+            saveUndoState()
+            capturedPoints.forEach { it.anchor?.detach() }
+            capturedPoints.clear()
+        }
         _liveDistanceMeters.value = null
         _autoDetectedType.value = "DISTANCE"
         if (_isObjectronMode.value) {
@@ -1277,8 +1340,10 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun updatePointLabel(index: Int, newLabel: String) {
-        if (index in capturedPoints.indices) {
-            capturedPoints[index] = capturedPoints[index].copy(label = newLabel)
+        synchronized(pointsLock) {
+            if (index in capturedPoints.indices) {
+                capturedPoints[index] = capturedPoints[index].copy(label = newLabel)
+            }
         }
     }
 

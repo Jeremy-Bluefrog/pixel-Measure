@@ -238,6 +238,7 @@ class ArVideoRecorder(private val context: Context) {
 
         var muxer: MediaMuxer? = null
         var encoder: MediaCodec? = null
+        var muxerStarted = false
 
         try {
             val mimeTypesToTry = listOf("video/av01", "video/hevc", "video/avc")
@@ -273,7 +274,7 @@ class ArVideoRecorder(private val context: Context) {
 
             muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             var trackIndex = -1
-            var muxerStarted = false
+            muxerStarted = false
 
             val bufferInfo = MediaCodec.BufferInfo()
             val frameDurationUs = (1_000_000L / 10L) // 10 FPS
@@ -293,32 +294,38 @@ class ArVideoRecorder(private val context: Context) {
                 val inputIndex = encoder!!.dequeueInputBuffer(10000)
                 if (inputIndex >= 0) {
                     val inputBuffer = encoder.getInputBuffer(inputIndex)
-                    inputBuffer?.clear()
-                    inputBuffer?.put(yuvBytes)
-                    encoder.queueInputBuffer(inputIndex, 0, yuvBytes.size, presentationTimeUs, 0)
-                    presentationTimeUs += frameDurationUs
+                    if (inputBuffer != null) {
+                        inputBuffer.clear()
+                        val bytesToPut = minOf(yuvBytes.size, inputBuffer.remaining())
+                        inputBuffer.put(yuvBytes, 0, bytesToPut)
+                        encoder.queueInputBuffer(inputIndex, 0, bytesToPut, presentationTimeUs, 0)
+                        presentationTimeUs += frameDurationUs
+                    }
                 }
 
                 var outputIndex = encoder.dequeueOutputBuffer(bufferInfo, 10000)
-                while (outputIndex >= 0) {
-                    val outputBuffer = encoder.getOutputBuffer(outputIndex)
-                    if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
-                        bufferInfo.size = 0
-                    }
-
-                    if (bufferInfo.size > 0) {
+                while (outputIndex >= 0 || outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                         if (!muxerStarted) {
                             val newFormat = encoder.outputFormat
                             trackIndex = muxer.addTrack(newFormat)
                             muxer.start()
                             muxerStarted = true
                         }
-                        outputBuffer?.position(bufferInfo.offset)
-                        outputBuffer?.limit(bufferInfo.offset + bufferInfo.size)
-                        muxer.writeSampleData(trackIndex, outputBuffer!!, bufferInfo)
-                    }
+                    } else if (outputIndex >= 0) {
+                        val outputBuffer = encoder.getOutputBuffer(outputIndex)
+                        if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                            bufferInfo.size = 0
+                        }
 
-                    encoder.releaseOutputBuffer(outputIndex, false)
+                        if (bufferInfo.size > 0 && muxerStarted && outputBuffer != null) {
+                            outputBuffer.position(bufferInfo.offset)
+                            outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
+                            muxer.writeSampleData(trackIndex, outputBuffer, bufferInfo)
+                        }
+
+                        encoder.releaseOutputBuffer(outputIndex, false)
+                    }
                     outputIndex = encoder.dequeueOutputBuffer(bufferInfo, 0)
                 }
             }
@@ -330,16 +337,25 @@ class ArVideoRecorder(private val context: Context) {
             }
 
             var outputIndex = encoder.dequeueOutputBuffer(bufferInfo, 10000)
-            while (outputIndex >= 0) {
-                val outputBuffer = encoder.getOutputBuffer(outputIndex)
-                if (bufferInfo.size > 0 && muxerStarted) {
-                    outputBuffer?.position(bufferInfo.offset)
-                    outputBuffer?.limit(bufferInfo.offset + bufferInfo.size)
-                    muxer.writeSampleData(trackIndex, outputBuffer!!, bufferInfo)
-                }
-                encoder.releaseOutputBuffer(outputIndex, false)
-                if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                    break
+            while (outputIndex >= 0 || outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    if (!muxerStarted) {
+                        val newFormat = encoder.outputFormat
+                        trackIndex = muxer.addTrack(newFormat)
+                        muxer.start()
+                        muxerStarted = true
+                    }
+                } else if (outputIndex >= 0) {
+                    val outputBuffer = encoder.getOutputBuffer(outputIndex)
+                    if (bufferInfo.size > 0 && muxerStarted && outputBuffer != null) {
+                        outputBuffer.position(bufferInfo.offset)
+                        outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
+                        muxer.writeSampleData(trackIndex, outputBuffer, bufferInfo)
+                    }
+                    encoder.releaseOutputBuffer(outputIndex, false)
+                    if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                        break
+                    }
                 }
                 outputIndex = encoder.dequeueOutputBuffer(bufferInfo, 0)
             }
@@ -349,14 +365,18 @@ class ArVideoRecorder(private val context: Context) {
         } finally {
             try {
                 encoder?.stop()
+            } catch (e: Exception) {}
+            try {
                 encoder?.release()
-                if (muxer != null) {
+            } catch (e: Exception) {}
+            try {
+                if (muxer != null && muxerStarted) {
                     muxer.stop()
-                    muxer.release()
                 }
-            } catch (e: Exception) {
-                // Ignore cleanup errors
-            }
+            } catch (e: Exception) {}
+            try {
+                muxer?.release()
+            } catch (e: Exception) {}
             synchronized(capturedFrameBitmaps) {
                 capturedFrameBitmaps.forEach { bm ->
                     if (!bm.isRecycled) {

@@ -262,7 +262,14 @@ class ModernArEngine(private val context: Context) {
         }
     }
 
+    var viewportWidth: Int = 1080
+        private set
+    var viewportHeight: Int = 2400
+        private set
+
     fun setDisplayGeometry(rotation: Int, width: Int, height: Int) {
+        viewportWidth = width
+        viewportHeight = height
         session?.setDisplayGeometry(rotation, width, height)
     }
 
@@ -341,83 +348,90 @@ class ModernArEngine(private val context: Context) {
                 )
             }
 
-            if (validHits.isEmpty()) return null
+            if (validHits.isNotEmpty()) {
+                // Tier 2: Plane estimated (outside current polygon)
+                val planeHit = validHits.firstOrNull { hit ->
+                    val trackable = hit.trackable
+                    trackable is Plane && trackable.trackingState == TrackingState.TRACKING
+                }
+                if (planeHit != null) {
+                    val plane = planeHit.trackable as Plane
+                    val edgeSnap = findPlaneEdgeOrVertexSnap(plane, planeHit.hitPose, snapRadiusMeters = 0.08f)
+                    val finalPose = edgeSnap?.first ?: planeHit.hitPose
+                    val isSnapped = edgeSnap?.second ?: false
 
-            // Tier 2: Plane estimated (outside current polygon)
-            val planeHit = validHits.firstOrNull { hit ->
-                val trackable = hit.trackable
-                trackable is Plane && trackable.trackingState == TrackingState.TRACKING
-            }
-            if (planeHit != null) {
-                val plane = planeHit.trackable as Plane
-                val edgeSnap = findPlaneEdgeOrVertexSnap(plane, planeHit.hitPose, snapRadiusMeters = 0.08f)
-                val finalPose = edgeSnap?.first ?: planeHit.hitPose
-                val isSnapped = edgeSnap?.second ?: false
+                    val anchor = if (createAnchor) {
+                        try {
+                            plane.createAnchor(finalPose)
+                        } catch (e: Exception) {
+                            try { planeHit.createAnchor() } catch (e2: Exception) { null }
+                        }
+                    } else null
+                    return HitTestResult(
+                        pose = finalPose,
+                        anchor = anchor,
+                        hitType = HitType.PLANE_ESTIMATED,
+                        distance = planeHit.distance,
+                        planeType = plane.type,
+                        isSnappedToFeature = isSnapped
+                    )
+                }
 
-                val anchor = if (createAnchor) {
-                    try {
-                        plane.createAnchor(finalPose)
-                    } catch (e: Exception) {
-                        try { planeHit.createAnchor() } catch (e2: Exception) { null }
-                    }
-                } else null
-                return HitTestResult(
-                    pose = finalPose,
-                    anchor = anchor,
-                    hitType = HitType.PLANE_ESTIMATED,
-                    distance = planeHit.distance,
-                    planeType = plane.type,
-                    isSnappedToFeature = isSnapped
-                )
+                // Tier 3: Depth Point (from Depth API)
+                val depthHit = validHits.firstOrNull { hit ->
+                    val trackable = hit.trackable
+                    trackable is com.google.ar.core.Point && trackable.orientationMode == com.google.ar.core.Point.OrientationMode.ESTIMATED_SURFACE_NORMAL
+                }
+                if (depthHit != null) {
+                    val anchor = if (createAnchor) {
+                        try { depthHit.createAnchor() } catch (e: Exception) { null }
+                    } else null
+                    return HitTestResult(
+                        pose = depthHit.hitPose,
+                        anchor = anchor,
+                        hitType = HitType.DEPTH_POINT,
+                        distance = depthHit.distance,
+                        planeType = null
+                    )
+                }
+
+                // Tier 4: Instant Placement Point
+                val instantHit = validHits.firstOrNull { it.trackable is InstantPlacementPoint }
+                if (instantHit != null) {
+                    val anchor = if (createAnchor) {
+                        try { instantHit.createAnchor() } catch (e: Exception) { null }
+                    } else null
+                    return HitTestResult(
+                        pose = instantHit.hitPose,
+                        anchor = anchor,
+                        hitType = HitType.INSTANT_PLACEMENT,
+                        distance = instantHit.distance,
+                        planeType = null
+                    )
+                }
+
+                // Tier 5: PointCloud feature point
+                val featurePointHit = validHits.firstOrNull { it.trackable is com.google.ar.core.Point }
+                if (featurePointHit != null) {
+                    val anchor = if (createAnchor) {
+                        try { featurePointHit.createAnchor() } catch (e: Exception) { null }
+                    } else null
+                    return HitTestResult(
+                        pose = featurePointHit.hitPose,
+                        anchor = anchor,
+                        hitType = HitType.FEATURE_POINT,
+                        distance = featurePointHit.distance,
+                        planeType = null,
+                        isSnappedToFeature = true
+                    )
+                }
             }
 
-            // Tier 3: Depth Point (from Depth API)
-            val depthHit = validHits.firstOrNull { hit ->
-                val trackable = hit.trackable
-                trackable is com.google.ar.core.Point && trackable.orientationMode == com.google.ar.core.Point.OrientationMode.ESTIMATED_SURFACE_NORMAL
-            }
-            if (depthHit != null) {
-                val anchor = if (createAnchor) {
-                    try { depthHit.createAnchor() } catch (e: Exception) { null }
-                } else null
-                return HitTestResult(
-                    pose = depthHit.hitPose,
-                    anchor = anchor,
-                    hitType = HitType.DEPTH_POINT,
-                    distance = depthHit.distance,
-                    planeType = null
-                )
-            }
-
-            // Tier 4: Instant Placement Point
-            val instantHit = validHits.firstOrNull { it.trackable is InstantPlacementPoint }
-            if (instantHit != null) {
-                val anchor = if (createAnchor) {
-                    try { instantHit.createAnchor() } catch (e: Exception) { null }
-                } else null
-                return HitTestResult(
-                    pose = instantHit.hitPose,
-                    anchor = anchor,
-                    hitType = HitType.INSTANT_PLACEMENT,
-                    distance = instantHit.distance,
-                    planeType = null
-                )
-            }
-
-            // Tier 5: PointCloud feature point
-            val featurePointHit = validHits.firstOrNull { it.trackable is com.google.ar.core.Point }
-            if (featurePointHit != null) {
-                val anchor = if (createAnchor) {
-                    try { featurePointHit.createAnchor() } catch (e: Exception) { null }
-                } else null
-                return HitTestResult(
-                    pose = featurePointHit.hitPose,
-                    anchor = anchor,
-                    hitType = HitType.FEATURE_POINT,
-                    distance = featurePointHit.distance,
-                    planeType = null,
-                    isSnappedToFeature = true
-                )
+            // Tier 6: Mathematical Ray-Plane Surface Extrapolation (Auto-Follow Surface Continuity)
+            // Seamlessly bridges gaps across walls, tables, and floors even when raw feature hits are empty
+            val raycastPlaneHit = performPlaneRaycastIntersection(frame, x, y, createAnchor)
+            if (raycastPlaneHit != null) {
+                return raycastPlaneHit
             }
 
         } catch (e: Exception) {
@@ -427,10 +441,122 @@ class ModernArEngine(private val context: Context) {
     }
 
     /**
-     * Magnetically snap hit pose to nearest detected plane polygon vertex (corner)
-     * or boundary edge segment (wall lines, tile seams, door frames, table borders).
+     * Tier 6: Mathematical Ray-Plane Surface Extrapolation.
+     * When moving across surfaces beyond immediate detected polygons,
+     * this raycasts from the camera onto the nearest active tracking Plane's surface.
      */
-    fun findPlaneEdgeOrVertexSnap(plane: Plane, hitPose: Pose, snapRadiusMeters: Float = 0.08f): Pair<Pose, Boolean>? {
+    private fun performPlaneRaycastIntersection(frame: Frame, x: Float, y: Float, createAnchor: Boolean): HitTestResult? {
+        val currentSession = session ?: return null
+        val planes = currentSession.getAllTrackables(Plane::class.java)
+        val trackingPlanes = planes.filter { it.trackingState == TrackingState.TRACKING && it.subsumedBy == null }
+        if (trackingPlanes.isEmpty()) return null
+
+        val camera = frame.camera
+        val cameraPose = camera.pose
+        val camX = cameraPose.tx()
+        val camY = cameraPose.ty()
+        val camZ = cameraPose.tz()
+
+        // Unproject screen pixel (x, y) to camera space ray direction
+        val rayCamX: Float
+        val rayCamY: Float
+        val rayCamZ = -1.0f
+        if (viewportWidth > 0 && viewportHeight > 0) {
+            camera.getProjectionMatrix(reusablePMatrix, 0, 0.1f, 100f)
+            val p00 = reusablePMatrix[0]
+            val p11 = reusablePMatrix[5]
+            if (kotlin.math.abs(p00) > 1e-4f && kotlin.math.abs(p11) > 1e-4f) {
+                val ndcX = (2.0f * x / viewportWidth.toFloat()) - 1.0f
+                val ndcY = 1.0f - (2.0f * y / viewportHeight.toFloat())
+                rayCamX = ndcX / p00
+                rayCamY = ndcY / p11
+            } else {
+                rayCamX = 0f
+                rayCamY = 0f
+            }
+        } else {
+            rayCamX = 0f
+            rayCamY = 0f
+        }
+
+        // Transform ray from camera space to world space
+        val forward = cameraPose.transformPoint(floatArrayOf(rayCamX, rayCamY, rayCamZ))
+        val rayDirX = forward[0] - camX
+        val rayDirY = forward[1] - camY
+        val rayDirZ = forward[2] - camZ
+        val rLen = kotlin.math.sqrt(rayDirX * rayDirX + rayDirY * rayDirY + rayDirZ * rayDirZ)
+        if (rLen < 1e-5f) return null
+        val rNormX = rayDirX / rLen
+        val rNormY = rayDirY / rLen
+        val rNormZ = rayDirZ / rLen
+
+        var bestT = Float.MAX_VALUE
+        var bestPlane: Plane? = null
+        var bestHitX = 0f
+        var bestHitY = 0f
+        var bestHitZ = 0f
+
+        for (plane in trackingPlanes) {
+            val cPose = plane.centerPose
+            val px = cPose.tx()
+            val py = cPose.ty()
+            val pz = cPose.tz()
+
+            // Plane normal in world space (y-axis of center pose)
+            val up = cPose.transformPoint(floatArrayOf(0f, 1f, 0f))
+            val nx = up[0] - px
+            val ny = up[1] - py
+            val nz = up[2] - pz
+
+            val denom = rNormX * nx + rNormY * ny + rNormZ * nz
+            // Must not be parallel to ray
+            if (kotlin.math.abs(denom) > 0.05f) {
+                val t = ((px - camX) * nx + (py - camY) * ny + (pz - camZ) * nz) / denom
+                if (t in 0.15f..18.0f && t < bestT) {
+                    bestT = t
+                    bestPlane = plane
+                    bestHitX = camX + t * rNormX
+                    bestHitY = camY + t * rNormY
+                    bestHitZ = camZ + t * rNormZ
+                }
+            }
+        }
+
+        if (bestPlane != null && bestT < 18.0f) {
+            val hitPose = Pose(floatArrayOf(bestHitX, bestHitY, bestHitZ), bestPlane.centerPose.rotationQuaternion)
+            val edgeSnap = findPlaneEdgeOrVertexSnap(bestPlane, hitPose, snapRadiusMeters = 0.08f)
+            val finalPose = edgeSnap?.first ?: hitPose
+            val isSnapped = edgeSnap?.second ?: false
+
+            val anchor = if (createAnchor) {
+                try {
+                    bestPlane.createAnchor(finalPose)
+                } catch (e: Exception) { null }
+            } else null
+
+            return HitTestResult(
+                pose = finalPose,
+                anchor = anchor,
+                hitType = HitType.PLANE_ESTIMATED,
+                distance = bestT,
+                planeType = bestPlane.type,
+                isSnappedToFeature = isSnapped
+            )
+        }
+        return null
+    }
+
+    /**
+     * Magnetically snap and auto-follow nearest detected plane polygon vertex (corner)
+     * or boundary edge segment (wall lines, tile seams, door frames, table borders)
+     * with soft-magnetic potential well attraction and hysteresis.
+     */
+    fun findPlaneEdgeOrVertexSnap(
+        plane: Plane,
+        hitPose: Pose,
+        snapRadiusMeters: Float = 0.08f,
+        isCurrentlySnapped: Boolean = false
+    ): Pair<Pose, Boolean>? {
         try {
             val poly = plane.polygon ?: return null
             val count = poly.remaining() / 2
@@ -440,7 +566,8 @@ class ModernArEngine(private val context: Context) {
             val hx = localHit[0]
             val hz = localHit[2]
 
-            var bestDist = snapRadiusMeters
+            val effectiveSnapRadius = if (isCurrentlySnapped) snapRadiusMeters * 1.6f else snapRadiusMeters
+            var bestDist = effectiveSnapRadius
             var snapX = hx
             var snapZ = hz
             var didSnap = false
@@ -470,7 +597,7 @@ class ModernArEngine(private val context: Context) {
                     val px = x1 + t * edx
                     val pz = z1 + t * edz
                     val segDist = kotlin.math.sqrt((hx - px) * (hx - px) + (hz - pz) * (hz - pz))
-                    if (segDist < bestDist && segDist < snapRadiusMeters * 0.75f) {
+                    if (segDist < bestDist && segDist < effectiveSnapRadius * 0.75f) {
                         bestDist = segDist
                         snapX = px
                         snapZ = pz
@@ -480,7 +607,21 @@ class ModernArEngine(private val context: Context) {
             }
 
             if (didSnap) {
-                val worldSnap = plane.centerPose.transformPoint(floatArrayOf(snapX, 0f, snapZ))
+                // Apply soft magnetic pull curve if between inner lock and outer release
+                val innerLockRadius = 0.035f
+                val finalSnapX: Float
+                val finalSnapZ: Float
+                if (bestDist <= innerLockRadius || isCurrentlySnapped) {
+                    finalSnapX = snapX
+                    finalSnapZ = snapZ
+                } else {
+                    val t = ((bestDist - innerLockRadius) / (effectiveSnapRadius - innerLockRadius)).coerceIn(0f, 1f)
+                    val pull = 1f - (t * t * (3f - 2f * t)) // cubic smoothstep
+                    finalSnapX = hx * (1f - pull) + snapX * pull
+                    finalSnapZ = hz * (1f - pull) + snapZ * pull
+                }
+
+                val worldSnap = plane.centerPose.transformPoint(floatArrayOf(finalSnapX, 0f, finalSnapZ))
                 val snappedPose = Pose(floatArrayOf(worldSnap[0], worldSnap[1], worldSnap[2]), hitPose.rotationQuaternion)
                 return Pair(snappedPose, true)
             }
@@ -490,15 +631,19 @@ class ModernArEngine(private val context: Context) {
         return null
     }
 
+    private val reusableVMatrix = FloatArray(16)
+    private val reusablePMatrix = FloatArray(16)
+    private var cachedFeaturePointsCount = 0
+
     /**
      * Extract frame data matrices and state safely on GL thread with zero allocations.
      */
     fun extractFrameData(frame: Frame, centerHitResult: HitTestResult? = null): ModernArFrame {
         val camera = frame.camera
-        val vMatrix = FloatArray(16)
-        val pMatrix = FloatArray(16)
-        camera.getViewMatrix(vMatrix, 0)
-        camera.getProjectionMatrix(pMatrix, 0, 0.05f, 50.0f)
+        camera.getViewMatrix(reusableVMatrix, 0)
+        camera.getProjectionMatrix(reusablePMatrix, 0, 0.05f, 50.0f)
+        val vMatrix = reusableVMatrix.clone()
+        val pMatrix = reusablePMatrix.clone()
 
         frameCounter++
 
@@ -557,16 +702,19 @@ class ModernArEngine(private val context: Context) {
             else -> if (isDepthModeActive) "深度表面" else "空間特徵點"
         }
 
-        // 1. Feature points count from PointCloud
-        val ptCloud = try { frame.acquirePointCloud() } catch (e: Throwable) { null }
-        val featurePointsCount = try {
-            val buf = ptCloud?.points
-            if (buf != null) buf.remaining() / 4 else 0
-        } catch (e: Throwable) {
-            0
-        } finally {
-            try { ptCloud?.release() } catch (e: Throwable) {}
+        // 1. Feature points count from PointCloud (throttled every 10 frames to avoid native allocation overhead)
+        if (frameCounter % 10 == 0 || cachedFeaturePointsCount == 0) {
+            val ptCloud = try { frame.acquirePointCloud() } catch (e: Throwable) { null }
+            cachedFeaturePointsCount = try {
+                val buf = ptCloud?.points
+                if (buf != null) buf.remaining() / 4 else 0
+            } catch (e: Throwable) {
+                0
+            } finally {
+                try { ptCloud?.release() } catch (e: Throwable) {}
+            }
         }
+        val featurePointsCount = cachedFeaturePointsCount
 
         // 2. Camera panning velocity estimation (m/s)
         val nowNs = frame.timestamp

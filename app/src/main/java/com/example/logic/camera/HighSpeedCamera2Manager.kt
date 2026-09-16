@@ -341,9 +341,9 @@ class HighSpeedCamera2Manager(private val context: Context) {
 
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
                 val outputConfig = android.hardware.camera2.params.OutputConfiguration(surface)
-                val executor = backgroundHandler?.looper?.let {
-                    java.util.concurrent.Executors.newSingleThreadExecutor()
-                } ?: java.util.concurrent.Executors.newSingleThreadExecutor()
+                val executor = java.util.concurrent.Executor { command ->
+                    backgroundHandler?.post(command) ?: command.run()
+                }
                 val sessionConfig = android.hardware.camera2.params.SessionConfiguration(
                     android.hardware.camera2.params.SessionConfiguration.SESSION_REGULAR,
                     listOf(outputConfig),
