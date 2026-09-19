@@ -41,8 +41,9 @@ enum class BlurDirection {
 /**
  * AGSL Progressive Blur Shader (Android 13+ / API 33+)
  *
- * Employs a multi-tap 2D Gaussian kernel with progressive radius modulation
- * governed by a non-linear cubic optical falloff curve.
+ * Employs a high-fidelity 16-tap Golden Spiral Poisson-disc kernel with
+ * cubic-Hermite optical falloff curve. Delivers authentic physical bokeh
+ * blur with zero directional banding or axis-aligned artifacts.
  */
 private const val PROGRESSIVE_BLUR_AGSL = """
     uniform shader content;
@@ -66,37 +67,25 @@ private const val PROGRESSIVE_BLUR_AGSL = """
         float factor = progress * progress * (3.0 - 2.0 * progress);
         float effectiveRadius = maxRadius * factor;
 
-        if (effectiveRadius <= 0.5) {
+        if (effectiveRadius <= 0.4) {
             return content.eval(fragCoord);
         }
 
-        half4 sum = content.eval(fragCoord) * 0.227027;
-        float total = 0.227027;
+        half4 sum = content.eval(fragCoord) * 0.18;
+        float total = 0.18;
 
-        // 4-ring distributed kernel with variable progressive radius
-        float d1 = effectiveRadius * 0.35;
-        half4 tap1 = content.eval(fragCoord + float2(0.0, d1)) + content.eval(fragCoord - float2(0.0, d1)) +
-                     content.eval(fragCoord + float2(d1, 0.0)) + content.eval(fragCoord - float2(d1, 0.0));
-        sum += tap1 * 0.1945946;
-        total += 0.1945946 * 4.0;
-
-        float d2 = effectiveRadius * 0.70;
-        half4 tap2 = content.eval(fragCoord + float2(0.0, d2)) + content.eval(fragCoord - float2(0.0, d2)) +
-                     content.eval(fragCoord + float2(d2, 0.0)) + content.eval(fragCoord - float2(d2, 0.0));
-        sum += tap2 * 0.1216216;
-        total += 0.1216216 * 4.0;
-
-        float d3 = effectiveRadius * 1.05;
-        half4 tap3 = content.eval(fragCoord + float2(0.0, d3)) + content.eval(fragCoord - float2(0.0, d3)) +
-                     content.eval(fragCoord + float2(d3, 0.0)) + content.eval(fragCoord - float2(d3, 0.0));
-        sum += tap3 * 0.054054;
-        total += 0.054054 * 4.0;
-
-        float d4 = effectiveRadius * 1.40;
-        half4 tap4 = content.eval(fragCoord + float2(0.0, d4)) + content.eval(fragCoord - float2(0.0, d4)) +
-                     content.eval(fragCoord + float2(d4, 0.0)) + content.eval(fragCoord - float2(d4, 0.0));
-        sum += tap4 * 0.016216;
-        total += 0.016216 * 4.0;
+        // 16-tap Golden Spiral Poisson-disc kernel for isotropic, cinematic bokeh
+        const float GOLDEN_ANGLE = 2.39996323; // Golden angle in radians
+        for (int i = 1; i <= 16; i++) {
+            float fi = float(i);
+            float r = sqrt(fi / 16.0) * effectiveRadius;
+            float theta = fi * GOLDEN_ANGLE;
+            float2 offset = float2(cos(theta), sin(theta)) * r;
+            float2 tapCoord = clamp(fragCoord + offset, float2(0.0), size);
+            float weight = exp(-0.5 * (r * r) / (effectiveRadius * effectiveRadius * 0.45 + 0.001));
+            sum += content.eval(tapCoord) * weight;
+            total += weight;
+        }
 
         return sum / total;
     }
@@ -113,7 +102,7 @@ fun EnableWindowBlur(blurRadiusDp: Int = 40) {
     val density = LocalDensity.current
     val radiusPx = with(density) { blurRadiusDp.dp.roundToPx() }
 
-    DisposableEffect(view) {
+    DisposableEffect(view, radiusPx) {
         var parent = view.parent
         var targetWindow: Window? = null
         while (parent != null) {
@@ -137,7 +126,18 @@ fun EnableWindowBlur(blurRadiusDp: Int = 40) {
                 android.util.Log.w("WindowBlur", "Hardware Window Blur failed: ${e.message}")
             }
         }
-        onDispose { }
+        onDispose {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && targetWindow != null) {
+                try {
+                    // Cleanly reset blur behind radius when dialog or sheet is dismissed
+                    targetWindow.attributes = targetWindow.attributes.apply {
+                        blurBehindRadius = 0
+                    }
+                } catch (e: Throwable) {
+                    // Ignore on disposal
+                }
+            }
+        }
     }
 }
 
@@ -248,8 +248,10 @@ fun GradientBlurTopBar(
     val stops = remember(baseColor) {
         listOf(
             0.00f to baseColor,
-            0.60f to baseColor.copy(alpha = baseColor.alpha * 0.88f),
-            0.85f to baseColor.copy(alpha = baseColor.alpha * 0.40f),
+            0.45f to baseColor.copy(alpha = baseColor.alpha * 0.92f),
+            0.70f to baseColor.copy(alpha = baseColor.alpha * 0.65f),
+            0.85f to baseColor.copy(alpha = baseColor.alpha * 0.32f),
+            0.94f to baseColor.copy(alpha = baseColor.alpha * 0.08f),
             1.00f to Color.Transparent
         )
     }
@@ -278,8 +280,10 @@ fun GradientBlurBottomBar(
     val stops = remember(baseColor) {
         listOf(
             0.00f to Color.Transparent,
-            0.15f to baseColor.copy(alpha = baseColor.alpha * 0.40f),
-            0.40f to baseColor.copy(alpha = baseColor.alpha * 0.88f),
+            0.06f to baseColor.copy(alpha = baseColor.alpha * 0.08f),
+            0.15f to baseColor.copy(alpha = baseColor.alpha * 0.32f),
+            0.30f to baseColor.copy(alpha = baseColor.alpha * 0.65f),
+            0.55f to baseColor.copy(alpha = baseColor.alpha * 0.92f),
             1.00f to baseColor
         )
     }
@@ -306,8 +310,9 @@ fun GradientBlurBottomBar(
  * Elegant Frosted Glass Camera Scrim:
  * Provides a modern translucent HUD backdrop (deep slate glass gradient)
  * that ensures 100% legibility for the status bar, buttons, and badges over any camera scene.
- * Uses progressive blur (AGSL/RenderEffect) coupled with an optical 7-stop cubic easing
- * gradient and a specular light boundary edge to achieve authentic progressive blur glassmorphism.
+ * Uses progressive blur (AGSL Golden Spiral Poisson / RenderEffect) coupled with an optical
+ * 8-stop smoothstep gradient and a subtle specular light boundary edge to achieve authentic
+ * progressive blur glassmorphism without harsh banding.
  */
 @Composable
 fun GradientBlurScrim(
@@ -316,27 +321,29 @@ fun GradientBlurScrim(
     baseColor: Color = Color(0xFF0F172A),
     blurRadius: Dp = 24.dp
 ) {
-    // 7-stop non-linear progressive easing gradient (cubic optical curve)
+    // 8-stop non-linear progressive easing gradient (cubic-Hermite optical curve)
     val progressiveStops = remember(isTop, baseColor) {
         if (isTop) {
             listOf(
-                0.00f to baseColor.copy(alpha = 0.90f),
-                0.20f to baseColor.copy(alpha = 0.82f),
-                0.40f to baseColor.copy(alpha = 0.62f),
-                0.60f to baseColor.copy(alpha = 0.40f),
-                0.78f to baseColor.copy(alpha = 0.20f),
-                0.90f to baseColor.copy(alpha = 0.08f),
+                0.00f to baseColor.copy(alpha = 0.85f),
+                0.15f to baseColor.copy(alpha = 0.76f),
+                0.35f to baseColor.copy(alpha = 0.58f),
+                0.55f to baseColor.copy(alpha = 0.36f),
+                0.72f to baseColor.copy(alpha = 0.18f),
+                0.86f to baseColor.copy(alpha = 0.06f),
+                0.95f to baseColor.copy(alpha = 0.015f),
                 1.00f to Color.Transparent
             )
         } else {
             listOf(
                 0.00f to Color.Transparent,
-                0.10f to baseColor.copy(alpha = 0.08f),
-                0.22f to baseColor.copy(alpha = 0.20f),
-                0.40f to baseColor.copy(alpha = 0.40f),
-                0.60f to baseColor.copy(alpha = 0.62f),
-                0.80f to baseColor.copy(alpha = 0.82f),
-                1.00f to baseColor.copy(alpha = 0.92f)
+                0.05f to baseColor.copy(alpha = 0.015f),
+                0.14f to baseColor.copy(alpha = 0.06f),
+                0.28f to baseColor.copy(alpha = 0.18f),
+                0.45f to baseColor.copy(alpha = 0.36f),
+                0.65f to baseColor.copy(alpha = 0.58f),
+                0.85f to baseColor.copy(alpha = 0.76f),
+                1.00f to baseColor.copy(alpha = 0.88f)
             )
         }
     }
@@ -345,11 +352,11 @@ fun GradientBlurScrim(
         if (isTop) {
             Brush.verticalGradient(
                 0.88f to Color.Transparent,
-                1.00f to Color.White.copy(alpha = 0.14f)
+                1.00f to Color.White.copy(alpha = 0.12f)
             )
         } else {
             Brush.verticalGradient(
-                0.00f to Color.White.copy(alpha = 0.14f),
+                0.00f to Color.White.copy(alpha = 0.12f),
                 0.12f to Color.Transparent
             )
         }

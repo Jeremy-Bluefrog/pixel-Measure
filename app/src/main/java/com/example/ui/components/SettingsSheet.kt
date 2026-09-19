@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -19,8 +20,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -30,6 +34,12 @@ import com.example.logic.ShareUtility
 import com.example.logic.TranslationManager
 import com.example.ui.viewmodel.MeasureViewModel
 
+/**
+ * Material Design 3 Expressive Settings Modal Bottom Sheet:
+ * Adheres strictly to M3 guidelines featuring canonical container roles (surfaceContainerLow / surfaceContainer),
+ * SingleChoiceSegmentedButtonRow, M3 ListItems with inset dividers, animated Switch thumb icons,
+ * high-contrast category markers, and comprehensive accessibility touch targets (min 48dp).
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsSheet(
@@ -37,11 +47,10 @@ fun SettingsSheet(
     onDismissRequest: () -> Unit
 ) {
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var showClearRecordsConfirmDialog by remember { mutableStateOf(false) }
-    var showLanguageSelectionDialog by remember { mutableStateOf(false) }
 
-    val currentLang by viewModel.currentLanguage.collectAsState()
     val vibrateOnAlign by viewModel.vibrateOnAlignment.collectAsState()
     val showPointCloud by viewModel.showPointCloud.collectAsState()
     val selectedUnit by viewModel.selectedUnit.collectAsState()
@@ -50,16 +59,14 @@ fun SettingsSheet(
     val highDefinitionQualityEnabled by viewModel.highDefinitionQualityEnabled.collectAsState()
     val sensorCorrectionEnabled by viewModel.sensorCorrectionEnabled.collectAsState()
     val torchBrightness by viewModel.torchBrightness.collectAsState()
-    val isVulkanGraphicsEnabled by viewModel.isVulkanGraphicsEnabled.collectAsState()
-    val isVulkanAiEnabled by viewModel.isVulkanAiEnabled.collectAsState()
-    val vulkanAiMetrics by viewModel.vulkanAiMetrics.collectAsState()
 
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
         sheetState = sheetState,
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
-        containerColor = MaterialTheme.colorScheme.surface,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
         contentColor = MaterialTheme.colorScheme.onSurface,
+        tonalElevation = 2.dp,
         dragHandle = { BottomSheetDefaults.DragHandle() },
         modifier = Modifier.testTag("settings_modal_sheet")
     ) {
@@ -70,250 +77,262 @@ fun SettingsSheet(
                 .widthIn(max = 680.dp)
                 .align(Alignment.CenterHorizontally)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 8.dp)
+                .padding(horizontal = 20.dp, vertical = 6.dp)
                 .navigationBarsPadding()
         ) {
-            // Header
+            // M3 Header Section
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 8.dp)
+                    .padding(horizontal = 4.dp, vertical = 8.dp)
             ) {
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.size(44.dp)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            Icons.Rounded.Settings,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(24.dp)
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Rounded.Settings,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.size(26.dp)
+                            )
+                        }
+                    }
+                    Column {
+                        Text(
+                            text = "設定",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "測量偏好、硬體加速與系統管理",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
-                Column {
-                    Text(
-                        text = "設定",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = "測量偏好與應用程式管理",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+
+                FilledTonalIconButton(
+                    onClick = onDismissRequest,
+                    shape = CircleShape,
+                    modifier = Modifier.size(38.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "關閉設定",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
+            // ==========================================
             // 1. 測量偏好 (Measurement Preferences)
+            // ==========================================
             SettingsCategoryHeader(
-                title = "測量偏好",
+                title = "測量與顯示偏好",
                 icon = Icons.Rounded.Straighten,
                 tint = MaterialTheme.colorScheme.primary
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            ElevatedCard(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.elevatedCardColors(
+            Card(
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.surfaceContainerLow
                 ),
-                elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    // Unit Selection Chips
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            text = "預設單位",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
+                Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                    // 1.1 M3 Segmented Button for Unit Selection
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 10.dp)
+                    ) {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            listOf(
-                                "cm" to "公分 (cm)",
-                                "m" to "公尺 (m)",
-                                "in" to "英吋 (in)",
-                                "ft" to "英呎 (ft)"
-                            ).forEach { (unitCode, label) ->
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.SquareFoot,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Column {
+                                Text(
+                                    text = "預設測量基準單位",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "即時切換長度、面積與體積運算刻度",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        val unitsList = listOf(
+                            "cm" to "公分 (cm)",
+                            "m" to "公尺 (m)",
+                            "in" to "英吋 (in)",
+                            "ft" to "英呎 (ft)"
+                        )
+
+                        SingleChoiceSegmentedButtonRow(
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            unitsList.forEachIndexed { index, (unitCode, label) ->
                                 val isSelected = selectedUnit == unitCode
-                                FilterChip(
+                                SegmentedButton(
                                     selected = isSelected,
-                                    onClick = { viewModel.setSelectedUnit(unitCode) },
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        viewModel.setSelectedUnit(unitCode)
+                                    },
+                                    shape = SegmentedButtonDefaults.itemShape(
+                                        index = index,
+                                        count = unitsList.size
+                                    ),
+                                    icon = {
+                                        SegmentedButtonDefaults.Icon(active = isSelected)
+                                    },
                                     label = {
                                         Text(
-                                            label,
-                                            fontSize = 12.sp,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                            text = label,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            maxLines = 1
                                         )
                                     },
-                                    leadingIcon = if (isSelected) {
-                                        { Icon(Icons.Rounded.Check, null, modifier = Modifier.size(14.dp)) }
-                                    } else null,
-                                    shape = RoundedCornerShape(12.dp),
                                     modifier = Modifier.testTag("unit_chip_$unitCode")
                                 )
                             }
                         }
                     }
 
-                    HorizontalDivider(
-                        modifier = Modifier.padding(vertical = 12.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                    M3SettingsDivider()
+
+                    // 1.2 Screen Ruler Physical Calibration Item
+                    M3SettingsActionItem(
+                        icon = Icons.Rounded.AspectRatio,
+                        title = "螢幕尺實體精準度校準",
+                        subtitle = "當前係數: ${String.format(java.util.Locale.US, "%.3fx", rulerCalibration)} · 微調兩側螢幕刻度",
+                        trailingContent = {
+                            FilledTonalButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.setMode(1)
+                                    viewModel.setRulerCalibrationActive(true)
+                                    onDismissRequest()
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                                modifier = Modifier.height(36.dp)
+                            ) {
+                                Text("立即校準", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        },
+                        onClick = {
+                            viewModel.setMode(1)
+                            viewModel.setRulerCalibrationActive(true)
+                            onDismissRequest()
+                        }
                     )
 
-                    // Screen Ruler Physical Calibration Row
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                viewModel.setMode(1)
-                                viewModel.setRulerCalibrationActive(true)
-                                onDismissRequest()
-                            }
-                            .padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
-                            modifier = Modifier.size(40.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    Icons.Rounded.Straighten,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.width(14.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "螢幕尺實體精準度校準",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = "當前係數: ${String.format(java.util.Locale.US, "%.3fx", rulerCalibration)} · 即時微調兩側刻度",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Button(
-                            onClick = {
-                                viewModel.setMode(1)
-                                viewModel.setRulerCalibrationActive(true)
-                                onDismissRequest()
-                            },
-                            shape = RoundedCornerShape(10.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                            modifier = Modifier.height(32.dp)
-                        ) {
-                            Text("立即校準", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
+                    M3SettingsDivider()
 
-                    HorizontalDivider(
-                        modifier = Modifier.padding(vertical = 12.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-                    )
-
-                    // High Definition Quality
-                    SettingsSwitchRow(
+                    // 1.3 High Definition Quality (Ultra HD)
+                    M3SettingsSwitchItem(
                         icon = Icons.Rounded.Hd,
                         title = "超高清晰度畫質 (Ultra HD / 1080p+)",
-                        subtitle = "開啟最高解像度感測器採樣與降噪銳化演算法",
+                        subtitle = "開啟高解析度相機感測器採樣與降噪銳化演算法",
                         checked = highDefinitionQualityEnabled,
                         onCheckedChange = { viewModel.setHighDefinitionQualityEnabled(it) },
                         testTag = "switch_high_definition"
                     )
 
-                    HorizontalDivider(
-                        modifier = Modifier.padding(vertical = 12.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-                    )
+                    M3SettingsDivider()
 
-                    // 60Hz High FPS Preview
-                    SettingsSwitchRow(
+                    // 1.4 60Hz High FPS Camera Preview
+                    M3SettingsSwitchItem(
                         icon = Icons.Rounded.Speed,
-                        title = "相機高幀率預覽 (60 FPS)",
-                        subtitle = "啟用高影格率相機預覽通道，提升畫面順暢度",
+                        title = "相機高影格率預覽 (60 FPS)",
+                        subtitle = "啟用相機高影格率通道，空間移動更加流暢",
                         checked = highFpsModeEnabled,
                         onCheckedChange = { viewModel.setHighFpsModeEnabled(it) },
                         testTag = "switch_high_fps"
                     )
 
-                    HorizontalDivider(
-                        modifier = Modifier.padding(vertical = 12.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-                    )
+                    M3SettingsDivider()
 
-                    // Smart Sensor Fusion
-                    SettingsSwitchRow(
+                    // 1.5 Smart Sensor Fusion Anti-Shake
+                    M3SettingsSwitchItem(
                         icon = Icons.Rounded.AutoFixHigh,
                         title = "智慧感應器防手震校正",
-                        subtitle = "自動融合陀螺儀與重力向量消除微小飄移",
+                        subtitle = "自動融合陀螺儀與重力向量消除微小手震飄移",
                         checked = sensorCorrectionEnabled,
                         onCheckedChange = { viewModel.setSensorCorrectionEnabled(it) },
                         testTag = "switch_sensor_fusion_master"
                     )
 
-                    HorizontalDivider(
-                        modifier = Modifier.padding(vertical = 12.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-                    )
+                    M3SettingsDivider()
 
-                    // Vibration
-                    SettingsSwitchRow(
+                    // 1.6 Haptic Feedback
+                    M3SettingsSwitchItem(
                         icon = Icons.Rounded.Vibration,
                         title = "觸覺震動回饋",
-                        subtitle = "錨點吸附與操作時提供輕微震動回饋",
+                        subtitle = "錨點吸附、測量閉合與按鍵操作時提供微震反饋",
                         checked = vibrateOnAlign,
                         onCheckedChange = { viewModel.setVibrateOnAlignment(it) },
                         testTag = "switch_vibrate"
                     )
 
-                    HorizontalDivider(
-                        modifier = Modifier.padding(vertical = 12.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-                    )
+                    M3SettingsDivider()
 
-                    // Feature Point Cloud
-                    SettingsSwitchRow(
+                    // 1.7 Feature Point Cloud
+                    M3SettingsSwitchItem(
                         icon = Icons.Rounded.Grain,
                         title = "顯示特徵點雲",
-                        subtitle = "即時渲染空間偵測特徵點",
+                        subtitle = "即時在空間中渲染深度偵測特徵點",
                         checked = showPointCloud,
                         onCheckedChange = { viewModel.setShowPointCloud(it) },
                         testTag = "switch_point_cloud"
                     )
 
-                    HorizontalDivider(
-                        modifier = Modifier.padding(vertical = 12.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-                    )
+                    M3SettingsDivider()
 
-                    // Flashlight Brightness Setting
+                    // 1.8 Flashlight Brightness Slider with Presets
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 4.dp)
+                            .padding(horizontal = 16.dp, vertical = 10.dp)
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -322,547 +341,89 @@ fun SettingsSheet(
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 Surface(
                                     shape = RoundedCornerShape(12.dp),
-                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                                    modifier = Modifier.size(40.dp)
+                                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+                                    modifier = Modifier.size(38.dp)
                                 ) {
                                     Box(contentAlignment = Alignment.Center) {
                                         Icon(
-                                            Icons.Rounded.LightMode,
+                                            imageVector = Icons.Rounded.LightMode,
                                             contentDescription = null,
                                             tint = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(22.dp)
+                                            modifier = Modifier.size(20.dp)
                                         )
                                     }
                                 }
                                 Column {
                                     Text(
-                                        text = "手電筒預設亮度",
-                                        style = MaterialTheme.typography.titleMedium,
+                                        text = "手電筒預設補光亮度",
+                                        style = MaterialTheme.typography.bodyLarge,
                                         fontWeight = FontWeight.SemiBold,
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
                                     Text(
-                                        text = "支援硬體多段調光與補光強度",
+                                        text = "夜間測量多段調光補光強度",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
-                            Text(
-                                text = "${(torchBrightness * 100).toInt()}%",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
+
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                modifier = Modifier.padding(start = 8.dp)
+                            ) {
+                                Text(
+                                    text = "${(torchBrightness * 100).toInt()}%",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
                         }
 
-                        Spacer(modifier = Modifier.height(6.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
 
                         Slider(
                             value = torchBrightness,
-                            onValueChange = { viewModel.setTorchBrightness(context, it) },
+                            onValueChange = {
+                                viewModel.setTorchBrightness(context, it)
+                            },
                             valueRange = 0.2f..1.0f,
                             steps = 3,
                             modifier = Modifier.fillMaxWidth()
                         )
 
+                        Spacer(modifier = Modifier.height(4.dp))
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             listOf(0.25f to "25%", 0.50f to "50%", 0.75f to "75%", 1.00f to "100%").forEach { (level, lbl) ->
                                 val isSelected = kotlin.math.abs(torchBrightness - level) < 0.12f
                                 FilterChip(
                                     selected = isSelected,
-                                    onClick = { viewModel.setTorchBrightness(context, level) },
-                                    label = { Text(lbl, fontSize = 11.sp) },
-                                    shape = RoundedCornerShape(8.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // 1.5 Vulkan 硬體加速引擎 (Vulkan Graphics & AI Hardware Engine)
-            SettingsCategoryHeader(
-                title = "Vulkan 硬體加速引擎",
-                icon = Icons.Rounded.Speed,
-                tint = MaterialTheme.colorScheme.tertiary
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            ElevatedCard(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.elevatedCardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-                ),
-                elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    // Vulkan 3D Graphics Pipeline Toggle
-                    SettingsSwitchRow(
-                        icon = Icons.Rounded.Layers,
-                        title = "Vulkan 3D 空間渲染架構",
-                        subtitle = "硬體光柵化 3D 空間網格、多邊形與抗鋸齒線段",
-                        checked = isVulkanGraphicsEnabled,
-                        onCheckedChange = { viewModel.setVulkanGraphicsEnabled(it) },
-                        testTag = "switch_vulkan_graphics"
-                    )
-
-                    HorizontalDivider(
-                        modifier = Modifier.padding(vertical = 12.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-                    )
-
-                    // Vulkan AI Inference Acceleration Toggle
-                    SettingsSwitchRow(
-                        icon = Icons.Rounded.Memory,
-                        title = "Vulkan AI 視覺推論加速",
-                        subtitle = "TFLite GPU Delegate 加速 MobileSAM 與 Objectron 3D",
-                        checked = isVulkanAiEnabled,
-                        onCheckedChange = { viewModel.setVulkanAiEnabled(it) },
-                        testTag = "switch_vulkan_ai"
-                    )
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    // Vulkan Hardware Driver & Live Telemetry Badge
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.65f),
-                        border = androidx.compose.foundation.BorderStroke(
-                            1.dp,
-                            MaterialTheme.colorScheme.tertiary.copy(alpha = 0.35f)
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Surface(
-                                    shape = CircleShape,
-                                    color = MaterialTheme.colorScheme.tertiary,
-                                    modifier = Modifier.size(8.dp)
-                                ) {}
-                                Text(
-                                    text = viewModel.vulkanGraphicsPipeline.deviceInfo.deviceName,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.tertiary
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = "API 版本: ${viewModel.vulkanGraphicsPipeline.deviceInfo.apiVersion}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = "GPU 推論耗時: ${"%.1f".format(vulkanAiMetrics.inferenceTimeMs)} ms",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = "後端: SPIR-V Compute Kernel",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = "管線幀率: ${vulkanAiMetrics.computeThroughputFps} FPS",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.tertiary
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // 2. 系統與外觀 (System & Appearance)
-            SettingsCategoryHeader(
-                title = "系統與語言",
-                icon = Icons.Rounded.Language,
-                tint = MaterialTheme.colorScheme.secondary
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            val currentLangObj = remember(currentLang) {
-                TranslationManager.supportedLanguages.find { it.code == currentLang }
-            }
-
-            ElevatedCard(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.elevatedCardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-                ),
-                elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "應用程式語言",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = "當前: ${currentLangObj?.name ?: currentLang} (${currentLang})",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-
-                        FilledTonalButton(
-                            onClick = { showLanguageSelectionDialog = true },
-                            shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            modifier = Modifier
-                                .height(36.dp)
-                                .testTag("open_all_languages_btn")
-                        ) {
-                            Icon(
-                                Icons.Rounded.Translate,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                "全部語言 (110)",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Icon(
-                                Icons.Rounded.ChevronRight,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    LazyRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        val quickLangs = listOf(
-                            "zh-TW" to "繁體中文",
-                            "zh-CN" to "简体中文",
-                            "en" to "English",
-                            "ja" to "日本語",
-                            "ko" to "한국어",
-                            "es" to "Español",
-                            "fr" to "Français",
-                            "de" to "Deutsch"
-                        )
-                        items(quickLangs) { (code, name) ->
-                            val isSelected = currentLang == code
-                            FilterChip(
-                                selected = isSelected,
-                                onClick = { viewModel.setLanguage(code) },
-                                label = {
-                                    Text(
-                                        name,
-                                        fontSize = 12.sp,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                    )
-                                },
-                                leadingIcon = if (isSelected) {
-                                    { Icon(Icons.Rounded.Check, null, modifier = Modifier.size(14.dp)) }
-                                } else null,
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.testTag("lang_chip_$code")
-                            )
-                        }
-
-                        item {
-                            SuggestionChip(
-                                onClick = { showLanguageSelectionDialog = true },
-                                label = {
-                                    Text(
-                                        "更多 (110+)...",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                },
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.testTag("lang_chip_more")
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    HorizontalDivider(
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
-                        thickness = 1.dp
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Direct link to Android System App Language Settings (Per-App Language)
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .clickable {
-                                viewModel.openSystemLanguageSettings(context)
-                            }
-                            .testTag("open_system_locale_settings_btn")
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Surface(
-                                shape = CircleShape,
-                                color = MaterialTheme.colorScheme.secondaryContainer,
-                                modifier = Modifier.size(38.dp)
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        Icons.Rounded.Settings,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.width(12.dp))
-
-                            Column(modifier = Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = viewModel.getString("system_lang_title"),
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Surface(
-                                        shape = RoundedCornerShape(6.dp),
-                                        color = MaterialTheme.colorScheme.primaryContainer
-                                    ) {
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        viewModel.setTorchBrightness(context, level)
+                                    },
+                                    label = {
                                         Text(
-                                            text = "Android 13+",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 10.sp,
-                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                            text = lbl,
+                                            fontSize = 12.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                                         )
-                                    }
-                                }
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = viewModel.getString("system_lang_desc"),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontSize = 11.sp,
-                                    lineHeight = 15.sp
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.weight(1f)
                                 )
                             }
-
-                            Spacer(modifier = Modifier.width(8.dp))
-
-                            Surface(
-                                shape = CircleShape,
-                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        Icons.Rounded.OpenInNew,
-                                        contentDescription = "開啟系統設定",
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // 3. 數據維護 (Data Management)
-            SettingsCategoryHeader(
-                title = "數據管理",
-                icon = Icons.Rounded.Storage,
-                tint = MaterialTheme.colorScheme.error
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            ElevatedCard(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.elevatedCardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-                ),
-                elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { showClearRecordsConfirmDialog = true }
-                            .padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.6f),
-                            modifier = Modifier.size(40.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    Icons.Rounded.DeleteForever,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.width(14.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "清除所有測量紀錄",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.error
-                            )
-                            Text(
-                                text = "永久刪除所有歷史測量數據與截圖",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Icon(
-                            Icons.Rounded.ChevronRight,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.outline
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // 4. 支援與問題回饋 (Support & Feedback)
-            SettingsCategoryHeader(
-                title = "支援與問題回饋",
-                icon = Icons.Rounded.Feedback,
-                tint = MaterialTheme.colorScheme.primary
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            ElevatedCard(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.elevatedCardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-                ),
-                elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    val feedbackEmail = "jeremy1030623@gmail.com"
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                ShareUtility.sendFeedbackEmail(context, feedbackEmail)
-                            }
-                            .padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
-                            modifier = Modifier.size(42.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    Icons.Rounded.Mail,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.width(14.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "問題回饋與功能建議",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = feedbackEmail,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                text = "點擊直接開啟郵件 App 發送回饋，或複製信箱",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        IconButton(
-                            onClick = {
-                                ShareUtility.copyToClipboard(context, feedbackEmail, "已複製回饋電子信箱：$feedbackEmail")
-                            }
-                        ) {
-                            Icon(
-                                Icons.Rounded.ContentCopy,
-                                contentDescription = "複製電子信箱",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(20.dp)
-                            )
                         }
                     }
                 }
@@ -870,21 +431,96 @@ fun SettingsSheet(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // Footer
+            // ==========================================
+            // 2. 數據維護與回饋 (Data & Feedback)
+            // ==========================================
+            SettingsCategoryHeader(
+                title = "資料管理與技術支援",
+                icon = Icons.Rounded.Security,
+                tint = MaterialTheme.colorScheme.outline
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Card(
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                    // Clear Records Destructive Action Item
+                    M3SettingsActionItem(
+                        icon = Icons.Rounded.DeleteForever,
+                        title = "清除所有測量紀錄",
+                        subtitle = "永久刪除所有歷史測量數據、截圖與標註",
+                        iconTint = MaterialTheme.colorScheme.error,
+                        iconContainerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f),
+                        trailingContent = {
+                            Icon(
+                                imageVector = Icons.Rounded.ChevronRight,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        },
+                        onClick = {
+                            showClearRecordsConfirmDialog = true
+                        }
+                    )
+
+                    M3SettingsDivider()
+
+                    // Feedback Email Item
+                    val feedbackEmail = "jeremy1030623@gmail.com"
+                    M3SettingsActionItem(
+                        icon = Icons.Rounded.Mail,
+                        title = "問題回饋與功能建議",
+                        subtitle = "$feedbackEmail · 點擊發送回饋郵件",
+                        iconTint = MaterialTheme.colorScheme.primary,
+                        iconContainerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+                        trailingContent = {
+                            IconButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    ShareUtility.copyToClipboard(context, feedbackEmail, "已複製回饋電子信箱：$feedbackEmail")
+                                },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.ContentCopy,
+                                    contentDescription = "複製電子信箱",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        },
+                        onClick = {
+                            ShareUtility.sendFeedbackEmail(context, feedbackEmail)
+                        }
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(28.dp))
+
+            // M3 Footer App Identity
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 16.dp),
+                    .padding(bottom = 20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = "AR 尺子與測量工具",
-                    style = MaterialTheme.typography.labelMedium,
+                    text = "AR 尺子與空間測量儀",
+                    style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "Google ARCore & Camera2",
+                    text = "Material 3 · Google ARCore & Camera2 Engine",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.outline
                 )
@@ -892,34 +528,47 @@ fun SettingsSheet(
         }
     }
 
-    // Confirmation Dialog for Clearing All Records
+    // Material 3 Confirmation Dialog for Clearing All Records
     if (showClearRecordsConfirmDialog) {
         AlertDialog(
             onDismissRequest = { showClearRecordsConfirmDialog = false },
+            shape = RoundedCornerShape(28.dp),
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             icon = {
-                Icon(
-                    Icons.Rounded.Warning,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.size(32.dp)
-                )
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Rounded.Warning,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+                }
             },
             title = {
                 Text(
                     text = "確認清除所有紀錄？",
+                    style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     textAlign = TextAlign.Center
                 )
             },
             text = {
                 Text(
-                    text = "此操作將無法復原，本機所有測量紀錄都將被永久刪除。",
-                    style = MaterialTheme.typography.bodyMedium
+                    text = "此操作無法復原，本機保存的所有歷史測量紀錄、長度、面積與截圖資料都將被永久刪除。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             },
             confirmButton = {
                 Button(
                     onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         viewModel.clearAllRecords()
                         showClearRecordsConfirmDialog = false
                     },
@@ -927,7 +576,7 @@ fun SettingsSheet(
                         containerColor = MaterialTheme.colorScheme.error,
                         contentColor = MaterialTheme.colorScheme.onError
                     ),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(14.dp)
                 ) {
                     Text("確定清除", fontWeight = FontWeight.Bold)
                 }
@@ -935,31 +584,18 @@ fun SettingsSheet(
             dismissButton = {
                 OutlinedButton(
                     onClick = { showClearRecordsConfirmDialog = false },
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(14.dp)
                 ) {
                     Text("取消")
                 }
             }
         )
     }
-
-    // Language Selection Dialog with Search across 110 Languages
-    if (showLanguageSelectionDialog) {
-        LanguageSelectionDialog(
-            currentLanguage = currentLang,
-            onLanguageSelected = { code ->
-                viewModel.setLanguage(code)
-            },
-            onDismissRequest = {
-                showLanguageSelectionDialog = false
-            },
-            onOpenSystemSettings = {
-                viewModel.openSystemLanguageSettings(context)
-            }
-        )
-    }
 }
 
+/**
+ * Material 3 Section Category Header
+ */
 @Composable
 private fun SettingsCategoryHeader(
     title: String,
@@ -968,7 +604,8 @@ private fun SettingsCategoryHeader(
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
     ) {
         Icon(
             imageVector = icon,
@@ -978,73 +615,174 @@ private fun SettingsCategoryHeader(
         )
         Text(
             text = title,
-            style = MaterialTheme.typography.titleSmall,
+            style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface
+            color = tint,
+            letterSpacing = 0.5.sp
         )
     }
 }
 
+/**
+ * Material 3 Inset Divider for settings lists
+ */
 @Composable
-private fun SettingsSwitchRow(
+private fun M3SettingsDivider() {
+    HorizontalDivider(
+        modifier = Modifier.padding(start = 68.dp, end = 16.dp),
+        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+        thickness = 0.8.dp
+    )
+}
+
+/**
+ * Material 3 Standard Switch Item using ListItem
+ */
+@Composable
+private fun M3SettingsSwitchItem(
     icon: ImageVector,
     title: String,
     subtitle: String,
     checked: Boolean,
     enabled: Boolean = true,
+    iconTint: Color = MaterialTheme.colorScheme.primary,
+    iconContainerColor: Color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
     onCheckedChange: (Boolean) -> Unit,
     testTag: String
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(enabled = enabled) { onCheckedChange(!checked) }
-            .padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
+    val haptic = LocalHapticFeedback.current
+    ListItem(
+        headlineContent = {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+            )
+        },
+        supportingContent = {
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        },
+        leadingContent = {
             Surface(
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
-                modifier = Modifier.size(36.dp)
+                shape = RoundedCornerShape(12.dp),
+                color = iconContainerColor,
+                modifier = Modifier.size(38.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = icon,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(18.dp)
+                        tint = iconTint,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }
-
-            Column(modifier = Modifier.padding(end = 8.dp)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                )
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
+        },
+        trailingContent = {
+            Switch(
+                checked = checked,
+                onCheckedChange = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onCheckedChange(it)
+                },
+                enabled = enabled,
+                thumbContent = if (checked) {
+                    {
+                        Icon(
+                            imageVector = Icons.Rounded.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(SwitchDefaults.IconSize)
+                        )
+                    }
+                } else null,
+                modifier = Modifier.testTag(testTag)
+            )
+        },
+        colors = ListItemDefaults.colors(
+            containerColor = Color.Transparent
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(
+                enabled = enabled,
+                role = Role.Switch
+            ) {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onCheckedChange(!checked)
             }
-        }
+            .padding(vertical = 1.dp)
+    )
+}
 
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            enabled = enabled,
-            modifier = Modifier.testTag(testTag)
-        )
-    }
+/**
+ * Material 3 Standard Action Item using ListItem
+ */
+@Composable
+private fun M3SettingsActionItem(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    iconTint: Color = MaterialTheme.colorScheme.primary,
+    iconContainerColor: Color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+    trailingContent: @Composable (() -> Unit)? = null,
+    onClick: () -> Unit
+) {
+    val haptic = LocalHapticFeedback.current
+    ListItem(
+        headlineContent = {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        },
+        supportingContent = {
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        leadingContent = {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = iconContainerColor,
+                modifier = Modifier.size(38.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = iconTint,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+        },
+        trailingContent = trailingContent ?: {
+            Icon(
+                imageVector = Icons.Rounded.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        colors = ListItemDefaults.colors(
+            containerColor = Color.Transparent
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(role = Role.Button) {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onClick()
+            }
+            .padding(vertical = 1.dp)
+    )
 }

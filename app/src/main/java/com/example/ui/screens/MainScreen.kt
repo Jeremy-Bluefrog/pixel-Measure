@@ -6,7 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -35,9 +35,11 @@ import com.example.ui.components.FloatingPillNavItem
 import com.example.ui.components.GradientBlurTopBar
 import com.example.ui.components.ModernArCameraView
 import com.example.ui.components.RulerComponent
-import com.example.ui.components.SettingsSheet
 import com.example.ui.components.SupportingPaneHistory
 import com.example.ui.components.hardwareBackdropBlur
+import com.example.ui.screens.SettingsScreen
+import com.example.ui.theme.getGroupedPosition
+import com.example.ui.theme.groupedItemShape
 import com.example.ui.viewmodel.MeasureViewModel
 import java.io.File
 import java.text.SimpleDateFormat
@@ -51,6 +53,7 @@ fun MainScreen(viewModel: MeasureViewModel) {
     val savedRecords by viewModel.savedRecords.collectAsState()
     val currentLang by viewModel.currentLanguage.collectAsState()
     val isTorchOn by viewModel.isTorchOn.collectAsState()
+    val showWelcomeScreen by viewModel.showWelcomeScreen.collectAsState()
 
     var showHistorySheet by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
@@ -61,7 +64,7 @@ fun MainScreen(viewModel: MeasureViewModel) {
 
     val isOverlayActive by remember {
         derivedStateOf {
-            showHistorySheet || showSettingsDialog || selectedRecordForDetail != null
+            showWelcomeScreen || showHistorySheet || showSettingsDialog || selectedRecordForDetail != null
         }
     }
     val hardwareBlurRadius by animateFloatAsState(
@@ -126,11 +129,7 @@ fun MainScreen(viewModel: MeasureViewModel) {
             ) {
                 Scaffold(
                     topBar = {
-                        androidx.compose.animation.AnimatedVisibility(
-                            visible = currentMode == 1,
-                            enter = fadeIn(animationSpec = tween(120, easing = FastOutSlowInEasing)),
-                            exit = fadeOut(animationSpec = tween(100, easing = FastOutLinearInEasing))
-                        ) {
+                        if (currentMode == 1) {
                             GradientBlurTopBar(
                                 baseColor = MaterialTheme.colorScheme.surface,
                                 modifier = Modifier.testTag("top_gradient_blur_bar")
@@ -244,7 +243,7 @@ fun MainScreen(viewModel: MeasureViewModel) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(if (currentMode == 0) PaddingValues(bottom = 0.dp) else innerPadding)
+                            .padding(if (currentMode == 0) PaddingValues(0.dp) else innerPadding)
                     ) {
                         // Smooth Fade & Subtle Scale Transition: Camera AR (0) <-> Screen Ruler (1)
                         AnimatedContent(
@@ -432,11 +431,47 @@ fun MainScreen(viewModel: MeasureViewModel) {
         )
     }
 
-    // Redesigned Settings Sheet
-    if (showSettingsDialog) {
-        SettingsSheet(
+    // Dedicated Full-Page Settings Screen (M3 Page Navigation)
+    androidx.compose.animation.AnimatedVisibility(
+        visible = showSettingsDialog,
+        enter = slideInHorizontally(
+            initialOffsetX = { it },
+            animationSpec = tween(300, easing = FastOutSlowInEasing)
+        ) + fadeIn(animationSpec = tween(200)),
+        exit = slideOutHorizontally(
+            targetOffsetX = { it },
+            animationSpec = tween(250, easing = FastOutSlowInEasing)
+        ) + fadeOut(animationSpec = tween(200)),
+        modifier = Modifier
+            .fillMaxSize()
+            .zIndex(100f)
+    ) {
+        SettingsScreen(
             viewModel = viewModel,
-            onDismissRequest = { showSettingsDialog = false }
+            onNavigateBack = { showSettingsDialog = false }
+        )
+    }
+
+    // Dedicated Full-Page Welcome & Onboarding Guide Screen (M3 Design)
+    androidx.compose.animation.AnimatedVisibility(
+        visible = showWelcomeScreen,
+        enter = fadeIn(animationSpec = tween(280)) + scaleIn(
+            initialScale = 0.95f,
+            animationSpec = tween(280, easing = FastOutSlowInEasing)
+        ),
+        exit = fadeOut(animationSpec = tween(220)) + scaleOut(
+            targetScale = 0.95f,
+            animationSpec = tween(220, easing = FastOutSlowInEasing)
+        ),
+        modifier = Modifier
+            .fillMaxSize()
+            .zIndex(150f)
+    ) {
+        WelcomeScreen(
+            viewModel = viewModel,
+            onStartMeasuring = { initialMode ->
+                viewModel.setMode(initialMode)
+            }
         )
     }
 }
@@ -591,12 +626,13 @@ fun HistorySheetContent(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(max = 440.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(3.dp)
             ) {
-                items(filteredRecords, key = { it.id }) { record ->
+                itemsIndexed(filteredRecords, key = { _, record -> record.id }) { index, record ->
+                    val position = getGroupedPosition(index, filteredRecords.size)
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                        shape = RoundedCornerShape(18.dp),
+                        shape = groupedItemShape(position, outerCorner = 20.dp, innerCorner = 4.dp),
                         onClick = { onSelectRecord(record) },
                         modifier = Modifier.fillMaxWidth()
                     ) {

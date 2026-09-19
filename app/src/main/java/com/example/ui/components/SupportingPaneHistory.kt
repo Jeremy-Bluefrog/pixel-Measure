@@ -42,8 +42,7 @@ fun SupportingPaneHistory(
             .testTag("supporting_pane_history"),
         shape = RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
-        tonalElevation = 2.dp,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+        tonalElevation = 2.dp
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             HistorySheetContent(

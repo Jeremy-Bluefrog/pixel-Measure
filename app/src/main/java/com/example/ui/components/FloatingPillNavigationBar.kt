@@ -70,9 +70,9 @@ fun FloatingPillNavigationBar(
 ) {
     val haptic = LocalHapticFeedback.current
 
-    // Dynamic Material 3 Color Scheme
-    val containerBg = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.96f)
-    val borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+    // Dynamic Material 3 Color Scheme with Frosted Glass styling
+    val containerBg = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.88f)
+    val borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
     val activePillBg = MaterialTheme.colorScheme.primaryContainer
     val activeContentColor = MaterialTheme.colorScheme.onPrimaryContainer
     val inactiveIconColor = MaterialTheme.colorScheme.onSurfaceVariant
@@ -81,14 +81,14 @@ fun FloatingPillNavigationBar(
         modifier = modifier
             .wrapContentWidth()
             .shadow(
-                elevation = 6.dp,
+                elevation = 8.dp,
                 shape = CircleShape,
-                ambientColor = Color.Black.copy(alpha = 0.08f),
-                spotColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)
+                ambientColor = Color.Black.copy(alpha = 0.12f),
+                spotColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.20f)
             ),
         shape = CircleShape,
         color = containerBg,
-        border = BorderStroke(1.2.dp, borderColor)
+        border = BorderStroke(1.dp, borderColor)
     ) {
         Row(
             modifier = Modifier

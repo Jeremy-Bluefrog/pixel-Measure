@@ -60,8 +60,6 @@ fun ArMeasurementCanvasOverlay(
     val isMobileSamMode by viewModel.isMobileSamMode.collectAsState()
     val segmentedObject by viewModel.segmentedObject.collectAsState()
     val detectedTiles by viewModel.detectedTiles.collectAsState()
-    val isSimultaneousWallMeasureActive by viewModel.isSimultaneousWallMeasureActive.collectAsState()
-    val detectedWalls by viewModel.detectedWalls.collectAsState()
     val planesCount by viewModel.arPlanesCount.collectAsState()
     val sensorTelemetry by viewModel.sensorTelemetry.collectAsState()
     val capturedPoints = viewModel.capturedPoints
@@ -88,7 +86,6 @@ fun ArMeasurementCanvasOverlay(
 
     // Reusable Path caches to prevent per-frame GC allocations
     val samCachedPath = remember { Path() }
-    val wallCachedPath = remember { Path() }
     val areaCachedPath = remember { Path() }
 
     // Persistent 2D smooth auto-follow position state across canvas draw passes
@@ -908,202 +905,249 @@ fun ArMeasurementCanvasOverlay(
             }
         }
 
-        // Simultaneous Wall Measurement Overlay
-        if (isSimultaneousWallMeasureActive && detectedWalls.isNotEmpty()) {
-            detectedWalls.forEach { wall ->
-                val screenCorners = wall.corners3D.map { cornerPt ->
-                    ArMath.projectWorldToScreen(cornerPt, viewMatrix, projectionMatrix, screenW, screenH)
-                }
-                val pBL = screenCorners.getOrNull(0)
-                val pBR = screenCorners.getOrNull(1)
-                val pTR = screenCorners.getOrNull(2)
-                val pTL = screenCorners.getOrNull(3)
-
-                if (pBL != null && pBR != null && pTR != null && pTL != null) {
-                    val wallPath = wallCachedPath.apply {
-                        reset()
-                        moveTo(pBL.first, pBL.second)
-                        lineTo(pBR.first, pBR.second)
-                        lineTo(pTR.first, pTR.second)
-                        lineTo(pTL.first, pTL.second)
-                        close()
-                    }
-
-                    // 1. Semi-transparent holographic wall mesh fill
-                    drawPath(
-                        path = wallPath,
-                        color = Color(0x2200E5FF)
-                    )
-
-                    // 2. Futuristic boundary outline with animated dash
-                    drawPath(
-                        path = wallPath,
-                        color = Color(0xFF00E5FF).copy(alpha = 0.85f),
-                        style = Stroke(
-                            width = 2.5.dp.toPx(),
-                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(16f, 10f), dashPhase.value)
-                        )
-                    )
-
-                    // 3. Holographic grid lines inside wall surface
-                    for (fraction in listOf(0.33f, 0.66f)) {
-                        val hStart = Offset(
-                            pBL.first + (pTL.first - pBL.first) * fraction,
-                            pBL.second + (pTL.second - pBL.second) * fraction
-                        )
-                        val hEnd = Offset(
-                            pBR.first + (pTR.first - pBR.first) * fraction,
-                            pBR.second + (pTR.second - pBR.second) * fraction
-                        )
-                        drawLine(
-                            color = Color(0xFF00E5FF).copy(alpha = 0.3f),
-                            start = hStart,
-                            end = hEnd,
-                            strokeWidth = 1.2.dp.toPx()
-                        )
-
-                        val vStart = Offset(
-                            pBL.first + (pBR.first - pBL.first) * fraction,
-                            pBL.second + (pBR.second - pBL.second) * fraction
-                        )
-                        val vEnd = Offset(
-                            pTL.first + (pTR.first - pTL.first) * fraction,
-                            pTL.second + (pTR.second - pTL.second) * fraction
-                        )
-                        drawLine(
-                            color = Color(0xFF00E5FF).copy(alpha = 0.3f),
-                            start = vStart,
-                            end = vEnd,
-                            strokeWidth = 1.2.dp.toPx()
-                        )
-                    }
-
-                    // 4. Corner bracket anchors
-                    screenCorners.forEach { cornerProj ->
-                        if (cornerProj != null) {
-                            val cOffset = Offset(cornerProj.first, cornerProj.second)
-                            drawCircle(
-                                color = Color.Black.copy(alpha = 0.5f),
-                                center = Offset(cOffset.x, cOffset.y + 1f),
-                                radius = 6.dp.toPx()
-                            )
-                            drawCircle(
-                                color = Color.White,
-                                center = cOffset,
-                                radius = 5.dp.toPx()
-                            )
-                            drawCircle(
-                                color = Color(0xFF00E5FF),
-                                center = cOffset,
-                                radius = 3.5.dp.toPx()
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // Draw start and confirmed anchor pin node markers
-        projectedPoints.forEachIndexed { index, proj ->
+        // Draw start and confirmed anchor pin node markers (rendered as 3D floor-parallel horizontal rings)
+        pointsSnapshot.forEachIndexed { index, pt3d ->
+            val proj = projectedPoints.getOrNull(index)
             if (proj != null) {
                 val offset = Offset(proj.first, proj.second)
                 val isStartNode = index == 0
-                val isLastNode = index == projectedPoints.size - 1 && projectedPoints.size > 1
+                val isLastNode = index == pointsSnapshot.size - 1 && pointsSnapshot.size > 1
 
-                // 1. Beacon pulse halo ring
-                drawCircle(
-                    color = colorPrimary.copy(alpha = 0.25f * (2f - reticlePulseScale.value)),
-                    center = offset,
-                    radius = (14.dp * reticlePulseScale.value).toPx()
+                // 1. 3D Ground-parallel projected ellipse rings (lying flat on the floor)
+                val groundHaloRing = ArMath.projectHorizontalGroundCircle(
+                    center3D = pt3d,
+                    radiusMeters = 0.075 * reticlePulseScale.value.toDouble(),
+                    viewMatrix = viewMatrix,
+                    projectionMatrix = projectionMatrix,
+                    screenWidth = screenW,
+                    screenHeight = screenH,
+                    segments = 32
+                )
+                val groundBaseRing = ArMath.projectHorizontalGroundCircle(
+                    center3D = pt3d,
+                    radiusMeters = 0.045,
+                    viewMatrix = viewMatrix,
+                    projectionMatrix = projectionMatrix,
+                    screenWidth = screenW,
+                    screenHeight = screenH,
+                    segments = 32
+                )
+                val groundInnerRing = ArMath.projectHorizontalGroundCircle(
+                    center3D = pt3d,
+                    radiusMeters = 0.025,
+                    viewMatrix = viewMatrix,
+                    projectionMatrix = projectionMatrix,
+                    screenWidth = screenW,
+                    screenHeight = screenH,
+                    segments = 32
                 )
 
-                // 2. High-contrast ground shadow
-                drawCircle(
-                    color = Color.Black.copy(alpha = 0.45f),
-                    center = Offset(offset.x, offset.y + 2f),
-                    radius = 9.dp.toPx()
-                )
+                if (groundHaloRing.size >= 3) {
+                    val haloPath = Path().apply {
+                        moveTo(groundHaloRing[0].first, groundHaloRing[0].second)
+                        for (k in 1 until groundHaloRing.size) {
+                            lineTo(groundHaloRing[k].first, groundHaloRing[k].second)
+                        }
+                        close()
+                    }
+                    drawPath(
+                        path = haloPath,
+                        color = colorPrimary.copy(alpha = 0.22f * (2f - reticlePulseScale.value)),
+                        style = Stroke(width = 2.dp.toPx())
+                    )
+                }
 
-                // 3. Solid Pin Outer Ring
-                drawCircle(
-                    color = colorPrimary,
-                    center = offset,
-                    radius = 9.dp.toPx()
-                )
+                if (groundBaseRing.size >= 3) {
+                    val basePath = Path().apply {
+                        moveTo(groundBaseRing[0].first, groundBaseRing[0].second)
+                        for (k in 1 until groundBaseRing.size) {
+                            lineTo(groundBaseRing[k].first, groundBaseRing[k].second)
+                        }
+                        close()
+                    }
+                    // Ground shadow underneath
+                    drawPath(
+                        path = basePath,
+                        color = Color.Black.copy(alpha = 0.40f),
+                        style = Stroke(width = 4.dp.toPx())
+                    )
+                    // Floor-parallel primary ring
+                    drawPath(
+                        path = basePath,
+                        color = colorPrimary,
+                        style = Stroke(width = 2.5.dp.toPx())
+                    )
+                    // Semi-transparent floor disc fill
+                    drawPath(
+                        path = basePath,
+                        color = colorPrimary.copy(alpha = 0.18f)
+                    )
+                }
 
-                // 4. White Contrast Ring
+                if (groundInnerRing.size >= 3) {
+                    val innerPath = Path().apply {
+                        moveTo(groundInnerRing[0].first, groundInnerRing[0].second)
+                        for (k in 1 until groundInnerRing.size) {
+                            lineTo(groundInnerRing[k].first, groundInnerRing[k].second)
+                        }
+                        close()
+                    }
+                    drawPath(
+                        path = innerPath,
+                        color = Color.White.copy(alpha = 0.85f),
+                        style = Stroke(width = 1.8.dp.toPx())
+                    )
+                }
+
+                // Center core pinpoint
+                drawCircle(
+                    color = Color.Black.copy(alpha = 0.5f),
+                    center = Offset(offset.x, offset.y + 1f),
+                    radius = 4.dp.toPx()
+                )
                 drawCircle(
                     color = Color.White,
                     center = offset,
-                    radius = 6.dp.toPx()
+                    radius = 3.5.dp.toPx()
                 )
-
-                // 5. Center Core Pinpoint Dot
                 drawCircle(
                     color = if (isStartNode) colorPrimary else if (isLastNode) colorSecondary else colorPrimary,
                     center = offset,
-                    radius = 3.5.dp.toPx()
+                    radius = 2.2.dp.toPx()
                 )
             }
         }
 
-        // Dynamic 3D Target Reticle
+        // Dynamic 3D Target Reticle (Rendered parallel to floor/ground plane in 3D perspective)
         val reticleCenter = currentReticlePos
-        val baseRadius = 14.dp.toPx()
-        val currentRadius = baseRadius * snapScaleAnimated.value * reticlePulseScale.value
+        val target3D = liveTargetPoint
 
-        // Snapped Target Lock Radial Aura Glow
-        if (isSnapped) {
+        // Attempt 3D floor-parallel ground projection if 3D coordinates & matrices are available
+        val floorReticlePoints = if (target3D != null && ArMath.isPointValid(target3D)) {
+            val baseR = 0.055 * snapScaleAnimated.value.toDouble() * reticlePulseScale.value.toDouble()
+            ArMath.projectHorizontalGroundCircle(
+                center3D = target3D,
+                radiusMeters = baseR,
+                viewMatrix = viewMatrix,
+                projectionMatrix = projectionMatrix,
+                screenWidth = screenW,
+                screenHeight = screenH,
+                segments = 36
+            )
+        } else {
+            emptyList()
+        }
+
+        val floorInnerReticlePoints = if (target3D != null && ArMath.isPointValid(target3D)) {
+            val innerR = 0.022 * snapScaleAnimated.value.toDouble()
+            ArMath.projectHorizontalGroundCircle(
+                center3D = target3D,
+                radiusMeters = innerR,
+                viewMatrix = viewMatrix,
+                projectionMatrix = projectionMatrix,
+                screenWidth = screenW,
+                screenHeight = screenH,
+                segments = 36
+            )
+        } else {
+            emptyList()
+        }
+
+        val hasValid3DFloorProjection = floorReticlePoints.size >= 3
+
+        if (hasValid3DFloorProjection) {
+            val reticlePath = Path().apply {
+                moveTo(floorReticlePoints[0].first, floorReticlePoints[0].second)
+                for (k in 1 until floorReticlePoints.size) {
+                    lineTo(floorReticlePoints[k].first, floorReticlePoints[k].second)
+                }
+                close()
+            }
+
+            // Snapped Target Lock Radial Glow disc on floor
+            if (isSnapped) {
+                drawPath(
+                    path = reticlePath,
+                    color = Color(0xFFFBBF24).copy(alpha = snapGlowAlphaAnimated.value * 0.35f)
+                )
+            }
+
+            // Floor disc shadow
+            drawPath(
+                path = reticlePath,
+                color = Color.Black.copy(alpha = 0.35f),
+                style = Stroke(width = 3.5.dp.toPx())
+            )
+
+            // Floor-parallel gold outer ring
+            drawPath(
+                path = reticlePath,
+                color = if (isSnapped) Color(0xFFFFD54F) else Color(0xFFFBBF24),
+                style = Stroke(width = if (isSnapped) 2.8.dp.toPx() else 2.2.dp.toPx())
+            )
+
+            // Floor-parallel inner accent ring
+            if (floorInnerReticlePoints.size >= 3) {
+                val innerPath = Path().apply {
+                    moveTo(floorInnerReticlePoints[0].first, floorInnerReticlePoints[0].second)
+                    for (k in 1 until floorInnerReticlePoints.size) {
+                        lineTo(floorInnerReticlePoints[k].first, floorInnerReticlePoints[k].second)
+                    }
+                    close()
+                }
+                drawPath(
+                    path = innerPath,
+                    color = Color.White.copy(alpha = 0.75f),
+                    style = Stroke(width = 1.5.dp.toPx())
+                )
+            }
+
+            // Floor-parallel Crosshair axis ticks (aligned to ground X and Z axes)
+            if (target3D != null) {
+                val tickR = 0.075 * snapScaleAnimated.value.toDouble()
+                val pXPos = ArMath.projectWorldToScreen(Point3D(target3D.x + tickR, target3D.y, target3D.z), viewMatrix, projectionMatrix, screenW, screenH)
+                val pXNeg = ArMath.projectWorldToScreen(Point3D(target3D.x - tickR, target3D.y, target3D.z), viewMatrix, projectionMatrix, screenW, screenH)
+                val pZPos = ArMath.projectWorldToScreen(Point3D(target3D.x, target3D.y, target3D.z + tickR), viewMatrix, projectionMatrix, screenW, screenH)
+                val pZNeg = ArMath.projectWorldToScreen(Point3D(target3D.x, target3D.y, target3D.z - tickR), viewMatrix, projectionMatrix, screenW, screenH)
+
+                val crossColor = if (isSnapped) Color(0xFFFFD54F).copy(alpha = 0.9f) else Color(0xFF00E5FF).copy(alpha = 0.8f)
+                val crossWidth = 1.8.dp.toPx()
+                if (pXPos != null && pXNeg != null) {
+                    drawLine(crossColor, Offset(pXNeg.first, pXNeg.second), Offset(pXPos.first, pXPos.second), strokeWidth = crossWidth)
+                }
+                if (pZPos != null && pZNeg != null) {
+                    drawLine(crossColor, Offset(pZNeg.first, pZNeg.second), Offset(pZPos.first, pZPos.second), strokeWidth = crossWidth)
+                }
+            }
+        } else {
+            // Fallback 2D target reticle if 3D matrix is not yet initialized
+            val baseRadius = 14.dp.toPx()
+            val currentRadius = baseRadius * snapScaleAnimated.value * reticlePulseScale.value
+
+            if (isSnapped) {
+                drawCircle(
+                    color = Color(0xFFFBBF24).copy(alpha = snapGlowAlphaAnimated.value * 0.45f),
+                    center = reticleCenter,
+                    radius = currentRadius * 1.6f
+                )
+            }
             drawCircle(
-                color = Color(0xFFFBBF24).copy(alpha = snapGlowAlphaAnimated.value * 0.45f),
-                center = reticleCenter,
-                radius = currentRadius * 1.6f
+                color = Color.Black.copy(alpha = 0.35f),
+                center = Offset(reticleCenter.x + 1f, reticleCenter.y + 1.5f),
+                radius = currentRadius,
+                style = Stroke(width = 3.dp.toPx())
             )
             drawCircle(
-                color = Color(0xFFFBBF24).copy(alpha = snapGlowAlphaAnimated.value * 0.25f),
+                color = if (isSnapped) Color(0xFFFFD54F) else Color(0xFFFBBF24),
                 center = reticleCenter,
-                radius = currentRadius * 2.2f
+                radius = currentRadius,
+                style = Stroke(width = if (isSnapped) 2.6.dp.toPx() else 2.0.dp.toPx())
             )
         }
 
-        // High-contrast ground shadow
-        drawCircle(
-            color = Color.Black.copy(alpha = 0.35f),
-            center = Offset(reticleCenter.x + 1f, reticleCenter.y + 1.5f),
-            radius = currentRadius,
-            style = Stroke(width = 3.dp.toPx())
-        )
-
-        // Clean Elegant Outer Gold Ring
-        drawCircle(
-            color = if (isSnapped) Color(0xFFFFD54F) else Color(0xFFFBBF24),
-            center = reticleCenter,
-            radius = currentRadius,
-            style = Stroke(
-                width = if (isSnapped) 2.6.dp.toPx() else 2.0.dp.toPx()
-            )
-        )
-
-        // Optical Corner Targeting Brackets (Auto-Follow Target Lock Indicator)
-        val bracketSize = if (isSnapped) 6.dp.toPx() else 5.dp.toPx()
-        val bracketDist = currentRadius + if (isSnapped) 3.5.dp.toPx() else 6.dp.toPx()
-        val bracketColor = if (isSnapped) Color(0xFFFFD54F) else Color(0xFF00E5FF).copy(alpha = 0.85f)
-        val bracketStroke = if (isSnapped) 2.2.dp.toPx() else 1.8.dp.toPx()
-
-        // Top-Left
-        drawLine(bracketColor, Offset(reticleCenter.x - bracketDist, reticleCenter.y - bracketDist + bracketSize), Offset(reticleCenter.x - bracketDist, reticleCenter.y - bracketDist), bracketStroke)
-        drawLine(bracketColor, Offset(reticleCenter.x - bracketDist, reticleCenter.y - bracketDist), Offset(reticleCenter.x - bracketDist + bracketSize, reticleCenter.y - bracketDist), bracketStroke)
-        // Top-Right
-        drawLine(bracketColor, Offset(reticleCenter.x + bracketDist, reticleCenter.y - bracketDist + bracketSize), Offset(reticleCenter.x + bracketDist, reticleCenter.y - bracketDist), bracketStroke)
-        drawLine(bracketColor, Offset(reticleCenter.x + bracketDist, reticleCenter.y - bracketDist), Offset(reticleCenter.x + bracketDist - bracketSize, reticleCenter.y - bracketDist), bracketStroke)
-        // Bottom-Left
-        drawLine(bracketColor, Offset(reticleCenter.x - bracketDist, reticleCenter.y + bracketDist - bracketSize), Offset(reticleCenter.x - bracketDist, reticleCenter.y + bracketDist), bracketStroke)
-        drawLine(bracketColor, Offset(reticleCenter.x - bracketDist, reticleCenter.y + bracketDist), Offset(reticleCenter.x - bracketDist + bracketSize, reticleCenter.y + bracketDist), bracketStroke)
-        // Bottom-Right
-        drawLine(bracketColor, Offset(reticleCenter.x + bracketDist, reticleCenter.y + bracketDist - bracketSize), Offset(reticleCenter.x + bracketDist, reticleCenter.y + bracketDist), bracketStroke)
-        drawLine(bracketColor, Offset(reticleCenter.x + bracketDist, reticleCenter.y + bracketDist), Offset(reticleCenter.x + bracketDist - bracketSize, reticleCenter.y + bracketDist), bracketStroke)
-
         // Multi-Sample Burst Averaging Dynamic Progress Arc
+        val baseRadius = 14.dp.toPx()
+        val currentRadius = baseRadius * snapScaleAnimated.value * reticlePulseScale.value
         if (sensorTelemetry.multiSampleProgress > 0f) {
             val arcRadius = currentRadius + 5.dp.toPx()
             drawArc(

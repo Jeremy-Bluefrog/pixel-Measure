@@ -462,4 +462,38 @@ object ArMath {
 
         return Pair(screenX, screenY)
     }
+
+    /**
+     * Projects a 3D horizontal circle (parallel to the ground/floor XZ plane, normal = (0, 1, 0))
+     * centered at [center3D] with radius [radiusMeters] into a list of 2D screen points (forming an ellipse in perspective).
+     */
+    fun projectHorizontalGroundCircle(
+        center3D: Point3D,
+        radiusMeters: Double,
+        viewMatrix: FloatArray,
+        projectionMatrix: FloatArray,
+        screenWidth: Int,
+        screenHeight: Int,
+        segments: Int = 32
+    ): List<Pair<Float, Float>> {
+        if (viewMatrix.size < 16 || projectionMatrix.size < 16 || screenWidth <= 0 || screenHeight <= 0) {
+            return emptyList()
+        }
+        val result = ArrayList<Pair<Float, Float>>(segments)
+        val step = 2.0 * Math.PI / segments
+        for (i in 0 until segments) {
+            val angle = i * step
+            val x = center3D.x + radiusMeters * cos(angle)
+            val y = center3D.y
+            val z = center3D.z + radiusMeters * sin(angle)
+            val pt = Point3D(x, y, z)
+            val proj = projectWorldToScreen(pt, viewMatrix, projectionMatrix, screenWidth, screenHeight)
+            if (proj != null) {
+                result.add(proj)
+            } else {
+                return emptyList()
+            }
+        }
+        return result
+    }
 }

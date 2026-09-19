@@ -206,6 +206,23 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         prefs.edit().putString("selected_unit", unit).apply()
     }
 
+    // Welcome & Onboarding Guide Screen State
+    private val _showWelcomeScreen = MutableStateFlow(!prefs.getBoolean("has_seen_welcome_screen", false))
+    val showWelcomeScreen: StateFlow<Boolean> = _showWelcomeScreen.asStateFlow()
+
+    fun openWelcomeScreen() {
+        _showWelcomeScreen.value = true
+        triggerHapticFeedback(HapticType.CLICK)
+    }
+
+    fun dismissWelcomeScreen(neverShowAgain: Boolean = true) {
+        _showWelcomeScreen.value = false
+        if (neverShowAgain) {
+            prefs.edit().putBoolean("has_seen_welcome_screen", true).apply()
+        }
+        triggerHapticFeedback(HapticType.CLICK)
+    }
+
     // Modern AR Engine & Session
     val modernArEngine = ModernArEngine(app)
     val arSession: Session? get() = modernArEngine.session
@@ -228,13 +245,6 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private val _detectedPlanes = MutableStateFlow<List<DetectedPlaneInfo>>(emptyList())
     val detectedPlanes: StateFlow<List<DetectedPlaneInfo>> = _detectedPlanes.asStateFlow()
-
-    // Simultaneous Wall Measurement
-    private val _isSimultaneousWallMeasureActive = MutableStateFlow(true)
-    val isSimultaneousWallMeasureActive: StateFlow<Boolean> = _isSimultaneousWallMeasureActive.asStateFlow()
-
-    private val _detectedWalls = MutableStateFlow<List<WallMeasurementInfo>>(emptyList())
-    val detectedWalls: StateFlow<List<WallMeasurementInfo>> = _detectedWalls.asStateFlow()
 
     private val _surfaceTypeAtCenter = MutableStateFlow("尋找空間特徵中...")
     val surfaceTypeAtCenter: StateFlow<String> = _surfaceTypeAtCenter.asStateFlow()
@@ -764,136 +774,6 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         measureTileOneTap(detected)
     }
 
-    // Simultaneous Wall Measurement Actions
-    fun toggleSimultaneousWallMeasure() {
-        val nextState = !_isSimultaneousWallMeasureActive.value
-        _isSimultaneousWallMeasureActive.value = nextState
-        triggerHapticFeedback()
-        if (nextState) {
-            _toastMessage.tryEmit("🧱 已啟用同時測量牆壁")
-        } else {
-            _detectedWalls.value = emptyList()
-            _toastMessage.tryEmit("已暫停牆壁測量")
-        }
-    }
-
-    fun lockWallMeasurement(wall: WallMeasurementInfo) {
-        saveUndoState()
-        capturedPoints.clear()
-        capturedPoints.addAll(wall.corners3D)
-        _autoDetectedType.value = "AREA"
-        triggerHapticFeedback()
-        val wStr = formatLength(wall.widthMeters.toDouble(), selectedUnit.value)
-        val hStr = formatLength(wall.heightMeters.toDouble(), selectedUnit.value)
-        val aStr = formatArea(wall.areaSqMeters.toDouble(), selectedUnit.value)
-        _toastMessage.tryEmit("🧱 已鎖定垂直牆面：寬 $wStr × 高 $hStr (面積 $aStr)")
-    }
-
-    fun saveWallMeasurementToRecords(wall: WallMeasurementInfo) {
-        val wStr = formatLength(wall.widthMeters.toDouble(), selectedUnit.value)
-        val hStr = formatLength(wall.heightMeters.toDouble(), selectedUnit.value)
-        val aStr = formatArea(wall.areaSqMeters.toDouble(), selectedUnit.value)
-        saveMeasurementRecord(
-            customNotes = "🧱 垂直牆面測量: 寬 $wStr × 高 $hStr, 面積: $aStr"
-        )
-        triggerHapticFeedback()
-        _toastMessage.tryEmit("💾 已儲存牆壁測量數據至歷史紀錄")
-    }
-
-    private fun updateDetectedWalls(data: ModernArFrame) {
-        if (!_isSimultaneousWallMeasureActive.value) {
-            if (_detectedWalls.value.isNotEmpty()) _detectedWalls.value = emptyList()
-            return
-        }
-
-        val verticalPlanes = data.planes.filter { it.type == Plane.Type.VERTICAL && it.isTracking }
-        if (verticalPlanes.isNotEmpty()) {
-            val walls = verticalPlanes.map { plane ->
-                val w = plane.extentX.coerceAtLeast(0.4f)
-                val h = plane.extentZ.coerceAtLeast(0.4f)
-                val halfW = w / 2f
-                val halfH = h / 2f
-
-                val localBL = floatArrayOf(-halfW, 0f, -halfH)
-                val localBR = floatArrayOf(halfW, 0f, -halfH)
-                val localTR = floatArrayOf(halfW, 0f, halfH)
-                val localTL = floatArrayOf(-halfW, 0f, halfH)
-
-                val worldBL = plane.centerPose.transformPoint(localBL)
-                val worldBR = plane.centerPose.transformPoint(localBR)
-                val worldTR = plane.centerPose.transformPoint(localTR)
-                val worldTL = plane.centerPose.transformPoint(localTL)
-
-                val corners = listOf(
-                    Point3D(worldBL[0].toDouble(), worldBL[1].toDouble(), worldBL[2].toDouble(), label = "牆角 左下", isArPrecision = true),
-                    Point3D(worldBR[0].toDouble(), worldBR[1].toDouble(), worldBR[2].toDouble(), label = "牆角 右下", isArPrecision = true),
-                    Point3D(worldTR[0].toDouble(), worldTR[1].toDouble(), worldTR[2].toDouble(), label = "牆角 右上", isArPrecision = true),
-                    Point3D(worldTL[0].toDouble(), worldTL[1].toDouble(), worldTL[2].toDouble(), label = "牆角 左上", isArPrecision = true)
-                )
-
-                val dx = plane.centerPose.tx() - data.cameraPoseX
-                val dy = plane.centerPose.ty() - data.cameraPoseY
-                val dz = plane.centerPose.tz() - data.cameraPoseZ
-                val dist = kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
-
-                WallMeasurementInfo(
-                    id = plane.id,
-                    centerPose = plane.centerPose,
-                    widthMeters = w,
-                    heightMeters = h,
-                    areaSqMeters = w * h,
-                    distanceToCamera = dist,
-                    corners3D = corners,
-                    isTracking = true
-                )
-            }
-            _detectedWalls.value = walls
-        } else {
-            // Virtual responsive fallback when camera is tracking horizontally toward a vertical surface
-            if (data.trackingState == TrackingState.TRACKING && kotlin.math.abs(data.cameraPitch) < 28f) {
-                val forwardDist = 2.0f
-                val yawRad = Math.toRadians(data.cameraYaw.toDouble())
-                val wallCenterX = (data.cameraPoseX - kotlin.math.sin(yawRad) * forwardDist).toFloat()
-                val wallCenterZ = (data.cameraPoseZ - kotlin.math.cos(yawRad) * forwardDist).toFloat()
-                val wallCenterY = data.cameraPoseY
-
-                val estW = 2.4f
-                val estH = 2.2f
-                val halfW = estW / 2f
-                val halfH = estH / 2f
-
-                val cosY = kotlin.math.cos(yawRad).toFloat()
-                val sinY = kotlin.math.sin(yawRad).toFloat()
-
-                val rightX = cosY
-                val rightZ = -sinY
-
-                val corners = listOf(
-                    Point3D((wallCenterX - rightX * halfW).toDouble(), (wallCenterY - halfH).toDouble(), (wallCenterZ - rightZ * halfW).toDouble(), label = "牆角 左下", isArPrecision = false),
-                    Point3D((wallCenterX + rightX * halfW).toDouble(), (wallCenterY - halfH).toDouble(), (wallCenterZ + rightZ * halfW).toDouble(), label = "牆角 右下", isArPrecision = false),
-                    Point3D((wallCenterX + rightX * halfW).toDouble(), (wallCenterY + halfH).toDouble(), (wallCenterZ + rightZ * halfW).toDouble(), label = "牆角 右上", isArPrecision = false),
-                    Point3D((wallCenterX - rightX * halfW).toDouble(), (wallCenterY + halfH).toDouble(), (wallCenterZ - rightZ * halfW).toDouble(), label = "牆角 左上", isArPrecision = false)
-                )
-
-                val simulatedPose = Pose(floatArrayOf(wallCenterX, wallCenterY, wallCenterZ), floatArrayOf(0f, sinY, 0f, cosY))
-                _detectedWalls.value = listOf(
-                    WallMeasurementInfo(
-                        id = "simulated_wall_plane",
-                        centerPose = simulatedPose,
-                        widthMeters = estW,
-                        heightMeters = estH,
-                        areaSqMeters = estW * estH,
-                        distanceToCamera = forwardDist,
-                        corners3D = corners,
-                        isTracking = true
-                    )
-                )
-            } else {
-                _detectedWalls.value = emptyList()
-            }
-        }
-    }
-
     init {
         sensorCorrectionEngine.isSensorCorrectionEnabled = sensorCorrectionEnabled.value
         sensorCorrectionEngine.isAntiJitterEnabled = antiJitterEnabled.value
@@ -1179,8 +1059,6 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             kotlin.math.abs(oldStab.cameraSpeedMps - newStab.cameraSpeedMps) > 0.20f) {
             _trackingStability.value = newStab
         }
-        
-        updateDetectedWalls(data)
 
         // Update active anchor positions to eliminate world drift with threshold to prevent SnapshotStateList churning
         if (capturedPoints.isNotEmpty() && data.trackingState == TrackingState.TRACKING) {
