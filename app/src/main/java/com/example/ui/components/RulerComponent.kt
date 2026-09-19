@@ -54,9 +54,16 @@ fun RulerComponent(
     // Calibration factor from ViewModel state (persisted in SharedPreferences)
     val calibrationFactor by viewModel.rulerCalibration.collectAsState()
     val isCalibrationActive by viewModel.isRulerCalibrationActive.collectAsState()
+    val rulerTheme by viewModel.rulerTheme.collectAsState()
 
     // Right-edge unit: "cm" or "in"
     var rightUnit by remember { mutableStateOf("cm") }
+
+    val rulerAccentColor = when (rulerTheme) {
+        "NEON_CYAN" -> androidx.compose.ui.graphics.Color(0xFF00E5FF)
+        "HIGH_CONTRAST" -> androidx.compose.ui.graphics.Color(0xFFFACC15)
+        else -> MaterialTheme.colorScheme.primary
+    }
 
     // Device physical density and millimeter / inch pixel calculations
     val ydpi = remember(displayMetrics) {

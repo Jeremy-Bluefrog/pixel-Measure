@@ -62,6 +62,26 @@ fun ArMeasurementCanvasOverlay(
     val detectedTiles by viewModel.detectedTiles.collectAsState()
     val planesCount by viewModel.arPlanesCount.collectAsState()
     val sensorTelemetry by viewModel.sensorTelemetry.collectAsState()
+    val lineThickness by viewModel.lineThickness.collectAsState()
+    val reticleStyle by viewModel.reticleStyle.collectAsState()
+    val arFontSize by viewModel.arFontSize.collectAsState()
+    val badgeOpacity by viewModel.badgeOpacity.collectAsState()
+    val gridOverlayStyle by viewModel.gridOverlayStyle.collectAsState()
+
+    val customAccentColor = colorPrimary
+
+    val badgeAlpha = when (badgeOpacity) {
+        "SOLID" -> 0.95f
+        "CLEAR" -> 0.40f
+        else -> 0.70f
+    }
+
+    val arTextSizePx = when (arFontSize) {
+        "COMPACT" -> 30f
+        "LARGE" -> 46f
+        else -> 38f
+    }
+
     val capturedPoints = viewModel.capturedPoints
 
     // Cached paints for ultra-low latency hardware canvas badge rendering
@@ -76,9 +96,9 @@ fun ArMeasurementCanvasOverlay(
             strokeWidth = 3f
         }
     }
-    val badgeTextPaint = remember {
+    val badgeTextPaint = remember(arTextSizePx) {
         android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            textSize = 38f
+            textSize = arTextSizePx
             typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
             textAlign = android.graphics.Paint.Align.CENTER
         }
@@ -88,8 +108,8 @@ fun ArMeasurementCanvasOverlay(
     val samCachedPath = remember { Path() }
     val areaCachedPath = remember { Path() }
 
-    // Persistent 2D smooth auto-follow position state across canvas draw passes
-    var smoothedReticlePos by remember { mutableStateOf<Offset?>(null) }
+    // Persistent non-state 2D smooth reticle position holder (avoids triggering Compose recomposition loops during Canvas draw)
+    val reticlePosHolder = remember { floatArrayOf(-1000f, -1000f) }
 
     Canvas(modifier = modifier.fillMaxSize()) {
         val screenW = size.width.toInt()
@@ -109,26 +129,36 @@ fun ArMeasurementCanvasOverlay(
             screenCenter
         }
 
-        // 2D Critically-Damped Spring & Adaptive Exponential Auto-Follow Filter
-        val lastPos = smoothedReticlePos ?: rawTargetReticlePos
-        val dx = rawTargetReticlePos.x - lastPos.x
-        val dy = rawTargetReticlePos.y - lastPos.y
-        val distSq = dx * dx + dy * dy
+        // 2D Adaptive Low-Pass Filter with Zero Draw-Phase Recomposition Loops
+        val lastX = reticlePosHolder[0]
+        val lastY = reticlePosHolder[1]
 
-        val currentReticlePos = if (distSq < 0.75f || distSq.isNaN() || distSq.isInfinite()) {
-            if (lastPos.x.isNaN() || lastPos.y.isNaN()) screenCenter else lastPos
+        val currentReticlePos = if (lastX < -500f || lastY < -500f) {
+            reticlePosHolder[0] = rawTargetReticlePos.x
+            reticlePosHolder[1] = rawTargetReticlePos.y
+            rawTargetReticlePos
         } else {
-            val d0Sq = 1600f // 40px characteristic distance
-            val lerpFactor = (0.22f + 0.78f * (distSq / (distSq + d0Sq))).coerceIn(0.20f, 1.0f)
-            val nx = lastPos.x + dx * lerpFactor
-            val ny = lastPos.y + dy * lerpFactor
-            if (nx.isNaN() || ny.isNaN() || nx.isInfinite() || ny.isInfinite()) {
-                screenCenter
+            val dx = rawTargetReticlePos.x - lastX
+            val dy = rawTargetReticlePos.y - lastY
+            val distSq = dx * dx + dy * dy
+
+            if (distSq.isNaN() || distSq.isInfinite()) {
+                Offset(lastX, lastY)
             } else {
-                Offset(nx, ny)
+                // Smooth continuous interpolation: 0.10 for micro hand tremors up to 0.95 for fast panning
+                val d0Sq = 2500f // 50px range
+                val lerpFactor = (0.10f + 0.85f * (distSq / (distSq + d0Sq))).coerceIn(0.08f, 0.95f)
+                val nx = lastX + dx * lerpFactor
+                val ny = lastY + dy * lerpFactor
+                if (nx.isNaN() || ny.isNaN() || nx.isInfinite() || ny.isInfinite()) {
+                    Offset(lastX, lastY)
+                } else {
+                    reticlePosHolder[0] = nx
+                    reticlePosHolder[1] = ny
+                    Offset(nx, ny)
+                }
             }
         }
-        smoothedReticlePos = currentReticlePos
 
         // Optical Center & Magnetic Tension Guidance Line when Auto-Follow Lock is Active
         if (isSnapped) {

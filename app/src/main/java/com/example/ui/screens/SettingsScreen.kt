@@ -71,6 +71,20 @@ fun SettingsScreen(
     val sensorCorrectionEnabled by viewModel.sensorCorrectionEnabled.collectAsState()
     val torchBrightness by viewModel.torchBrightness.collectAsState()
 
+    val reticleStyle by viewModel.reticleStyle.collectAsState()
+    val lineThickness by viewModel.lineThickness.collectAsState()
+    val hudStyle by viewModel.hudStyle.collectAsState()
+    val arFontSize by viewModel.arFontSize.collectAsState()
+    val rulerTheme by viewModel.rulerTheme.collectAsState()
+    val uiCornerStyle by viewModel.uiCornerStyle.collectAsState()
+    val badgeOpacity by viewModel.badgeOpacity.collectAsState()
+    val gridOverlayStyle by viewModel.gridOverlayStyle.collectAsState()
+
+    val cameraAspectRatio by viewModel.cameraAspectRatio.collectAsState()
+    val useDisplayP3ColorSpace by viewModel.useDisplayP3ColorSpace.collectAsState()
+    val isLensDirtWarningEnabled by viewModel.isLensDirtWarningEnabled.collectAsState()
+    val uiButtonScale by viewModel.uiButtonScale.collectAsState()
+
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
 
     Scaffold(
@@ -426,7 +440,756 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(24.dp))
 
                 // ==========================================
-                // 2. 數據維護與說明導覽 (Data & Welcome Guide)
+                // 2. 自訂 UI 與個人化風格 (Custom UI & Personalization)
+                // ==========================================
+                SettingsCategoryHeader(
+                    title = "自訂 UI 與個人化風格",
+                    icon = Icons.Rounded.Palette,
+                    tint = Color(0xFF00E5FF)
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Group 2 Item 1 (TOP): Customizable Button Size
+                M3GroupedItemContainer(position = GroupedPosition.TOP) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.SmartButton,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Column {
+                                Text(
+                                    text = "AR 操作按鈕尺寸",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "自訂 AR 畫面中加點 FAB、快門按鈕與工具甲板縮放大小",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        val scales = listOf(
+                            0.85f to "緊湊",
+                            1.00f to "標準",
+                            1.15f to "放大",
+                            1.30f to "特大"
+                        )
+
+                        SingleChoiceSegmentedButtonRow(
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            scales.forEachIndexed { index, (scaleVal, label) ->
+                                SegmentedButton(
+                                    selected = kotlin.math.abs(uiButtonScale - scaleVal) < 0.05f,
+                                    onClick = { viewModel.setUiButtonScale(scaleVal) },
+                                    shape = SegmentedButtonDefaults.itemShape(index = index, count = scales.size),
+                                    colors = SegmentedButtonDefaults.colors(
+                                        activeContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                        activeContentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                ) {
+                                    Text(
+                                        text = label,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(3.dp))
+
+                // Group 2 Item 2 (MIDDLE): Camera Aspect Ratio Selector
+                M3GroupedItemContainer(position = GroupedPosition.MIDDLE) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.AspectRatio,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Column {
+                                Text(
+                                    text = "相片與影片長寬比",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "設定快門拍照與錄影裁切比例 (支援 4:3 / 16:9 / 1:1 / 全螢幕)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        val ratios = listOf(
+                            "4_3" to "4:3 標準",
+                            "16_9" to "16:9 寬螢幕",
+                            "1_1" to "1:1 正方形",
+                            "FULL" to "全螢幕"
+                        )
+
+                        SingleChoiceSegmentedButtonRow(
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            ratios.forEachIndexed { index, (key, label) ->
+                                SegmentedButton(
+                                    selected = cameraAspectRatio == key,
+                                    onClick = { viewModel.setCameraAspectRatio(key) },
+                                    shape = SegmentedButtonDefaults.itemShape(index = index, count = ratios.size),
+                                    colors = SegmentedButtonDefaults.colors(
+                                        activeContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                        activeContentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                ) {
+                                    Text(
+                                        text = label,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(3.dp))
+
+                // Group 2 Item 3 (MIDDLE): Display P3 Wide Color Gamut
+                M3GroupedSwitchItem(
+                    position = GroupedPosition.MIDDLE,
+                    icon = Icons.Rounded.Palette,
+                    title = "Display P3 廣色域相片格式",
+                    subtitle = "快門拍攝採用 Display P3 廣色域，色彩呈現更加豐富鮮豔",
+                    checked = useDisplayP3ColorSpace,
+                    onCheckedChange = { viewModel.setUseDisplayP3ColorSpace(it) },
+                    testTag = "switch_display_p3"
+                )
+
+                Spacer(modifier = Modifier.height(3.dp))
+
+                // Group 2 Item 4 (MIDDLE): Lens Dirt Warning
+                M3GroupedSwitchItem(
+                    position = GroupedPosition.MIDDLE,
+                    icon = Icons.Rounded.CleaningServices,
+                    title = "鏡頭髒污與指紋自動檢測警示",
+                    subtitle = "即時分析相機鏡頭模糊與油污遮擋，彈出擦拭提醒",
+                    checked = isLensDirtWarningEnabled,
+                    onCheckedChange = { viewModel.setLensDirtWarningEnabled(it) },
+                    testTag = "switch_lens_dirt_warning"
+                )
+
+                Spacer(modifier = Modifier.height(3.dp))
+
+                // Group 2 Item 5 (MIDDLE): AR Reticle Crosshair Style
+                M3GroupedItemContainer(position = GroupedPosition.MIDDLE) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f),
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.CenterFocusWeak,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.secondary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Column {
+                                Text(
+                                    text = "AR 空間準心標記樣式",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "選擇最符合您習慣的 3D 瞄準十字座標",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        val reticles = listOf(
+                            "DOUBLE_RING" to "預設雙環",
+                            "PRECISION_CROSSHAIR" to "精密十字",
+                            "TARGET_BOX" to "貼地網格",
+                            "MINIMAL_DOT" to "極簡微點"
+                        )
+
+                        SingleChoiceSegmentedButtonRow(
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            reticles.forEachIndexed { index, (code, label) ->
+                                val isSelected = reticleStyle == code
+                                SegmentedButton(
+                                    selected = isSelected,
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        viewModel.setReticleStyle(code)
+                                    },
+                                    shape = SegmentedButtonDefaults.itemShape(
+                                        index = index,
+                                        count = reticles.size
+                                    ),
+                                    icon = {
+                                        SegmentedButtonDefaults.Icon(active = isSelected)
+                                    },
+                                    label = {
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            maxLines = 1
+                                        )
+                                    },
+                                    modifier = Modifier.testTag("reticle_btn_$code")
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(3.dp))
+
+                // Group 2 Item 3 (MIDDLE): Line Weight Customization
+                M3GroupedItemContainer(position = GroupedPosition.MIDDLE) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.65f),
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Polyline,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.tertiary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Column {
+                                Text(
+                                    text = "測量標註線條粗細",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "微調實境線段與多邊形渲染寬度",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        val thicknesses = listOf(
+                            2.0f to "細緻 (2dp)",
+                            3.5f to "標準 (3.5dp)",
+                            5.0f to "粗體 (5dp)"
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            thicknesses.forEach { (thick, label) ->
+                                val isSelected = kotlin.math.abs(lineThickness - thick) < 0.2f
+                                FilterChip(
+                                    selected = isSelected,
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        viewModel.setLineThickness(thick)
+                                    },
+                                    label = {
+                                        Text(
+                                            text = label,
+                                            fontSize = 12.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                        )
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("thickness_chip_${thick.toInt()}")
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(3.dp))
+
+                // Group 2 Item 4 (MIDDLE): HUD Card Theme Style
+                M3GroupedItemContainer(position = GroupedPosition.MIDDLE) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Layers,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Column {
+                                Text(
+                                    text = "HUD 控制面板外觀",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "切換毛玻璃透光、深色高對比或極簡樣式",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        val hudStyles = listOf(
+                            "GLASS" to "懸浮毛玻璃",
+                            "SOLID" to "深色高對比",
+                            "MINIMAL" to "極簡無邊框"
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            hudStyles.forEach { (code, label) ->
+                                val isSelected = hudStyle == code
+                                FilterChip(
+                                    selected = isSelected,
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        viewModel.setHudStyle(code)
+                                    },
+                                    label = {
+                                        Text(
+                                            text = label,
+                                            fontSize = 12.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                        )
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("hud_style_chip_$code")
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(3.dp))
+
+                // Group 2 Item 5 (MIDDLE): AR Label Text Size
+                M3GroupedItemContainer(position = GroupedPosition.MIDDLE) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.TextFields,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Column {
+                                Text(
+                                    text = "AR 空間標籤字體大小",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "調整 3D 浮動數據標註與角度文字等級",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        val fontSizes = listOf(
+                            "COMPACT" to "精簡 (12sp)",
+                            "STANDARD" to "標準 (14sp)",
+                            "LARGE" to "放大 (17sp)"
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            fontSizes.forEach { (code, label) ->
+                                val isSelected = arFontSize == code
+                                FilterChip(
+                                    selected = isSelected,
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        viewModel.setArFontSize(code)
+                                    },
+                                    label = {
+                                        Text(
+                                            text = label,
+                                            fontSize = 12.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                        )
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("ar_font_chip_$code")
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(3.dp))
+
+                // Group 2 Item 6 (MIDDLE): Screen Ruler Theme
+                M3GroupedItemContainer(position = GroupedPosition.MIDDLE) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Straighten,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.secondary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Column {
+                                Text(
+                                    text = "螢幕直尺刻度主題",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "選擇 2D 直尺與雙指卡尺視覺配色風格",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        val rulerThemes = listOf(
+                            "STEEL" to "質感鋼鐵灰",
+                            "NEON_CYAN" to "霓光青黑",
+                            "HIGH_CONTRAST" to "工程高對比"
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            rulerThemes.forEach { (code, label) ->
+                                val isSelected = rulerTheme == code
+                                FilterChip(
+                                    selected = isSelected,
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        viewModel.setRulerTheme(code)
+                                    },
+                                    label = {
+                                        Text(
+                                            text = label,
+                                            fontSize = 12.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                        )
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("ruler_theme_chip_$code")
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(3.dp))
+
+                // Group 2 Item 7 (MIDDLE): AR Badge Background Opacity
+                M3GroupedItemContainer(position = GroupedPosition.MIDDLE) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f),
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Opacity,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.tertiary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Column {
+                                Text(
+                                    text = "AR 數據標註底框透明度",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "微調懸浮長度/面積卡片背景透明度",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        val opacities = listOf(
+                            "GLASS" to "70% 毛玻璃",
+                            "SOLID" to "95% 高對比",
+                            "CLEAR" to "40% 微透影"
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            opacities.forEach { (code, label) ->
+                                val isSelected = badgeOpacity == code
+                                FilterChip(
+                                    selected = isSelected,
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        viewModel.setBadgeOpacity(code)
+                                    },
+                                    label = {
+                                        Text(
+                                            text = label,
+                                            fontSize = 12.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                        )
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("badge_opacity_chip_$code")
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(3.dp))
+
+                // Group 2 Item 8 (BOTTOM): AR Grid Overlay Style
+                M3GroupedItemContainer(position = GroupedPosition.BOTTOM) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0xFF00E5FF).copy(alpha = 0.15f),
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Grid4x4,
+                                        contentDescription = null,
+                                        tint = Color(0xFF00E5FF),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            Column {
+                                Text(
+                                    text = "AR 輔助地面參考網格",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "切換空間平面捕捉時的透視參考軸網格",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        val gridStyles = listOf(
+                            "PERSPECTIVE_GRID" to "透視地面網格",
+                            "DOT_MATRIX" to "3D 幾何點陣",
+                            "OFF" to "關閉輔助網格"
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            gridStyles.forEach { (code, label) ->
+                                val isSelected = gridOverlayStyle == code
+                                FilterChip(
+                                    selected = isSelected,
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        viewModel.setGridOverlayStyle(code)
+                                    },
+                                    label = {
+                                        Text(
+                                            text = label,
+                                            fontSize = 12.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                        )
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("grid_style_chip_$code")
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // ==========================================
+                // 3. 數據維護與說明導覽 (Data & Welcome Guide)
                 // ==========================================
                 SettingsCategoryHeader(
                     title = "資料管理與說明導覽",

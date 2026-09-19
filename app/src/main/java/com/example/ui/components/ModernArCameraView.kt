@@ -137,6 +137,13 @@ fun ModernArCameraView(
     val revealedTileIds = remember { mutableStateMapOf<String, Boolean>() }
     var textureViewRef by remember { mutableStateOf<TextureView?>(null) }
 
+    // Camera Quality, Aspect Ratio & Lens Cleanliness States
+    val cameraAspectRatio by viewModel.cameraAspectRatio.collectAsState()
+    val useDisplayP3ColorSpace by viewModel.useDisplayP3ColorSpace.collectAsState()
+    val isLensDirtWarningEnabled by viewModel.isLensDirtWarningEnabled.collectAsState()
+    val isLensSmudged by viewModel.isLensSmudged.collectAsState()
+    val uiButtonScale by viewModel.uiButtonScale.collectAsState()
+
     // AR Measurement Video Recorder (Tap photo, Long-press video recording)
     val videoRecorder = remember { com.example.logic.camera.ArVideoRecorder(context) }
     val isRecordingVideo by videoRecorder.isRecording.collectAsState()
@@ -153,6 +160,7 @@ fun ModernArCameraView(
                     val bmp = currentTv.bitmap
                     if (bmp != null) {
                         viewModel.processFrameForTiles(bmp)
+                        viewModel.analyzeLensCleanliness(bmp)
                     }
                 } catch (e: Throwable) {
                     // Ignore transient frame capture errors
@@ -1232,6 +1240,7 @@ fun ModernArCameraView(
                         }
                     }
 
+
                     // History
                     IconButton(
                         onClick = onShowHistoryClick,
@@ -1276,6 +1285,143 @@ fun ModernArCameraView(
                 }
             }
         }
+
+            // 5B. Lens Dirt & Smudge Warning Banner
+            androidx.compose.animation.AnimatedVisibility(
+                visible = isLensSmudged && isLensDirtWarningEnabled,
+                enter = fadeIn(tween(220)) + slideInVertically(animationSpec = tween(220), initialOffsetY = { -it }),
+                exit = fadeOut(tween(180)) + slideOutVertically(animationSpec = tween(180), targetOffsetY = { -it }),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 96.dp)
+            ) {
+                Surface(
+                    color = Color(0xEE1E1E24),
+                    shape = RoundedCornerShape(20.dp),
+                    border = BorderStroke(1.2.dp, Color(0xFFFFB74D)),
+                    shadowElevation = 8.dp,
+                    modifier = Modifier
+                        .fillMaxWidth(0.92f)
+                        .padding(horizontal = 12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = Color(0xFFFFB74D).copy(alpha = 0.2f),
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        Icons.Rounded.CleaningServices,
+                                        contentDescription = null,
+                                        tint = Color(0xFFFFB74D),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                            Column {
+                                Text(
+                                    text = "⚠️ 偵測到鏡頭髒污或指紋油污",
+                                    color = Color(0xFFFFB74D),
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "建議擦拭鏡頭以維持最佳 AR 深度與色彩品質",
+                                    color = Color.White.copy(alpha = 0.88f),
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                        IconButton(
+                            onClick = { viewModel.dismissLensDirtWarning() },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                Icons.Rounded.Close,
+                                contentDescription = "關閉警示",
+                                tint = Color.White.copy(alpha = 0.8f),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // 5C. Aspect Ratio Viewfinder Framing Mask Overlay
+            if (cameraAspectRatio != "FULL") {
+                val targetRatio = when (cameraAspectRatio) {
+                    "4_3" -> 3f / 4f // Portrait 3:4
+                    "16_9" -> 9f / 16f // Portrait 9:16
+                    "1_1" -> 1.0f
+                    else -> 0f
+                }
+                if (targetRatio > 0f) {
+                    BoxWithConstraints(
+                        modifier = Modifier
+                            .fillMaxSize()
+                    ) {
+                        val totalW = maxWidth
+                        val totalH = maxHeight
+                        if (totalW.value > 0f && totalH.value > 0f) {
+                            val currentRatio = totalW.value / totalH.value
+                            var padH = 0.dp
+                            var padV = 0.dp
+
+                            if (currentRatio > targetRatio) {
+                                val frameW = totalH.value * targetRatio
+                                padH = ((totalW.value - frameW) / 2f).coerceAtLeast(0f).dp
+                            } else {
+                                val frameH = totalW.value / targetRatio
+                                padV = ((totalH.value - frameH) / 2f).coerceAtLeast(0f).dp
+                            }
+
+                            if (padV > 0.dp) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(padV)
+                                        .align(Alignment.TopCenter)
+                                        .background(Color.Black.copy(alpha = 0.45f))
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(padV)
+                                        .align(Alignment.BottomCenter)
+                                        .background(Color.Black.copy(alpha = 0.45f))
+                                )
+                            }
+                            if (padH > 0.dp) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .width(padH)
+                                        .align(Alignment.CenterStart)
+                                        .background(Color.Black.copy(alpha = 0.45f))
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .width(padH)
+                                        .align(Alignment.CenterEnd)
+                                        .background(Color.Black.copy(alpha = 0.45f))
+                                )
+                            }
+                        }
+                    }
+                }
+            }
 
             // 5B. Video Recording Active Top HUD & Screen Border (When recording video via long-press shutter)
             if (isRecordingVideo) {
@@ -1328,60 +1474,9 @@ fun ModernArCameraView(
                 }
             }
 
-            // 5B. Off-Screen Anchor Orientation Pointer: Guides the user back if the anchor point moves out of camera view
-            if (hasCapturedPoints && isWaitingForSecondPoint) {
-                val screenW = localView.width.takeIf { it > 0 } ?: 1080
-                val screenH = localView.height.takeIf { it > 0 } ?: 1920
-                val lastAnchor = capturedPoints.lastOrNull()
-                val lastProj = if (lastAnchor != null) {
-                    ArMath.projectWorldToScreen(
-                        lastAnchor,
-                        viewMatrixState.value,
-                        projectionMatrixState.value,
-                        screenW,
-                        screenH
-                    )
-                } else null
-
-                val isOffScreen = lastProj == null ||
-                        lastProj.first < 20f || lastProj.first > (screenW - 20f) ||
-                        lastProj.second < 60f || lastProj.second > (screenH - 120f)
-
-                if (isOffScreen) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 110.dp)
-                            .align(Alignment.TopCenter),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Surface(
-                            color = Color(0xEE1E293B),
-                            shape = RoundedCornerShape(20.dp),
-                            border = BorderStroke(1.dp, colorPrimary.copy(alpha = 0.7f)),
-                            modifier = Modifier.shadow(6.dp, RoundedCornerShape(20.dp))
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Icon(
-                                    Icons.Rounded.Explore,
-                                    contentDescription = null,
-                                    tint = colorPrimary,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Text(
-                                    text = "起點已在畫面外，請將相機移向起點 (或點擊上方 ✕ 清除)",
-                                    color = Color.White,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
-                        }
-                    }
-                }
+            // 5B. Off-Screen Anchor Orientation Pointer (Disabled per user preference)
+            if (false && hasCapturedPoints && isWaitingForSecondPoint) {
+                // Off-screen banner disabled
             }
 
 
@@ -1553,7 +1648,7 @@ fun ModernArCameraView(
                                         viewModel.undo()
                                     },
                                     modifier = Modifier
-                                        .size(44.dp)
+                                        .size((44 * uiButtonScale).dp)
                                         .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.70f), CircleShape)
                                         .border(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f), CircleShape)
                                         .shadow(3.dp, CircleShape)
@@ -1563,7 +1658,7 @@ fun ModernArCameraView(
                                         Icons.Rounded.Undo,
                                         contentDescription = "復原上一點",
                                         tint = Color.White,
-                                        modifier = Modifier.size(20.dp)
+                                        modifier = Modifier.size((20 * uiButtonScale).dp)
                                     )
                                 }
 
@@ -1573,7 +1668,7 @@ fun ModernArCameraView(
                                         viewModel.clearActivePoints()
                                     },
                                     modifier = Modifier
-                                        .size(44.dp)
+                                        .size((44 * uiButtonScale).dp)
                                         .background(Color(0xFFE53935).copy(alpha = 0.22f), CircleShape)
                                         .border(0.8.dp, Color(0xFFE53935).copy(alpha = 0.55f), CircleShape)
                                         .shadow(3.dp, CircleShape)
@@ -1583,7 +1678,7 @@ fun ModernArCameraView(
                                         Icons.Rounded.DeleteOutline,
                                         contentDescription = "全部清除",
                                         tint = Color(0xFFFF8A80),
-                                        modifier = Modifier.size(20.dp)
+                                        modifier = Modifier.size((20 * uiButtonScale).dp)
                                     )
                                 }
                             }
@@ -1604,7 +1699,7 @@ fun ModernArCameraView(
                     )
 
                     val addFabScale by animateFloatAsState(
-                        targetValue = if (isAddFabPressed) 0.93f else 1.0f,
+                        targetValue = (if (isAddFabPressed) 0.93f else 1.0f) * uiButtonScale,
                         animationSpec = spring(
                             dampingRatio = Spring.DampingRatioLowBouncy,
                             stiffness = Spring.StiffnessMedium
@@ -1622,7 +1717,7 @@ fun ModernArCameraView(
                             border = if (!isMeasurementAvailable) BorderStroke(1.5.dp, Color(0xFF5A5A5E)) else null,
                             shadowElevation = if (isMeasurementAvailable) (if (isAddFabPressed) 3.dp else 8.dp) else 2.dp,
                             modifier = Modifier
-                                .size(64.dp)
+                                .size((64 * uiButtonScale).dp)
                                 .scale(addFabScale)
                                 .clickable(
                                     interactionSource = addFabInteractionSource,
@@ -1650,7 +1745,7 @@ fun ModernArCameraView(
                                         imageVector = if (waitingForSecond) Icons.Rounded.Check else Icons.Rounded.Add,
                                         contentDescription = if (waitingForSecond) "確認第二點 (Confirm Point)" else "加入點 (Add Point)",
                                         tint = addFabIconColor,
-                                        modifier = Modifier.size(32.dp)
+                                        modifier = Modifier.size((32 * uiButtonScale).dp)
                                     )
                                 }
                             }
@@ -1666,7 +1761,7 @@ fun ModernArCameraView(
                     ) {
                         // Camera Shutter Button (Pixel Camera Style: Tap to take Photo, Long-Press to Record Video)
                         PixelShutterButton(
-                            size = 50.dp,
+                            size = (50 * uiButtonScale).dp,
                             isRecording = isRecordingVideo,
                             onClick = {
                                 haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
@@ -1687,7 +1782,11 @@ fun ModernArCameraView(
                                         kotlinx.coroutines.delay(100)
                                         isShutterFlash = false
                                     }
-                                    ShareUtility.captureViewSnapshot(localView) { path ->
+                                    ShareUtility.captureViewSnapshot(
+                                        view = localView,
+                                        aspectRatio = cameraAspectRatio,
+                                        useDisplayP3 = useDisplayP3ColorSpace
+                                    ) { path ->
                                         viewModel.saveMeasurementRecord(imagePath = path)
                                     }
                                 }

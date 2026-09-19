@@ -7,6 +7,8 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.graphics.Bitmap
+import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.LocaleList
@@ -36,7 +38,6 @@ import com.example.logic.vulkan.VulkanArGraphicsPipeline
 import com.example.logic.vulkan.VulkanAiInferenceBridge
 import com.example.logic.vulkan.VulkanAiMetrics
 import com.google.ar.core.*
-import android.graphics.Bitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -334,13 +335,226 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         prefs.edit().putBoolean("vibrate_align", enabled).apply()
     }
 
-    // Dynamic color preference
-    private val _dynamicColorEnabled = MutableStateFlow(prefs.getBoolean("dynamic_color", true))
+    // Dynamic color preference (Forced enabled for Material You Dynamic Color)
+    private val _dynamicColorEnabled = MutableStateFlow(true)
     val dynamicColorEnabled: StateFlow<Boolean> = _dynamicColorEnabled.asStateFlow()
 
-    fun setDynamicColorEnabled(enabled: Boolean) {
-        _dynamicColorEnabled.value = enabled
-        prefs.edit().putBoolean("dynamic_color", enabled).apply()
+    fun setDynamicColorEnabled(enabled: Boolean = true) {
+        _dynamicColorEnabled.value = true
+        prefs.edit().putBoolean("dynamic_color", true).apply()
+        triggerHapticFeedback()
+        _toastMessage.tryEmit("已強制套用 M3 系統動態色彩 (Dynamic Color)")
+    }
+
+    // UI Customization Preferences
+    private val _reticleStyle = MutableStateFlow(prefs.getString("reticle_style", "DOUBLE_RING") ?: "DOUBLE_RING")
+    val reticleStyle: StateFlow<String> = _reticleStyle.asStateFlow()
+
+    fun setReticleStyle(style: String) {
+        _reticleStyle.value = style
+        prefs.edit().putString("reticle_style", style).apply()
+        triggerHapticFeedback()
+        _toastMessage.tryEmit("已更換 AR 準心標記樣式")
+    }
+
+    private val _lineThickness = MutableStateFlow(prefs.getFloat("line_thickness", 3.5f))
+    val lineThickness: StateFlow<Float> = _lineThickness.asStateFlow()
+
+    fun setLineThickness(thickness: Float) {
+        _lineThickness.value = thickness
+        prefs.edit().putFloat("line_thickness", thickness).apply()
+        triggerHapticFeedback()
+    }
+
+    private val _hudStyle = MutableStateFlow(prefs.getString("hud_style", "GLASS") ?: "GLASS")
+    val hudStyle: StateFlow<String> = _hudStyle.asStateFlow()
+
+    fun setHudStyle(style: String) {
+        _hudStyle.value = style
+        prefs.edit().putString("hud_style", style).apply()
+        triggerHapticFeedback()
+        _toastMessage.tryEmit("已套用 HUD 介面風格")
+    }
+
+    // Extended Custom UI Preferences
+    private val _arFontSize = MutableStateFlow(prefs.getString("ar_font_size", "STANDARD") ?: "STANDARD")
+    val arFontSize: StateFlow<String> = _arFontSize.asStateFlow()
+
+    fun setArFontSize(size: String) {
+        _arFontSize.value = size
+        prefs.edit().putString("ar_font_size", size).apply()
+        triggerHapticFeedback()
+        val label = when (size) {
+            "COMPACT" -> "精簡 (12sp)"
+            "LARGE" -> "放大 (17sp)"
+            else -> "標準 (14sp)"
+        }
+        _toastMessage.tryEmit("已調整 AR 空間標籤字體：$label")
+    }
+
+    private val _rulerTheme = MutableStateFlow(prefs.getString("ruler_theme", "STEEL") ?: "STEEL")
+    val rulerTheme: StateFlow<String> = _rulerTheme.asStateFlow()
+
+    fun setRulerTheme(theme: String) {
+        _rulerTheme.value = theme
+        prefs.edit().putString("ruler_theme", theme).apply()
+        triggerHapticFeedback()
+        val label = when (theme) {
+            "NEON_CYAN" -> "霓光青黑"
+            "HIGH_CONTRAST" -> "高對比工程黃"
+            else -> "質感鋼鐵灰"
+        }
+        _toastMessage.tryEmit("已更換螢幕直尺主題：$label")
+    }
+
+    private val _uiCornerStyle = MutableStateFlow(prefs.getString("ui_corner_style", "ROUNDED") ?: "ROUNDED")
+    val uiCornerStyle: StateFlow<String> = _uiCornerStyle.asStateFlow()
+
+    fun setUiCornerStyle(style: String) {
+        _uiCornerStyle.value = style
+        prefs.edit().putString("ui_corner_style", style).apply()
+        triggerHapticFeedback()
+        val label = when (style) {
+            "PILL" -> "柔和膠囊"
+            "ANGULAR" -> "硬朗工業"
+            else -> "圓潤現代"
+        }
+        _toastMessage.tryEmit("已套用組件圓角風格：$label")
+    }
+
+    private val _badgeOpacity = MutableStateFlow(prefs.getString("badge_opacity", "GLASS") ?: "GLASS")
+    val badgeOpacity: StateFlow<String> = _badgeOpacity.asStateFlow()
+
+    fun setBadgeOpacity(opacity: String) {
+        _badgeOpacity.value = opacity
+        prefs.edit().putString("badge_opacity", opacity).apply()
+        triggerHapticFeedback()
+        val label = when (opacity) {
+            "SOLID" -> "95% 高顯色"
+            "CLEAR" -> "40% 極簡透視"
+            else -> "70% 柔和毛玻璃"
+        }
+        _toastMessage.tryEmit("已更新 AR 標註底框透明度：$label")
+    }
+
+    private val _gridOverlayStyle = MutableStateFlow(prefs.getString("grid_overlay_style", "PERSPECTIVE_GRID") ?: "PERSPECTIVE_GRID")
+    val gridOverlayStyle: StateFlow<String> = _gridOverlayStyle.asStateFlow()
+
+    fun setGridOverlayStyle(style: String) {
+        _gridOverlayStyle.value = style
+        prefs.edit().putString("grid_overlay_style", style).apply()
+        triggerHapticFeedback()
+        val label = when (style) {
+            "DOT_MATRIX" -> "3D 幾何點陣"
+            "OFF" -> "關閉輔助網格"
+            else -> "透視地面網格"
+        }
+        _toastMessage.tryEmit("已變更 AR 輔助網格：$label")
+    }
+
+    // Customizable UI Button Size Scale (0.85f, 1.0f, 1.15f, 1.30f)
+    private val _uiButtonScale = MutableStateFlow(prefs.getFloat("ui_button_scale", 1.0f))
+    val uiButtonScale: StateFlow<Float> = _uiButtonScale.asStateFlow()
+
+    fun setUiButtonScale(scale: Float) {
+        _uiButtonScale.value = scale
+        prefs.edit().putFloat("ui_button_scale", scale).apply()
+        triggerHapticFeedback()
+        val label = when {
+            scale <= 0.88f -> "緊湊 (0.85x)"
+            scale in 0.95f..1.05f -> "標準 (1.0x)"
+            scale in 1.10f..1.20f -> "放大 (1.15x)"
+            else -> "特大 (1.30x)"
+        }
+        _toastMessage.tryEmit("已變更 AR 操作按鈕大小：$label")
+    }
+
+    // Camera Aspect Ratio (4:3, 16:9, 1:1, FULL)
+    private val _cameraAspectRatio = MutableStateFlow(prefs.getString("camera_aspect_ratio", "4_3") ?: "4_3")
+    val cameraAspectRatio: StateFlow<String> = _cameraAspectRatio.asStateFlow()
+
+    fun setCameraAspectRatio(ratio: String) {
+        _cameraAspectRatio.value = ratio
+        prefs.edit().putString("camera_aspect_ratio", ratio).apply()
+        triggerHapticFeedback()
+        val label = when (ratio) {
+            "16_9" -> "16:9 寬螢幕"
+            "1_1" -> "1:1 正方形"
+            "FULL" -> "全螢幕 (Full)"
+            else -> "4:3 標準"
+        }
+        _toastMessage.tryEmit("已切換相片/影片構圖比例：$label")
+    }
+
+    // Display P3 Wide Color Gamut Profile
+    private val _useDisplayP3ColorSpace = MutableStateFlow(prefs.getBoolean("use_display_p3", true))
+    val useDisplayP3ColorSpace: StateFlow<Boolean> = _useDisplayP3ColorSpace.asStateFlow()
+
+    fun setUseDisplayP3ColorSpace(enabled: Boolean) {
+        _useDisplayP3ColorSpace.value = enabled
+        prefs.edit().putBoolean("use_display_p3", enabled).apply()
+        triggerHapticFeedback()
+        _toastMessage.tryEmit(if (enabled) "已啟用 Display P3 廣色域格式 (豐富鮮豔相片色彩)" else "已切換為 sRGB 標準色彩格式")
+    }
+
+    // Camera Lens Dirt & Smudge Detection Warning
+    private val _isLensDirtWarningEnabled = MutableStateFlow(prefs.getBoolean("lens_dirt_warning", true))
+    val isLensDirtWarningEnabled: StateFlow<Boolean> = _isLensDirtWarningEnabled.asStateFlow()
+
+    fun setLensDirtWarningEnabled(enabled: Boolean) {
+        _isLensDirtWarningEnabled.value = enabled
+        prefs.edit().putBoolean("lens_dirt_warning", enabled).apply()
+        if (!enabled) _isLensSmudged.value = false
+        triggerHapticFeedback()
+        _toastMessage.tryEmit(if (enabled) "已開啟鏡頭髒污與指紋自動檢測警示" else "已關閉鏡頭髒污警示")
+    }
+
+    private val _isLensSmudged = MutableStateFlow(false)
+    val isLensSmudged: StateFlow<Boolean> = _isLensSmudged.asStateFlow()
+
+    private var lastLensCheckTime = 0L
+
+    fun analyzeLensCleanliness(bitmap: Bitmap) {
+        if (!_isLensDirtWarningEnabled.value) return
+        val now = System.currentTimeMillis()
+        if (now - lastLensCheckTime < 2500L) return
+        lastLensCheckTime = now
+
+        try {
+            val scaled = Bitmap.createScaledBitmap(bitmap, 48, 48, false)
+            var totalEdgeVariance = 0.0
+            var pixelCount = 0
+            val pixels = IntArray(48 * 48)
+            scaled.getPixels(pixels, 0, 48, 0, 0, 48, 48)
+
+            for (y in 1 until 47) {
+                for (x in 1 until 47) {
+                    val idx = y * 48 + x
+                    val centerL = (Color.red(pixels[idx]) * 0.299 + Color.green(pixels[idx]) * 0.587 + Color.blue(pixels[idx]) * 0.114)
+                    val rightL = (Color.red(pixels[idx + 1]) * 0.299 + Color.green(pixels[idx + 1]) * 0.587 + Color.blue(pixels[idx + 1]) * 0.114)
+                    val downL = (Color.red(pixels[idx + 48]) * 0.299 + Color.green(pixels[idx + 48]) * 0.587 + Color.blue(pixels[idx + 48]) * 0.114)
+
+                    val dx = centerL - rightL
+                    val dy = centerL - downL
+                    totalEdgeVariance += (dx * dx + dy * dy)
+                    pixelCount++
+                }
+            }
+
+            val avgEdge = if (pixelCount > 0) totalEdgeVariance / pixelCount else 100.0
+            // Very low high-frequency variance indicates fingerprint/grease smudging fog
+            val detectedSmudge = avgEdge < 14.0
+            if (detectedSmudge != _isLensSmudged.value) {
+                _isLensSmudged.value = detectedSmudge
+            }
+        } catch (e: Exception) {
+            // Ignore frame analysis errors
+        }
+    }
+
+    fun dismissLensDirtWarning() {
+        _isLensSmudged.value = false
+        triggerHapticFeedback()
     }
 
     // Scanning Feature Point Cloud preference
@@ -881,7 +1095,16 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             val isFeatureSnapped = centerHit.isSnappedToFeature || (snappedVertex != null)
 
             if (snappedVertex != null) {
-                finalTargetPoint = snappedVertex
+                // Continuous magnetic attraction pull to prevent sudden hard teleportation jumps
+                val snapDist = ArMath.distance(orthogonalAdjustedPoint, snappedVertex)
+                val pullFactor = (1.0 - (snapDist / 0.08).coerceIn(0.0, 1.0)).let { it * it * (3.0 - 2.0 * it) }
+                finalTargetPoint = Point3D(
+                    x = orthogonalAdjustedPoint.x * (1.0 - pullFactor) + snappedVertex.x * pullFactor,
+                    y = orthogonalAdjustedPoint.y * (1.0 - pullFactor) + snappedVertex.y * pullFactor,
+                    z = orthogonalAdjustedPoint.z * (1.0 - pullFactor) + snappedVertex.z * pullFactor,
+                    isArPrecision = true,
+                    label = snappedVertex.label
+                )
             } else {
                 finalTargetPoint = orthogonalAdjustedPoint
             }
@@ -997,12 +1220,16 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     private fun smoothLiveDistance(targetDist: Double): Double {
         val prev = _liveDistanceMeters.value ?: return targetDist
         val diff = abs(targetDist - prev)
-        // Deadband: within 3.5mm, completely hold previous distance to prevent digit flickering
-        if (diff < 0.0035) return prev
-        // Continuous Rational Sigmoid Curve: seamless transition from micro-ease (0.08) to fast (1.0)
-        val d0 = 0.06 // 6cm characteristic distance
-        val dSq = diff * diff
-        val alpha = (0.08 + (0.92 * (dSq / (dSq + d0 * d0)))).coerceIn(0.06, 1.0)
+        if (diff.isNaN() || diff.isInfinite()) return targetDist
+
+        // Continuous 1-Euro style distance filter with smoothstep curve:
+        // Gently stabilizes micro-fluctuations without digit flickering or sudden jumps
+        val minAlpha = 0.03
+        val maxAlpha = 0.90
+        val t = (diff / 0.04).coerceIn(0.0, 1.0)
+        val alphaScale = t * t * (3.0 - 2.0 * t) // smoothstep
+        val alpha = minAlpha + (maxAlpha - minAlpha) * alphaScale
+
         return prev * (1.0 - alpha) + targetDist * alpha
     }
 

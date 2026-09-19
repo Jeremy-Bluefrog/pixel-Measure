@@ -288,20 +288,17 @@ object ArMath {
         val d = distance(previous, current)
         if (d.isNaN() || d.isInfinite()) return current
 
-        // Hermite polynomial deadband: if under 3.0mm, completely lock position
-        if (d < 0.0030) {
-            return previous.copy(anchor = current.anchor ?: previous.anchor)
-        }
+        // Continuous adaptive low-pass filter with smoothstep transition:
+        // Eliminates staircase jumps and freeze-and-pop micro-tremors completely.
+        // For micro-vibrations (< 28mm), alpha stays smoothly around 0.04 for rock-steady holding.
+        // As movement accelerates, alpha smoothly increases to 0.92 for lag-free tracking.
+        val minAlpha = 0.04
+        val maxAlpha = 0.92
+        val d0 = 0.028 // 28mm characteristic transition distance
 
-        // Continuous Rational Sigmoid Easing Curve (Hill equation)
-        // Eliminates staircase jumps: smoothly accelerates from alphaMin (0.08) to 1.0
-        val deadbandNorm = ((d - 0.0030) / 0.0070).coerceIn(0.0, 1.0)
-        val deadbandScale = deadbandNorm * deadbandNorm * (3.0 - 2.0 * deadbandNorm) // smoothstep
-
-        val d0 = 0.038 // 38mm characteristic half-transition distance
-        val dSq = d * d
-        val baseAlpha = 0.08 + (0.92 * (dSq / (dSq + d0 * d0)))
-        val finalAlpha = (baseAlpha * deadbandScale).coerceIn(0.06, 1.0)
+        val t = (d / d0).coerceIn(0.0, 1.0)
+        val alphaScale = t * t * (3.0 - 2.0 * t) // Cubic smoothstep (zero derivative at t=0 and t=1)
+        val finalAlpha = minAlpha + (maxAlpha - minAlpha) * alphaScale
 
         val smoothedX = previous.x * (1.0 - finalAlpha) + current.x * finalAlpha
         val smoothedY = previous.y * (1.0 - finalAlpha) + current.y * finalAlpha

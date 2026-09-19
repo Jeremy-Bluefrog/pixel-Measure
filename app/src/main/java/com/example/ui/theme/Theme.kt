@@ -89,12 +89,13 @@ val AppShapes = Shapes(
 @Composable
 fun MyApplicationTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true, // Defaults to true to support Android 12+ wallpaper dynamic palette
+    dynamicColor: Boolean = true, // Enforced to true for Material You Dynamic Color
     content: @Composable () -> Unit,
 ) {
     val context = LocalContext.current
     val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+        // Enforce M3 Dynamic Color on Android 12+ (API 31+)
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
         darkTheme -> DarkColorScheme

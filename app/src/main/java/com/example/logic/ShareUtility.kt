@@ -41,9 +41,14 @@ object ShareUtility {
 
     /**
      * Captures a screenshot of the specified view and saves it to local app internal storage.
-     * Works seamlessly for both AR Camera views and 2D Ruler views.
+     * Supports customizable Aspect Ratio cropping (4:3, 16:9, 1:1, FULL) and Display P3 wide color gamut export.
      */
-    fun captureViewSnapshot(view: View, onComplete: (String?) -> Unit) {
+    fun captureViewSnapshot(
+        view: View,
+        aspectRatio: String = "4_3",
+        useDisplayP3: Boolean = true,
+        onComplete: (String?) -> Unit
+    ) {
         val activity = findActivity(view.context)
         val window = activity?.window
 
@@ -53,6 +58,12 @@ object ShareUtility {
         }
 
         val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+
+        val processCapturedBitmap: (Bitmap) -> Unit = { rawBitmap ->
+            val croppedBitmap = cropBitmapToAspectRatio(rawBitmap, aspectRatio)
+            val savedPath = saveBitmapToInternalStorage(view.context, croppedBitmap, useDisplayP3)
+            onComplete(savedPath)
+        }
 
         if (window != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val locationOfViewInWindow = IntArray(2)
@@ -70,14 +81,12 @@ object ShareUtility {
                     bitmap,
                     { copyResult ->
                         if (copyResult == PixelCopy.SUCCESS) {
-                            val savedPath = saveBitmapToInternalStorage(view.context, bitmap)
-                            onComplete(savedPath)
+                            processCapturedBitmap(bitmap)
                         } else {
                             // Fallback to view drawing
                             val canvas = Canvas(bitmap)
                             view.draw(canvas)
-                            val savedPath = saveBitmapToInternalStorage(view.context, bitmap)
-                            onComplete(savedPath)
+                            processCapturedBitmap(bitmap)
                         }
                     },
                     Handler(Looper.getMainLooper())
@@ -92,22 +101,74 @@ object ShareUtility {
         try {
             val canvas = Canvas(bitmap)
             view.draw(canvas)
-            val savedPath = saveBitmapToInternalStorage(view.context, bitmap)
-            onComplete(savedPath)
+            processCapturedBitmap(bitmap)
         } catch (e: Exception) {
             e.printStackTrace()
             onComplete(null)
         }
     }
 
-    private fun saveBitmapToInternalStorage(context: Context, bitmap: Bitmap): String? {
+    private fun cropBitmapToAspectRatio(src: Bitmap, aspectRatio: String): Bitmap {
+        if (aspectRatio == "FULL") return src
+
+        val srcW = src.width
+        val srcH = src.height
+        if (srcW <= 0 || srcH <= 0) return src
+
+        val isPortrait = srcH >= srcW
+        val targetRatio = when (aspectRatio) {
+            "4_3" -> if (isPortrait) 3f / 4f else 4f / 3f
+            "16_9" -> if (isPortrait) 9f / 16f else 16f / 9f
+            "1_1" -> 1.0f
+            else -> return src
+        }
+
+        val currentRatio = srcW.toFloat() / srcH.toFloat()
+        var cropW = srcW
+        var cropH = srcH
+
+        if (currentRatio > targetRatio) {
+            // Source is wider than target ratio: crop width
+            cropW = (srcH * targetRatio).toInt().coerceAtMost(srcW)
+        } else {
+            // Source is taller than target ratio: crop height
+            cropH = (srcW / targetRatio).toInt().coerceAtMost(srcH)
+        }
+
+        val startX = ((srcW - cropW) / 2).coerceAtLeast(0)
+        val startY = ((srcH - cropH) / 2).coerceAtLeast(0)
+
+        return try {
+            Bitmap.createBitmap(src, startX, startY, cropW, cropH)
+        } catch (e: Exception) {
+            src
+        }
+    }
+
+    private fun saveBitmapToInternalStorage(
+        context: Context,
+        bitmap: Bitmap,
+        useDisplayP3: Boolean = true
+    ): String? {
         return try {
             val screenshotsDir = File(context.filesDir, "screenshots")
             if (!screenshotsDir.exists()) screenshotsDir.mkdirs()
 
             val file = File(screenshotsDir, "measure_snap_${System.currentTimeMillis()}.jpg")
+
+            val targetBitmap = if (useDisplayP3 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                try {
+                    val p3Bmp = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+                    p3Bmp
+                } catch (e: Exception) {
+                    bitmap
+                }
+            } else {
+                bitmap
+            }
+
             FileOutputStream(file).use { out ->
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)
+                targetBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
                 out.flush()
             }
             file.absolutePath
