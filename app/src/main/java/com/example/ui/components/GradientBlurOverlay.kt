@@ -98,47 +98,7 @@ private const val PROGRESSIVE_BLUR_AGSL = """
  */
 @Composable
 fun EnableWindowBlur(blurRadiusDp: Int = 40) {
-    val view = LocalView.current
-    val density = LocalDensity.current
-    val radiusPx = with(density) { blurRadiusDp.dp.roundToPx() }
-
-    DisposableEffect(view, radiusPx) {
-        var parent = view.parent
-        var targetWindow: Window? = null
-        while (parent != null) {
-            if (parent is DialogWindowProvider) {
-                targetWindow = parent.window
-                break
-            }
-            parent = parent.parent
-        }
-        if (targetWindow == null) {
-            targetWindow = (view.context as? Activity)?.window
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && targetWindow != null) {
-            try {
-                targetWindow.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
-                targetWindow.attributes = targetWindow.attributes.apply {
-                    blurBehindRadius = radiusPx
-                }
-            } catch (e: Throwable) {
-                android.util.Log.w("WindowBlur", "Hardware Window Blur failed: ${e.message}")
-            }
-        }
-        onDispose {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && targetWindow != null) {
-                try {
-                    // Cleanly reset blur behind radius when dialog or sheet is dismissed
-                    targetWindow.attributes = targetWindow.attributes.apply {
-                        blurBehindRadius = 0
-                    }
-                } catch (e: Throwable) {
-                    // Ignore on disposal
-                }
-            }
-        }
-    }
+    // Blur effects temporarily disabled
 }
 
 /**
@@ -148,19 +108,7 @@ fun EnableWindowBlur(blurRadiusDp: Int = 40) {
 fun Modifier.hardwareBackdropBlur(
     enabled: Boolean,
     blurRadius: Float = 32f
-): Modifier = this.then(
-    Modifier.graphicsLayer {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            renderEffect = if (enabled && blurRadius > 0.5f) {
-                RenderEffect.createBlurEffect(
-                    blurRadius,
-                    blurRadius,
-                    Shader.TileMode.CLAMP
-                ).asComposeRenderEffect()
-            } else null
-        }
-    }
-)
+): Modifier = this
 
 /**
  * Progressive Blur Modifier:
@@ -171,54 +119,7 @@ fun Modifier.hardwareBackdropBlur(
 fun Modifier.progressiveBlur(
     direction: BlurDirection = BlurDirection.BOTTOM_TO_TOP,
     maxBlurRadius: Dp = 24.dp
-): Modifier = composed {
-    val density = LocalDensity.current
-    val maxRadiusPx = with(density) { maxBlurRadius.toPx() }
-
-    val runtimeShader = remember {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            try {
-                RuntimeShader(PROGRESSIVE_BLUR_AGSL)
-            } catch (e: Throwable) {
-                null
-            }
-        } else null
-    }
-
-    this.graphicsLayer {
-        if (maxRadiusPx <= 0.5f) return@graphicsLayer
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && runtimeShader != null && size.width > 0f && size.height > 0f) {
-            try {
-                val dirCode = when (direction) {
-                    BlurDirection.TOP_TO_BOTTOM -> 0f
-                    BlurDirection.BOTTOM_TO_TOP -> 1f
-                    BlurDirection.LEFT_TO_RIGHT -> 2f
-                    BlurDirection.RIGHT_TO_LEFT -> 3f
-                }
-                runtimeShader.setFloatUniform("size", size.width, size.height)
-                runtimeShader.setFloatUniform("maxRadius", maxRadiusPx)
-                runtimeShader.setFloatUniform("direction", dirCode)
-                renderEffect = RenderEffect.createRuntimeShaderEffect(runtimeShader, "content").asComposeRenderEffect()
-                return@graphicsLayer
-            } catch (e: Throwable) {
-                // Fall through to standard RenderEffect
-            }
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            try {
-                renderEffect = RenderEffect.createBlurEffect(
-                    maxRadiusPx,
-                    maxRadiusPx,
-                    Shader.TileMode.CLAMP
-                ).asComposeRenderEffect()
-            } catch (e: Throwable) {
-                // Graceful fallback
-            }
-        }
-    }
-}
+): Modifier = this
 
 /**
  * Modifier applying progressive frosted glass surface treatment:

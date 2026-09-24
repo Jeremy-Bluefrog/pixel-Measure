@@ -125,6 +125,9 @@ class HighSpeedCamera2Manager(private val context: Context) {
         textureView: TextureView,
         onSessionConfigured: ((Boolean, Size) -> Unit)? = null
     ) {
+        if (cameraDevice != null && captureSession != null && !isClosed) {
+            return
+        }
         isClosed = false
         startBackgroundThread()
 

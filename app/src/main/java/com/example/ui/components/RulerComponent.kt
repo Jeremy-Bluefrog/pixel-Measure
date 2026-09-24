@@ -41,6 +41,8 @@ import kotlin.math.roundToInt
  * 3. 極致流暢校準面板：支援 0.002x 精密步進與連續平滑滑桿（非同步寫入快取，鬆手持久化）。
  * 4. 自適應螢幕密度排版：文字依 sp 向量縮放，垂直基準線以 FontMetrics 完美居中對齊。
  */
+private val PRECALCULATED_INT_STRINGS = Array(301) { "$it" }
+
 @Composable
 fun RulerComponent(
     viewModel: MeasureViewModel,
@@ -140,6 +142,23 @@ fun RulerComponent(
             val w = size.width
             val h = size.height
             val rulerWidth = 70.dp.toPx()
+            val borderStrokeWidth = 1.dp.toPx()
+            val zeroStrokeWidth = 2.5.dp.toPx()
+            val pad8Px = 8.dp.toPx()
+            val pad10Px = 10.dp.toPx()
+            val pad12Px = 12.dp.toPx()
+
+            val tickCmLen = 32.dp.toPx()
+            val tickHalfCmLen = 20.dp.toPx()
+            val tickMmLlen = 12.dp.toPx()
+            val strokeCmWidth = 2.dp.toPx()
+            val strokeMmWidth = 1.dp.toPx()
+
+            val tickWholeInLen = 34.dp.toPx()
+            val tickHalfInLen = 24.dp.toPx()
+            val tickQuarterInLen = 18.dp.toPx()
+            val tickEighthInLen = 14.dp.toPx()
+            val tickSixteenthInLen = 10.dp.toPx()
 
             // 1. Left Ruler Body Background
             drawRect(
@@ -152,7 +171,7 @@ fun RulerComponent(
                 color = colorOutline.copy(alpha = 0.5f),
                 start = Offset(rulerWidth, 0f),
                 end = Offset(rulerWidth, h),
-                strokeWidth = 1.dp.toPx()
+                strokeWidth = borderStrokeWidth
             )
 
             // 2. Right Ruler Body Background
@@ -167,7 +186,7 @@ fun RulerComponent(
                 color = colorOutline.copy(alpha = 0.5f),
                 start = Offset(rightRulerX, 0f),
                 end = Offset(rightRulerX, h),
-                strokeWidth = 1.dp.toPx()
+                strokeWidth = borderStrokeWidth
             )
 
             // 3. Zero Reference Baseline connecting Left and Right Rulers
@@ -175,12 +194,12 @@ fun RulerComponent(
                 color = colorPrimary,
                 start = Offset(0f, zeroY),
                 end = Offset(w, zeroY),
-                strokeWidth = 2.5.dp.toPx()
+                strokeWidth = zeroStrokeWidth
             )
 
             // Zero Unit Label Headers
-            drawContext.canvas.nativeCanvas.drawText("cm", 12.dp.toPx(), zeroY - 10.dp.toPx(), unitPaintLeft)
-            drawContext.canvas.nativeCanvas.drawText(rightUnit, w - 12.dp.toPx(), zeroY - 10.dp.toPx(), unitPaintRight)
+            drawContext.canvas.nativeCanvas.drawText("cm", pad12Px, zeroY - pad10Px, unitPaintLeft)
+            drawContext.canvas.nativeCanvas.drawText(rightUnit, w - pad12Px, zeroY - pad10Px, unitPaintRight)
 
             // 4. Left Edge Graduations (Centimeter & Millimeter ticks)
             var leftCurY = zeroY
@@ -190,13 +209,13 @@ fun RulerComponent(
                 val isHalfCm = (leftMm % 5 == 0)
 
                 val tickLength = when {
-                    isCm -> 32.dp.toPx()
-                    isHalfCm -> 20.dp.toPx()
-                    else -> 12.dp.toPx()
+                    isCm -> tickCmLen
+                    isHalfCm -> tickHalfCmLen
+                    else -> tickMmLlen
                 }
 
                 val tickColor = if (isCm) colorPrimary else colorOnSurface.copy(alpha = 0.35f)
-                val strokeWidth = if (isCm) 2.dp.toPx() else 1.dp.toPx()
+                val strokeWidth = if (isCm) strokeCmWidth else strokeMmWidth
 
                 drawLine(
                     color = tickColor,
@@ -208,8 +227,8 @@ fun RulerComponent(
                 if (isCm && leftMm > 0) {
                     val cmVal = leftMm / 10
                     drawContext.canvas.nativeCanvas.drawText(
-                        "$cmVal",
-                        tickLength + 8.dp.toPx(),
+                        PRECALCULATED_INT_STRINGS.getOrElse(cmVal) { "$cmVal" },
+                        tickLength + pad8Px,
                         leftCurY - fontVerticalOffset,
                         textPaintLeft
                     )
@@ -229,13 +248,13 @@ fun RulerComponent(
                     val isHalfCm = (rightMm % 5 == 0)
 
                     val tickLength = when {
-                        isCm -> 32.dp.toPx()
-                        isHalfCm -> 20.dp.toPx()
-                        else -> 12.dp.toPx()
+                        isCm -> tickCmLen
+                        isHalfCm -> tickHalfCmLen
+                        else -> tickMmLlen
                     }
 
                     val tickColor = if (isCm) colorPrimary else colorOnSurface.copy(alpha = 0.35f)
-                    val strokeWidth = if (isCm) 2.dp.toPx() else 1.dp.toPx()
+                    val strokeWidth = if (isCm) strokeCmWidth else strokeMmWidth
 
                     drawLine(
                         color = tickColor,
@@ -247,8 +266,8 @@ fun RulerComponent(
                     if (isCm && rightMm > 0) {
                         val cmVal = rightMm / 10
                         drawContext.canvas.nativeCanvas.drawText(
-                            "$cmVal",
-                            w - tickLength - 8.dp.toPx(),
+                            PRECALCULATED_INT_STRINGS.getOrElse(cmVal) { "$cmVal" },
+                            w - tickLength - pad8Px,
                             rightCurY - fontVerticalOffset,
                             textPaintRight
                         )
@@ -269,15 +288,15 @@ fun RulerComponent(
                     val isEighth = (step % 2 == 0)
 
                     val tickLength = when {
-                        isWhole -> 34.dp.toPx()
-                        isHalf -> 24.dp.toPx()
-                        isQuarter -> 18.dp.toPx()
-                        isEighth -> 14.dp.toPx()
-                        else -> 10.dp.toPx()
+                        isWhole -> tickWholeInLen
+                        isHalf -> tickHalfInLen
+                        isQuarter -> tickQuarterInLen
+                        isEighth -> tickEighthInLen
+                        else -> tickSixteenthInLen
                     }
 
                     val tickColor = if (isWhole) colorPrimary else colorOnSurface.copy(alpha = 0.35f)
-                    val strokeWidth = if (isWhole) 2.dp.toPx() else 1.dp.toPx()
+                    val strokeWidth = if (isWhole) strokeCmWidth else strokeMmWidth
 
                     drawLine(
                         color = tickColor,
@@ -289,8 +308,8 @@ fun RulerComponent(
                     if (isWhole && step > 0) {
                         val inchVal = step / 16
                         drawContext.canvas.nativeCanvas.drawText(
-                            "$inchVal",
-                            w - tickLength - 8.dp.toPx(),
+                            PRECALCULATED_INT_STRINGS.getOrElse(inchVal) { "$inchVal" },
+                            w - tickLength - pad8Px,
                             rightCurY - fontVerticalOffset,
                             textPaintRight
                         )

@@ -4,6 +4,7 @@ package com.example.ui.components
 
 import android.Manifest
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
 import android.os.Build
 import android.os.VibrationEffect
@@ -11,6 +12,8 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.view.TextureView
 import com.example.ui.viewmodel.HapticType
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
@@ -106,13 +109,9 @@ fun ModernArCameraView(
     val trackingStability by viewModel.trackingStability.collectAsState()
     val isDepthAvailable by viewModel.isDepthAvailable.collectAsState()
     val planesCount by viewModel.arPlanesCount.collectAsState()
-    val viewMatrixState = viewModel.viewMatrix.collectAsState()
-    val projectionMatrixState = viewModel.projectionMatrix.collectAsState()
     val subMode by viewModel.cameraSubMode.collectAsState()
     val autoDetectedType by viewModel.autoDetectedType.collectAsState()
     val selectedUnit by viewModel.selectedUnit.collectAsState()
-    val liveDistanceMetersState = viewModel.liveDistanceMeters.collectAsState()
-    val liveTargetPointState = viewModel.liveTargetPoint.collectAsState()
     val isSnapped by viewModel.isSnapped.collectAsState()
     val isTorchOn by viewModel.isTorchOn.collectAsState()
     val torchBrightness by viewModel.torchBrightness.collectAsState()
@@ -121,7 +120,6 @@ fun ModernArCameraView(
     val capturedPoints = viewModel.capturedPoints
     val hasCapturedPoints by remember { derivedStateOf { capturedPoints.isNotEmpty() } }
     val isWaitingForSecondPoint by remember { derivedStateOf { capturedPoints.size % 2 == 1 } }
-    val sensorTelemetryState = viewModel.sensorTelemetry.collectAsState()
     val sensorCorrectionEnabled by viewModel.sensorCorrectionEnabled.collectAsState()
     val highFpsModeEnabled by viewModel.highFpsModeEnabled.collectAsState()
     val isObjectronMode by viewModel.isObjectronMode.collectAsState()
@@ -142,6 +140,8 @@ fun ModernArCameraView(
     val useDisplayP3ColorSpace by viewModel.useDisplayP3ColorSpace.collectAsState()
     val isLensDirtWarningEnabled by viewModel.isLensDirtWarningEnabled.collectAsState()
     val isLensSmudged by viewModel.isLensSmudged.collectAsState()
+    val dismissedLowLight by viewModel.dismissedLowLight.collectAsState()
+    val simulatedAlert by viewModel.simulatedAlert.collectAsState()
     val uiButtonScale by viewModel.uiButtonScale.collectAsState()
 
     // AR Measurement Video Recorder (Tap photo, Long-press video recording)
@@ -149,21 +149,29 @@ fun ModernArCameraView(
     val isRecordingVideo by videoRecorder.isRecording.collectAsState()
     val recordingSeconds by videoRecorder.recordingSeconds.collectAsState()
 
-    // Real-time background frame analyzer: processes live camera feed for genuine tile edges/grids
-    LaunchedEffect(isAiTileMode) {
-        if (!isAiTileMode) return@LaunchedEffect
-        while (isActive) {
-            delay(1000)
-            val currentTv = textureViewRef
-            if (currentTv != null && currentTv.isAvailable) {
-                try {
-                    val bmp = currentTv.bitmap
-                    if (bmp != null) {
-                        viewModel.processFrameForTiles(bmp)
-                        viewModel.analyzeLensCleanliness(bmp)
+    // Real-time background frame analyzer: throttled & offloaded to Dispatchers.Default
+    LaunchedEffect(isAiTileMode, isLensDirtWarningEnabled) {
+        if (!isAiTileMode && !isLensDirtWarningEnabled) return@LaunchedEffect
+        withContext(Dispatchers.Default) {
+            val downscaledBmp = Bitmap.createBitmap(160, 160, Bitmap.Config.ARGB_8888)
+            while (isActive) {
+                val delayMs = if (isAiTileMode) 1200L else 2600L
+                delay(delayMs)
+                val currentTv = textureViewRef
+                if (currentTv != null && currentTv.isAvailable) {
+                    try {
+                        withContext(Dispatchers.Main) {
+                            currentTv.getBitmap(downscaledBmp)
+                        }
+                        if (isAiTileMode) {
+                            viewModel.processFrameForTiles(downscaledBmp)
+                        }
+                        if (isLensDirtWarningEnabled) {
+                            viewModel.analyzeLensCleanliness(downscaledBmp)
+                        }
+                    } catch (e: Throwable) {
+                        // Ignore transient frame capture errors
                     }
-                } catch (e: Throwable) {
-                    // Ignore transient frame capture errors
                 }
             }
         }
@@ -176,11 +184,15 @@ fun ModernArCameraView(
     var showHelpDialog by remember { mutableStateOf(false) }
     var showSensorStatusDialog by remember { mutableStateOf(false) }
     var showStabilityDiagnosticsDialog by remember { mutableStateOf(false) }
+    var showLensCleaningDialog by remember { mutableStateOf(false) }
+    var showLowLightDialog by remember { mutableStateOf(false) }
+    var showMotionDialog by remember { mutableStateOf(false) }
+    var showFeatureDialog by remember { mutableStateOf(false) }
     var showAiToolsMenu by remember { mutableStateOf(false) }
 
     val isArOverlayOpen by remember {
         derivedStateOf {
-            showHelpDialog || showSensorStatusDialog || showStabilityDiagnosticsDialog || showTileDetailSheet || selectedTileForDetail != null
+            showHelpDialog || showSensorStatusDialog || showStabilityDiagnosticsDialog || showLensCleaningDialog || showLowLightDialog || showMotionDialog || showFeatureDialog || showTileDetailSheet || selectedTileForDetail != null
         }
     }
     val arOverlayBlurRadius by animateFloatAsState(
@@ -194,7 +206,20 @@ fun ModernArCameraView(
         viewModel.onResume()
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> viewModel.onResume()
+                Lifecycle.Event.ON_RESUME -> {
+                    viewModel.onResume()
+                    if (!viewModel.isArCoreSessionActive) {
+                        textureViewRef?.let { tv ->
+                            if (tv.isAvailable) {
+                                val manager = HighSpeedCamera2Manager(context)
+                                viewModel.setHighSpeedCamera2Manager(manager)
+                                manager.openCameraAndStartSession(tv) { isHighSpeed, size ->
+                                    android.util.Log.i("CameraView", "Session resumed. HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
+                                }
+                            }
+                        }
+                    }
+                }
                 Lifecycle.Event.ON_PAUSE -> viewModel.onPause()
                 else -> {}
             }
@@ -203,6 +228,7 @@ fun ModernArCameraView(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             viewModel.onPause()
+            viewModel.closeHighSpeedCamera()
             if (videoRecorder.isRecording.value) {
                 videoRecorder.stopRecording { _, _, _ -> }
             }
@@ -511,8 +537,8 @@ fun ModernArCameraView(
                         textureView
                     },
                     onRelease = { view ->
+                        viewModel.closeHighSpeedCamera()
                         textureViewRef = null
-                        viewModel.setHighSpeedCamera2Manager(null)
                     },
                     modifier = Modifier
                         .fillMaxSize()
@@ -661,12 +687,11 @@ fun ModernArCameraView(
                                 .wrapContentSize(),
                             contentAlignment = Alignment.Center
                         ) {
-                            // Frosted Glass Blur Backdrop Layer (模糊效果背景)
+                            // Frosted Glass Backdrop Layer
                             Box(
                                 modifier = Modifier
                                     .matchParentSize()
                                     .clip(RoundedCornerShape(50))
-                                    .blur(radius = 16.dp, edgeTreatment = BlurredEdgeTreatment.Unbounded)
                                     .background(
                                         brush = Brush.verticalGradient(
                                             colors = listOf(
@@ -776,136 +801,10 @@ fun ModernArCameraView(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                // Left: Status badge or clear button, with weight to prevent pushing right action buttons
-                Row(
-                    modifier = Modifier.weight(1f, fill = false).padding(end = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    AnimatedContent(
-                        targetState = hasCapturedPoints,
-                        transitionSpec = {
-                            (fadeIn(animationSpec = tween(180)) + scaleIn(
-                                initialScale = 0.92f,
-                                animationSpec = tween(180)
-                            )).togetherWith(
-                                fadeOut(animationSpec = tween(140)) + scaleOut(
-                                    targetScale = 0.92f,
-                                    animationSpec = tween(140)
-                                )
-                            )
-                        },
-                        label = "TopStatusChipAnim"
-                    ) { isMeasuring ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        if (isMeasuring) {
-                            // "測量中" active indicator badge with one-tap clear / reset
-                            Surface(
-                                color = colorPrimary.copy(alpha = 0.92f),
-                                shape = RoundedCornerShape(18.dp),
-                                border = BorderStroke(1.dp, colorPrimary.copy(alpha = 0.8f)),
-                                modifier = Modifier
-                                    .shadow(3.dp, RoundedCornerShape(18.dp))
-                                    .clickable {
-                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                        viewModel.clearActivePoints()
-                                    }
-                                    .testTag("clear_measurement_chip")
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                                ) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(10.dp),
-                                        strokeWidth = 1.8.dp,
-                                        color = colorOnPrimary
-                                    )
-                                    Text(
-                                        text = "測量中",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = FontWeight.Bold,
-                                        color = colorOnPrimary
-                                    )
-                                    Icon(
-                                        Icons.Rounded.Close,
-                                        contentDescription = "清除測量",
-                                        tint = colorOnPrimary,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                }
-                            }
-                        } else {
-                            val stabilityColor = when (trackingStability.level) {
-                                StabilityLevel.HIGH -> colorTertiary
-                                StabilityLevel.MODERATE -> colorPrimary
-                                StabilityLevel.LOW -> colorSecondary
-                                StabilityLevel.POOR -> colorError
-                            }
+                    // Left area: empty Spacer so top row remains balanced and right actions stay on right (no badges/tags)
+                    Spacer(modifier = Modifier.weight(1f))
 
-                            Surface(
-                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
-                                shape = RoundedCornerShape(18.dp),
-                                border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
-                                modifier = Modifier
-                                    .shadow(2.dp, RoundedCornerShape(18.dp))
-                                    .clickable { showStabilityDiagnosticsDialog = true }
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                                ) {
-                                    if (trackingState == TrackingState.TRACKING) {
-                                        Surface(
-                                            color = stabilityColor,
-                                            shape = CircleShape,
-                                            modifier = Modifier.size(7.dp)
-                                        ) {}
-                                        Text(
-                                            text = "穩定",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = if (trackingStability.isDriftRisk) colorError else Color.White
-                                        )
-                                        if (trackingStability.isFeatureDeficient) {
-                                            Surface(
-                                                color = colorError.copy(alpha = 0.22f),
-                                                shape = RoundedCornerShape(5.dp)
-                                            ) {
-                                                Text(
-                                                    text = "特徵少",
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = colorError,
-                                                    modifier = Modifier.padding(horizontal = 3.dp, vertical = 1.dp)
-                                                )
-                                            }
-                                        }
-                                    } else {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(10.dp),
-                                            strokeWidth = 1.8.dp,
-                                            color = colorPrimary
-                                        )
-                                        Text(
-                                            text = "尋找表面...",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = Color.White.copy(alpha = 0.85f)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-                // Right: Clean quick actions with AI tool menu
+                    // Right: Clean quick actions with AI tool menu
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -1286,77 +1185,7 @@ fun ModernArCameraView(
             }
         }
 
-            // 5B. Lens Dirt & Smudge Warning Banner
-            androidx.compose.animation.AnimatedVisibility(
-                visible = isLensSmudged && isLensDirtWarningEnabled,
-                enter = fadeIn(tween(220)) + slideInVertically(animationSpec = tween(220), initialOffsetY = { -it }),
-                exit = fadeOut(tween(180)) + slideOutVertically(animationSpec = tween(180), targetOffsetY = { -it }),
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(top = 96.dp)
-            ) {
-                Surface(
-                    color = Color(0xEE1E1E24),
-                    shape = RoundedCornerShape(20.dp),
-                    border = BorderStroke(1.2.dp, Color(0xFFFFB74D)),
-                    shadowElevation = 8.dp,
-                    modifier = Modifier
-                        .fillMaxWidth(0.92f)
-                        .padding(horizontal = 12.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Surface(
-                                shape = CircleShape,
-                                color = Color(0xFFFFB74D).copy(alpha = 0.2f),
-                                modifier = Modifier.size(34.dp)
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        Icons.Rounded.CleaningServices,
-                                        contentDescription = null,
-                                        tint = Color(0xFFFFB74D),
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                            }
-                            Column {
-                                Text(
-                                    text = "⚠️ 偵測到鏡頭髒污或指紋油污",
-                                    color = Color(0xFFFFB74D),
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = "建議擦拭鏡頭以維持最佳 AR 深度與色彩品質",
-                                    color = Color.White.copy(alpha = 0.88f),
-                                    fontSize = 11.sp
-                                )
-                            }
-                        }
-                        IconButton(
-                            onClick = { viewModel.dismissLensDirtWarning() },
-                            modifier = Modifier.size(28.dp)
-                        ) {
-                            Icon(
-                                Icons.Rounded.Close,
-                                contentDescription = "關閉警示",
-                                tint = Color.White.copy(alpha = 0.8f),
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                    }
-                }
-            }
+
 
             // 5C. Aspect Ratio Viewfinder Framing Mask Overlay
             if (cameraAspectRatio != "FULL") {
@@ -1525,27 +1354,10 @@ fun ModernArCameraView(
                     Box(modifier = Modifier.padding(bottom = 10.dp)) {
                         if (!isMobileSamMode && !isObjectronMode) {
                             if (isWaitingForSecondPoint) {
-                                Surface(
-                                    color = Color(0xDD002B36),
-                                    shape = RoundedCornerShape(18.dp),
-                                    border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.7f)),
-                                    modifier = Modifier.shadow(4.dp, RoundedCornerShape(18.dp))
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        Icon(Icons.Rounded.Straighten, null, tint = Color(0xFF00E5FF), modifier = Modifier.size(15.dp))
-                                        val liveDistText = liveDistanceMetersState.value?.let { viewModel.formatLength(it, selectedUnit) } ?: "量測中..."
-                                        Text(
-                                            text = "即時長度: $liveDistText • 輕觸 ✓ 釘選終點",
-                                            color = Color(0xFF00E5FF),
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
+                                LiveDistanceBadge(
+                                    viewModel = viewModel,
+                                    selectedUnit = selectedUnit
+                                )
                             }
                         } else {
                             Surface(
@@ -1851,6 +1663,7 @@ fun ModernArCameraView(
 
     // Multi-Sensor Fusion Status Dialog
     if (showSensorStatusDialog) {
+        val sensorTelemetry by viewModel.sensorTelemetry.collectAsState()
         val antiJitter by viewModel.antiJitterEnabled.collectAsState()
         val gravityAlign by viewModel.gravityAlignmentEnabled.collectAsState()
         val barometerFusion by viewModel.barometerFusionEnabled.collectAsState()
@@ -1905,7 +1718,7 @@ fun ModernArCameraView(
                                 Text("陀螺儀防抖穩定度", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                             }
                             Text(
-                                "${(sensorTelemetryState.value.stabilityScore * 100).toInt()}% (${if (sensorTelemetryState.value.isHandSteady) "🎯 穩定鎖定" else "微動追蹤"})",
+                                "${(sensorTelemetry.stabilityScore * 100).toInt()}% (${if (sensorTelemetry.isHandSteady) "🎯 穩定鎖定" else "微動追蹤"})",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
@@ -1947,14 +1760,14 @@ fun ModernArCameraView(
                                 Text("重力向量垂直基準", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                             }
                             Text(
-                                "俯仰: ${df1.format(sensorTelemetryState.value.pitchDeg)}° / 滾轉: ${df1.format(sensorTelemetryState.value.rollDeg)}°",
+                                "俯仰: ${df1.format(sensorTelemetry.pitchDeg)}° / 滾轉: ${df1.format(sensorTelemetry.rollDeg)}°",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold
                             )
                         }
 
                         // 3. Barometer Altitude
-                        if (sensorTelemetryState.value.isBarometerAvailable) {
+                        if (sensorTelemetry.isBarometerAvailable) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1970,7 +1783,7 @@ fun ModernArCameraView(
                                     Text("氣壓計相對高程", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                                 }
                                 Text(
-                                    "${if (sensorTelemetryState.value.barometricAltitudeMeters >= 0) "+" else ""}${df2.format(sensorTelemetryState.value.barometricAltitudeMeters)} m (${df1.format(sensorTelemetryState.value.currentPressureHpa)} hPa)",
+                                    "${if (sensorTelemetry.barometricAltitudeMeters >= 0) "+" else ""}${df2.format(sensorTelemetry.barometricAltitudeMeters)} m (${df1.format(sensorTelemetry.currentPressureHpa)} hPa)",
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -1978,7 +1791,7 @@ fun ModernArCameraView(
                         }
 
                         // 4. Proximity Sensor (Surface Contact Zero-Point)
-                        if (sensorTelemetryState.value.isProximityAvailable) {
+                        if (sensorTelemetry.isProximityAvailable) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1986,7 +1799,7 @@ fun ModernArCameraView(
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Surface(
-                                        color = if (sensorTelemetryState.value.isProximityNear) colorPrimary else Color.Gray,
+                                        color = if (sensorTelemetry.isProximityNear) colorPrimary else Color.Gray,
                                         shape = CircleShape,
                                         modifier = Modifier.size(8.dp)
                                     ) {}
@@ -1994,7 +1807,7 @@ fun ModernArCameraView(
                                     Text("近接貼面零點校準", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                                 }
                                 Text(
-                                    if (sensorTelemetryState.value.isProximityNear) "📐 貼面觸碰 (0 cm 零點補償)" else "遠離表面 (${df1.format(sensorTelemetryState.value.proximityDistanceCm)} cm)",
+                                    if (sensorTelemetry.isProximityNear) "📐 貼面觸碰 (0 cm 零點補償)" else "遠離表面 (${df1.format(sensorTelemetry.proximityDistanceCm)} cm)",
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface
@@ -2018,7 +1831,7 @@ fun ModernArCameraView(
                                 Text("雙鏡頭同步視差基準", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                             }
                             Text(
-                                "物理基線: ${df1.format(sensorTelemetryState.value.stereoBaselineMm)} mm (置信度 ${(sensorTelemetryState.value.stereoScaleConfidence * 100).toInt()}%)",
+                                "物理基線: ${df1.format(sensorTelemetry.stereoBaselineMm)} mm (置信度 ${(sensorTelemetry.stereoScaleConfidence * 100).toInt()}%)",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
@@ -2100,10 +1913,245 @@ fun ModernArCameraView(
         )
     }
 
+    // Lens Cleaning Warning Dialog
+    if (showLensCleaningDialog) {
+        AlertDialog(
+            onDismissRequest = { showLensCleaningDialog = false },
+            icon = {
+                Icon(
+                    imageVector = Icons.Rounded.CleaningServices,
+                    contentDescription = null,
+                    tint = Color(0xFFFFB74D),
+                    modifier = Modifier.size(32.dp)
+                )
+            },
+            title = {
+                Text("鏡頭清潔提醒", fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "偵測到鏡頭可能附著指紋油污或灰塵髒污。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFFFFB74D)
+                    )
+                    Text(
+                        "建議使用拭鏡布或乾淨棉布擦拭手機鏡頭表面，以維持最清晰的 AR 深度辨識與色彩品質。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.dismissLensDirtWarning()
+                        showLensCleaningDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFFFB74D),
+                        contentColor = Color.Black
+                    )
+                ) {
+                    Text("已擦拭完成", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.dismissLensDirtWarning()
+                        showLensCleaningDialog = false
+                    }
+                ) {
+                    Text("暫時關閉")
+                }
+            }
+        )
+    }
+
+    // Low Light Environmental Alert Dialog
+    if (showLowLightDialog) {
+        AlertDialog(
+            onDismissRequest = { showLowLightDialog = false },
+            icon = {
+                Icon(
+                    imageVector = Icons.Rounded.WbSunny,
+                    contentDescription = null,
+                    tint = Color(0xFFFFCA28),
+                    modifier = Modifier.size(32.dp)
+                )
+            },
+            title = {
+                Text("環境光線不足", fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "目前環境光照較弱，可能導致 AR 特徵點追蹤精度降低或產生飄移。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFFFFCA28)
+                    )
+                    Text(
+                        "建議開啟手電筒補光或前往光源充足之處進行精確量測。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.toggleTorch(context)
+                        viewModel.dismissLowLightWarning()
+                        showLowLightDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFFFCA28),
+                        contentColor = Color.Black
+                    )
+                ) {
+                    Text("開啟手電筒補光", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.dismissLowLightWarning()
+                        showLowLightDialog = false
+                    }
+                ) {
+                    Text("知道了")
+                }
+            }
+        )
+    }
+
+    // Excessive Motion Alert Dialog
+    if (showMotionDialog) {
+        AlertDialog(
+            onDismissRequest = { showMotionDialog = false },
+            icon = {
+                Icon(
+                    imageVector = Icons.Rounded.Speed,
+                    contentDescription = null,
+                    tint = Color(0xFFFF7043),
+                    modifier = Modifier.size(32.dp)
+                )
+            },
+            title = {
+                Text("相機移動過快", fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "移動速度過快容易引起空間錨點跳動或重定位失敗。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFFFF7043)
+                    )
+                    Text(
+                        "請放慢平移與轉向速度，平穩掃描周遭環境以獲取最精準的尺寸數值。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.dismissMovementWarning()
+                        showMotionDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFFF7043),
+                        contentColor = Color.White
+                    )
+                ) {
+                    Text("瞭解，放慢移動", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.dismissMovementWarning()
+                        showMotionDialog = false
+                    }
+                ) {
+                    Text("關閉提醒")
+                }
+            }
+        )
+    }
+
+    // Deficient Feature Points Alert Dialog
+    if (showFeatureDialog) {
+        AlertDialog(
+            onDismissRequest = { showFeatureDialog = false },
+            icon = {
+                Icon(
+                    imageVector = Icons.Rounded.Grain,
+                    contentDescription = null,
+                    tint = Color(0xFFBA68C8),
+                    modifier = Modifier.size(32.dp)
+                )
+            },
+            title = {
+                Text("環境紋理特徵不足", fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "鏡頭視野內缺乏足夠的幾何或紋理特徵點（例如大面積純白牆面、光滑無紋理桌面）。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFFBA68C8)
+                    )
+                    Text(
+                        "建議將相機稍作平移，對準物體邊界、縫隙、踢腳板或有紋理的地面以建立堅固的空間錨點。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.dismissFeatureDeficientWarning()
+                        showFeatureDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFBA68C8),
+                        contentColor = Color.White
+                    )
+                ) {
+                    Text("知道了", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.dismissFeatureDeficientWarning()
+                        showFeatureDialog = false
+                    }
+                ) {
+                    Text("關閉提醒")
+                }
+            }
+        )
+    }
+
     // AR Stability & Confidence Diagnostics Dialog
     if (showStabilityDiagnosticsDialog) {
         ArStabilityDiagnosticsDialog(
             stability = trackingStability,
+            isLensSmudged = isLensSmudged,
+            simulatedAlert = simulatedAlert,
+            onTriggerCleaningTest = { viewModel.triggerLensDirtAlert() },
+            onTriggerLowLightTest = { viewModel.triggerLowLightAlert() },
+            onTriggerMovementTest = { viewModel.triggerFastMovementAlert() },
+            onTriggerFeatureTest = { viewModel.triggerLowFeatureAlert() },
             onDismiss = { showStabilityDiagnosticsDialog = false }
         )
     }
@@ -2203,6 +2251,12 @@ fun ActiveTrackingStabilityWarningBanner(
 @Composable
 fun ArStabilityDiagnosticsDialog(
     stability: ArTrackingStability,
+    isLensSmudged: Boolean = false,
+    simulatedAlert: String? = null,
+    onTriggerCleaningTest: (() -> Unit)? = null,
+    onTriggerLowLightTest: (() -> Unit)? = null,
+    onTriggerMovementTest: (() -> Unit)? = null,
+    onTriggerFeatureTest: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val levelColor = when (stability.level) {
@@ -2366,6 +2420,98 @@ fun ArStabilityDiagnosticsDialog(
                             color = if (stability.isLightingDeficient) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
                         )
                     }
+
+                    // Lens Cleanliness Telemetry
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Rounded.CleaningServices,
+                                null,
+                                tint = if (isLensSmudged) Color(0xFFFFB74D) else MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text("相機鏡頭潔淨度", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Text(
+                            if (isLensSmudged) "⚠️ 需擦拭 (提醒中)" else "鏡頭清晰",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isLensSmudged) Color(0xFFFFB74D) else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
+                // Alert Test Simulations
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        "🧪 模擬觸發提醒測試：",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        if (onTriggerCleaningTest != null) {
+                            OutlinedButton(
+                                onClick = {
+                                    onTriggerCleaningTest()
+                                    onDismiss()
+                                },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
+                            ) {
+                                Text("清潔提醒", fontSize = 11.sp, maxLines = 1)
+                            }
+                        }
+                        if (onTriggerLowLightTest != null) {
+                            OutlinedButton(
+                                onClick = {
+                                    onTriggerLowLightTest()
+                                    onDismiss()
+                                },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
+                            ) {
+                                Text("光線不足", fontSize = 11.sp, maxLines = 1)
+                            }
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        if (onTriggerMovementTest != null) {
+                            OutlinedButton(
+                                onClick = {
+                                    onTriggerMovementTest()
+                                    onDismiss()
+                                },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
+                            ) {
+                                Text("移動過快", fontSize = 11.sp, maxLines = 1)
+                            }
+                        }
+                        if (onTriggerFeatureTest != null) {
+                            OutlinedButton(
+                                onClick = {
+                                    onTriggerFeatureTest()
+                                    onDismiss()
+                                },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
+                            ) {
+                                Text("特徵不足", fontSize = 11.sp, maxLines = 1)
+                            }
+                        }
+                    }
                 }
 
                 // Anti-Drift Guidance Tips
@@ -2388,6 +2534,12 @@ fun ArStabilityDiagnosticsDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp
                     )
+                    Text(
+                        "• 保持鏡頭乾淨：鏡頭附著指紋油污會干擾特徵點識別，若出現清潔提醒請及時擦拭。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp
+                    )
                 }
             }
         },
@@ -2395,6 +2547,52 @@ fun ArStabilityDiagnosticsDialog(
             TextButton(onClick = onDismiss) {
                 Text("確定")
             }
-        }
+        },
+        dismissButton = if (onTriggerCleaningTest != null) {
+            {
+                TextButton(
+                    onClick = {
+                        onTriggerCleaningTest()
+                        onDismiss()
+                    }
+                ) {
+                    Text("測試清潔提醒", color = Color(0xFFFFB74D))
+                }
+            }
+        } else null
     )
+}
+
+/**
+ * Isolated Live Distance readout badge.
+ * Collecting liveDistanceMeters in this isolated scope prevents the entire 2500+ line
+ * ModernArCameraView hierarchy from recomposing on every AR camera frame (30~60 FPS).
+ */
+@Composable
+private fun LiveDistanceBadge(
+    viewModel: MeasureViewModel,
+    selectedUnit: String
+) {
+    val liveDistanceMeters by viewModel.liveDistanceMeters.collectAsState()
+    Surface(
+        color = Color(0xDD002B36),
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.7f)),
+        modifier = Modifier.shadow(4.dp, RoundedCornerShape(18.dp))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(Icons.Rounded.Straighten, null, tint = Color(0xFF00E5FF), modifier = Modifier.size(15.dp))
+            val liveDistText = liveDistanceMeters?.let { viewModel.formatLength(it, selectedUnit) } ?: "量測中..."
+            Text(
+                text = "即時長度: $liveDistText • 輕觸 ✓ 釘選終點",
+                color = Color(0xFF00E5FF),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
 }

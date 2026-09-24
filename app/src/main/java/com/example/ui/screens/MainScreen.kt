@@ -35,6 +35,7 @@ import com.example.ui.components.FloatingPillNavItem
 import com.example.ui.components.GradientBlurTopBar
 import com.example.ui.components.ModernArCameraView
 import com.example.ui.components.RulerComponent
+import com.example.ui.components.SpiritLevelComponent
 import com.example.ui.components.SupportingPaneHistory
 import com.example.ui.components.hardwareBackdropBlur
 import com.example.ui.screens.SettingsScreen
@@ -77,8 +78,9 @@ fun MainScreen(viewModel: MeasureViewModel) {
 
     val cameraLabel = viewModel.getString("nav_camera").ifEmpty { "相機 AR" }
     val rulerLabel = viewModel.getString("nav_ruler").ifEmpty { "螢幕尺" }
+    val levelLabel = viewModel.getString("nav_level").ifEmpty { "水平儀" }
 
-    val navItems = remember(cameraLabel, rulerLabel) {
+    val navItems = remember(cameraLabel, rulerLabel, levelLabel) {
         listOf(
             FloatingPillNavItem(
                 id = 0,
@@ -91,6 +93,12 @@ fun MainScreen(viewModel: MeasureViewModel) {
                 label = rulerLabel,
                 icon = Icons.Rounded.Straighten,
                 testTag = "segmented_button_ruler"
+            ),
+            FloatingPillNavItem(
+                id = 2,
+                label = levelLabel,
+                icon = Icons.Rounded.Adjust,
+                testTag = "segmented_button_level"
             )
         )
     }
@@ -110,6 +118,7 @@ fun MainScreen(viewModel: MeasureViewModel) {
                     onModeSelected = { viewModel.setMode(it) },
                     cameraLabel = cameraLabel,
                     rulerLabel = rulerLabel,
+                    levelLabel = levelLabel,
                     selectedUnit = selectedUnit,
                     onSelectUnit = { viewModel.setSelectedUnit(it) },
                     isTorchOn = isTorchOn,
@@ -137,7 +146,7 @@ fun MainScreen(viewModel: MeasureViewModel) {
                                 CenterAlignedTopAppBar(
                                     title = {
                                         Text(
-                                            text = "螢幕高精直尺",
+                                            text = rulerLabel.ifEmpty { "螢幕尺" },
                                             fontWeight = FontWeight.Bold,
                                             style = MaterialTheme.typography.titleMedium
                                         )
@@ -198,6 +207,46 @@ fun MainScreen(viewModel: MeasureViewModel) {
                                                 Icons.Rounded.History,
                                                 contentDescription = "歷史記錄",
                                                 tint = if (showHistorySheet) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+
+                                        // Settings dialog button
+                                        IconButton(onClick = { showSettingsDialog = true }) {
+                                            Icon(
+                                                Icons.Rounded.Settings,
+                                                contentDescription = "設定",
+                                                tint = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                    },
+                                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                                        containerColor = Color.Transparent
+                                    )
+                                )
+                            }
+                        } else if (currentMode == 2) {
+                            GradientBlurTopBar(
+                                baseColor = MaterialTheme.colorScheme.surface,
+                                modifier = Modifier.testTag("level_top_gradient_blur_bar")
+                            ) {
+                                CenterAlignedTopAppBar(
+                                    title = {
+                                        Text(
+                                            text = "高精度電子水平儀",
+                                            fontWeight = FontWeight.Bold,
+                                            style = MaterialTheme.typography.titleMedium
+                                        )
+                                    },
+                                    actions = {
+                                        // Flashlight button
+                                        IconButton(
+                                            onClick = { viewModel.toggleTorch(context) },
+                                            modifier = Modifier.testTag("level_flashlight_button")
+                                        ) {
+                                            Icon(
+                                                if (isTorchOn) Icons.Rounded.FlashlightOn else Icons.Rounded.FlashlightOff,
+                                                contentDescription = "手電筒",
+                                                tint = if (isTorchOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                                             )
                                         }
 
@@ -291,6 +340,12 @@ fun MainScreen(viewModel: MeasureViewModel) {
                                     RulerComponent(
                                         viewModel = viewModel,
                                         onShowHistoryClick = { showHistorySheet = !showHistorySheet },
+                                        bottomPadding = if (isCompact) innerPadding.calculateBottomPadding() else 0.dp
+                                    )
+                                }
+                                2 -> {
+                                    SpiritLevelComponent(
+                                        viewModel = viewModel,
                                         bottomPadding = if (isCompact) innerPadding.calculateBottomPadding() else 0.dp
                                     )
                                 }

@@ -201,7 +201,7 @@ fun WelcomeScreen(
                         CleanFeatureRow(
                             icon = Icons.Rounded.Straighten,
                             iconColor = MaterialTheme.colorScheme.secondary,
-                            title = "螢幕高精直尺 & 卡尺",
+                            title = "螢幕尺 & 卡尺",
                             description = "雙指游標微調，毫米級刻度，適合實體小物直接比對。"
                         )
 

@@ -503,13 +503,20 @@ object ShareUtility {
      * Shares formatted text report via plain intent
      */
     fun shareTextReport(context: Context, record: MeasureRecord) {
-        val report = formatTextReport(record)
-        val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            putExtra(Intent.EXTRA_SUBJECT, "AR測量結果: ${record.title}")
-            putExtra(Intent.EXTRA_TEXT, report)
+        try {
+            val report = formatTextReport(record)
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, "AR測量結果: ${record.title}")
+                putExtra(Intent.EXTRA_TEXT, report)
+            }
+            val chooser = Intent.createChooser(intent, "分享測量文字報告").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(chooser)
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
-        context.startActivity(Intent.createChooser(intent, "分享測量文字報告"))
     }
 
     /**
@@ -582,7 +589,7 @@ object ShareUtility {
         }
         val sdf = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault())
         val dateStr = sdf.format(Date(record.timestamp))
-        val modeStr = if (record.type == "CAM") "相機 AR 測量模式" else "螢幕高精密直尺"
+        val modeStr = if (record.type == "CAM") "相機 AR 測量模式" else "螢幕尺模式"
         canvas.drawText("$modeStr | $dateStr", 80f, 210f, metaPaint)
         
         // Notes if any
@@ -846,7 +853,10 @@ object ShareUtility {
                 putExtra(Intent.EXTRA_STREAM, fileUri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(Intent.createChooser(shareIntent, "分享 PDF 測量報告"))
+            val chooser = Intent.createChooser(shareIntent, "分享 PDF 測量報告").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(chooser)
             
         } catch (e: Exception) {
             e.printStackTrace()
@@ -895,7 +905,10 @@ object ShareUtility {
                 putExtra(Intent.EXTRA_STREAM, fileUri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(Intent.createChooser(shareIntent, "分享圖案佈置報告"))
+            val chooser = Intent.createChooser(shareIntent, "分享圖案佈置報告").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(chooser)
             
         } catch (e: Exception) {
             e.printStackTrace()
@@ -912,7 +925,10 @@ object ShareUtility {
                 putExtra(Intent.EXTRA_SUBJECT, title)
                 putExtra(Intent.EXTRA_TEXT, text)
             }
-            context.startActivity(Intent.createChooser(shareIntent, title))
+            val chooser = Intent.createChooser(shareIntent, title).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(chooser)
         } catch (e: Exception) {
             // Silently handled
         }
@@ -944,7 +960,10 @@ object ShareUtility {
                 putExtra(Intent.EXTRA_SUBJECT, "【AR 測量工具】問題回饋與功能建議")
                 putExtra(Intent.EXTRA_TEXT, "請在此填寫您遇到的問題或建議：\n\n\n$appInfo")
             }
-            context.startActivity(Intent.createChooser(emailIntent, "發送問題回饋"))
+            val chooser = Intent.createChooser(emailIntent, "發送問題回饋").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(chooser)
         } catch (e: Exception) {
             try {
                 val fallbackIntent = Intent(Intent.ACTION_SEND).apply {
@@ -953,7 +972,10 @@ object ShareUtility {
                     putExtra(Intent.EXTRA_SUBJECT, "【AR 測量工具】問題回饋與功能建議")
                     putExtra(Intent.EXTRA_TEXT, "請在此填寫您遇到的問題或建議：\n\n\n$appInfo")
                 }
-                context.startActivity(Intent.createChooser(fallbackIntent, "發送問題回饋"))
+                val chooser = Intent.createChooser(fallbackIntent, "發送問題回饋").apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(chooser)
             } catch (err: Exception) {
                 copyToClipboard(context, targetEmail, "已複製回饋電子信箱：$targetEmail")
             }

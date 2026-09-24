@@ -31,6 +31,7 @@ fun AdaptiveNavigationRail(
     onModeSelected: (Int) -> Unit,
     cameraLabel: String,
     rulerLabel: String,
+    levelLabel: String = "水平儀",
     selectedUnit: String,
     onSelectUnit: (String) -> Unit,
     isTorchOn: Boolean,
@@ -126,6 +127,29 @@ fun AdaptiveNavigationRail(
                 },
                 alwaysShowLabel = true,
                 modifier = Modifier.testTag("rail_item_ruler")
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // Primary Navigation: Spirit Level (水平儀)
+            NavigationRailItem(
+                selected = currentMode == 2,
+                onClick = { onModeSelected(2) },
+                icon = {
+                    Icon(
+                        imageVector = Icons.Rounded.Adjust,
+                        contentDescription = levelLabel
+                    )
+                },
+                label = {
+                    Text(
+                        text = levelLabel,
+                        fontSize = 11.sp,
+                        fontWeight = if (currentMode == 2) FontWeight.Bold else FontWeight.Normal
+                    )
+                },
+                alwaysShowLabel = true,
+                modifier = Modifier.testTag("rail_item_level")
             )
 
             Spacer(modifier = Modifier.height(12.dp))

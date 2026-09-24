@@ -21,6 +21,15 @@ import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
 
+// Pre-allocated static dash arrays to prevent per-frame GC allocations
+private val DASH_10_6 = floatArrayOf(10f, 6f)
+private val DASH_10_8 = floatArrayOf(10f, 8f)
+private val DASH_14_10 = floatArrayOf(14f, 10f)
+private val DASH_15_10 = floatArrayOf(15f, 10f)
+private val DASH_20_10 = floatArrayOf(20f, 10f)
+private val DASH_12_12 = floatArrayOf(12f, 12f)
+private val DASH_24_12 = floatArrayOf(24f, 12f)
+
 /**
  * Hardware-accelerated, isolated 60/120 FPS 3D AR measurement drawing canvas overlay.
  * Isolates high-frequency frame updates to eliminate unnecessary parent UI recompositions.
@@ -104,14 +113,27 @@ fun ArMeasurementCanvasOverlay(
         }
     }
 
-    // Reusable Path caches to prevent per-frame GC allocations
+    // Reusable Path caches to eliminate per-frame GC allocations
     val samCachedPath = remember { Path() }
     val areaCachedPath = remember { Path() }
+    val haloCachedPath = remember { Path() }
+    val baseCachedPath = remember { Path() }
+    val innerCachedPath = remember { Path() }
+    val reticleCachedPath = remember { Path() }
+    val floorInnerReticleCachedPath = remember { Path() }
+    val bracketBatchCachedPath = remember { Path() }
 
     // Persistent non-state 2D smooth reticle position holder (avoids triggering Compose recomposition loops during Canvas draw)
     val reticlePosHolder = remember { floatArrayOf(-1000f, -1000f) }
 
-    Canvas(modifier = modifier.fillMaxSize()) {
+    Canvas(
+        modifier = modifier
+            .fillMaxSize()
+            .graphicsLayer {
+                // Hardware layer fast-path on RenderThread
+                clip = false
+            }
+    ) {
         val screenW = size.width.toInt()
         val screenH = size.height.toInt()
         val screenCenter = Offset(size.width / 2f, size.height / 2f)
@@ -179,7 +201,7 @@ fun ArMeasurementCanvasOverlay(
                     start = screenCenter,
                     end = currentReticlePos,
                     strokeWidth = 2.0.dp.toPx(),
-                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f), dashPhase.value)
+                    pathEffect = PathEffect.dashPathEffect(DASH_10_6, dashPhase.value)
                 )
             }
         }
@@ -346,7 +368,7 @@ fun ArMeasurementCanvasOverlay(
                         start = Offset(last.first, last.second),
                         end = Offset(first.first, first.second),
                         strokeWidth = 3.dp.toPx(),
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(15f, 10f), dashPhase.value)
+                        pathEffect = PathEffect.dashPathEffect(DASH_15_10, dashPhase.value)
                     )
 
                     // Semi-transparent holographic polygon interior mesh fill
@@ -518,7 +540,7 @@ fun ArMeasurementCanvasOverlay(
                     start = pPlumb,
                     end = pTop,
                     strokeWidth = 2.dp.toPx(),
-                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 6f), dashPhase.value)
+                    pathEffect = PathEffect.dashPathEffect(DASH_10_6, dashPhase.value)
                 )
 
                 // Right-Angle Indicator at Plumb Corner
@@ -582,31 +604,13 @@ fun ArMeasurementCanvasOverlay(
                 val liveLen = sqrt(dx * dx + dy * dy)
 
                 if (!liveLen.isNaN() && liveLen > 0.5f) {
-                    // 1. Shadow under active line
-                    drawLine(
-                        color = Color.Black.copy(alpha = 0.4f),
-                        start = Offset(startOffset.x + 1f, startOffset.y + 2f),
-                        end = Offset(currentReticlePos.x + 1f, currentReticlePos.y + 2f),
-                        strokeWidth = 7.dp.toPx(),
-                        cap = StrokeCap.Round
-                    )
-
-                    // 2. Luminous animated laser stream
-                    drawLine(
-                        color = colorPrimary.copy(alpha = 0.35f),
-                        start = startOffset,
-                        end = currentReticlePos,
-                        strokeWidth = 8.5.dp.toPx(),
-                        cap = StrokeCap.Round
-                    )
-
-                    // 3. Flowing dynamic fine dashed scale line
+                    // Dynamic clean dashed measurement line without background (無背景虛線)
                     drawLine(
                         color = colorPrimary,
                         start = startOffset,
                         end = currentReticlePos,
-                        strokeWidth = 4.dp.toPx(),
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), dashPhase.value),
+                        strokeWidth = lineThickness.dp.toPx(),
+                        pathEffect = PathEffect.dashPathEffect(DASH_14_10, dashPhase.value),
                         cap = StrokeCap.Round
                     )
 
@@ -614,44 +618,27 @@ fun ArMeasurementCanvasOverlay(
                     drawCircle(
                         color = Color.White,
                         center = currentReticlePos,
-                        radius = 5.dp.toPx()
+                        radius = 4.dp.toPx()
                     )
                     drawCircle(
                         color = colorSecondary,
                         center = currentReticlePos,
-                        radius = 2.5.dp.toPx()
+                        radius = 2.dp.toPx()
                     )
 
-                    // 4. Live perpendicular fine scale tick marks (guarded against overflow)
-                    if (liveLen > 25f && liveLen < 4000f) {
+                    // Perpendicular anchor tick mark at start point
+                    if (liveLen > 10f) {
                         val nx = -dy / liveLen
                         val ny = dx / liveLen
                         val tickHalfLen = 6.dp.toPx()
 
-                        // End tick at start point
                         drawLine(
                             color = Color.White,
                             start = Offset(startOffset.x - nx * tickHalfLen, startOffset.y - ny * tickHalfLen),
                             end = Offset(startOffset.x + nx * tickHalfLen, startOffset.y + ny * tickHalfLen),
-                            strokeWidth = 2.2.dp.toPx(),
+                            strokeWidth = 2.dp.toPx(),
                             cap = StrokeCap.Round
                         )
-
-                        val step = 24f
-                        var d = step
-                        var tickCount = 0
-                        while (d < liveLen - step && tickCount++ < 35) {
-                            val px = startOffset.x + (dx / liveLen) * d
-                            val py = startOffset.y + (dy / liveLen) * d
-                            val subTickLen = 3f.dp.toPx()
-                            drawLine(
-                                color = Color.White.copy(alpha = 0.75f),
-                                start = Offset(px - nx * subTickLen, py - ny * subTickLen),
-                                end = Offset(px + nx * subTickLen, py + ny * subTickLen),
-                                strokeWidth = 1.4.dp.toPx()
-                            )
-                            d += step
-                        }
                     }
 
                     // Area Mode: Live rubber-band closing dashed line from reticle to first point
@@ -663,7 +650,7 @@ fun ArMeasurementCanvasOverlay(
                                 start = currentReticlePos,
                                 end = Offset(firstPt.first, firstPt.second),
                                 strokeWidth = 2.5.dp.toPx(),
-                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f), dashPhase.value)
+                                pathEffect = PathEffect.dashPathEffect(DASH_10_8, dashPhase.value)
                             )
                         }
                     }
@@ -848,7 +835,7 @@ fun ArMeasurementCanvasOverlay(
                         width = 3.dp.toPx(),
                         cap = StrokeCap.Round,
                         join = StrokeJoin.Round,
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(24f, 12f), 0f)
+                        pathEffect = PathEffect.dashPathEffect(DASH_24_12, 0f)
                     )
                 )
 
@@ -873,7 +860,7 @@ fun ArMeasurementCanvasOverlay(
             }
         }
 
-        // Draw AI Detected Tiles AR Bounding Frame
+        // Draw AI Detected Tiles AR Bounding Frame with batched bracket geometry
         if (detectedTiles.isNotEmpty()) {
             val tileGold = colorPrimary
             val tileCyan = colorSecondary
@@ -903,7 +890,7 @@ fun ArMeasurementCanvasOverlay(
                             cornerRadius = androidx.compose.ui.geometry.CornerRadius(16f, 16f),
                             style = Stroke(
                                 width = 3.dp.toPx(),
-                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(20f, 10f), 0f)
+                                pathEffect = PathEffect.dashPathEffect(DASH_20_10, 0f)
                             )
                         )
                     } else {
@@ -914,23 +901,40 @@ fun ArMeasurementCanvasOverlay(
                             cornerRadius = androidx.compose.ui.geometry.CornerRadius(16f, 16f),
                             style = Stroke(
                                 width = 1.5.dp.toPx(),
-                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 12f), 0f)
+                                pathEffect = PathEffect.dashPathEffect(DASH_12_12, 0f)
                             )
                         )
                     }
 
-                    // Corner L-Brackets
+                    // Batched Corner L-Brackets rendered in a single GPU draw call
                     val bracketLen = minOf(tWidth, tHeight) * 0.20f
                     val bracketColor = if (isRevealed) tileCyan else Color.White.copy(alpha = 0.65f)
                     val bracketStroke = if (isRevealed) 3.5.dp.toPx() else 2.dp.toPx()
-                    drawLine(bracketColor, Offset(leftPx, topPx), Offset(leftPx + bracketLen, topPx), bracketStroke, StrokeCap.Round)
-                    drawLine(bracketColor, Offset(leftPx, topPx), Offset(leftPx, topPx + bracketLen), bracketStroke, StrokeCap.Round)
-                    drawLine(bracketColor, Offset(rightPx, topPx), Offset(rightPx - bracketLen, topPx), bracketStroke, StrokeCap.Round)
-                    drawLine(bracketColor, Offset(rightPx, topPx), Offset(rightPx, topPx - bracketLen), bracketStroke, StrokeCap.Round)
-                    drawLine(bracketColor, Offset(leftPx, bottomPx), Offset(leftPx + bracketLen, bottomPx), bracketStroke, StrokeCap.Round)
-                    drawLine(bracketColor, Offset(leftPx, bottomPx), Offset(leftPx, bottomPx - bracketLen), bracketStroke, StrokeCap.Round)
-                    drawLine(bracketColor, Offset(rightPx, bottomPx), Offset(rightPx - bracketLen, bottomPx), bracketStroke, StrokeCap.Round)
-                    drawLine(bracketColor, Offset(rightPx, bottomPx), Offset(rightPx, bottomPx - bracketLen), bracketStroke, StrokeCap.Round)
+
+                    bracketBatchCachedPath.apply {
+                        reset()
+                        // Top-Left
+                        moveTo(leftPx, topPx + bracketLen)
+                        lineTo(leftPx, topPx)
+                        lineTo(leftPx + bracketLen, topPx)
+                        // Top-Right
+                        moveTo(rightPx - bracketLen, topPx)
+                        lineTo(rightPx, topPx)
+                        lineTo(rightPx, topPx + bracketLen)
+                        // Bottom-Left
+                        moveTo(leftPx, bottomPx - bracketLen)
+                        lineTo(leftPx, bottomPx)
+                        lineTo(leftPx + bracketLen, bottomPx)
+                        // Bottom-Right
+                        moveTo(rightPx - bracketLen, bottomPx)
+                        lineTo(rightPx, bottomPx)
+                        lineTo(rightPx, bottomPx - bracketLen)
+                    }
+                    drawPath(
+                        path = bracketBatchCachedPath,
+                        color = bracketColor,
+                        style = Stroke(width = bracketStroke, cap = StrokeCap.Round)
+                    )
                 }
             }
         }
@@ -973,7 +977,8 @@ fun ArMeasurementCanvasOverlay(
                 )
 
                 if (groundHaloRing.size >= 3) {
-                    val haloPath = Path().apply {
+                    haloCachedPath.apply {
+                        reset()
                         moveTo(groundHaloRing[0].first, groundHaloRing[0].second)
                         for (k in 1 until groundHaloRing.size) {
                             lineTo(groundHaloRing[k].first, groundHaloRing[k].second)
@@ -981,14 +986,15 @@ fun ArMeasurementCanvasOverlay(
                         close()
                     }
                     drawPath(
-                        path = haloPath,
+                        path = haloCachedPath,
                         color = colorPrimary.copy(alpha = 0.22f * (2f - reticlePulseScale.value)),
                         style = Stroke(width = 2.dp.toPx())
                     )
                 }
 
                 if (groundBaseRing.size >= 3) {
-                    val basePath = Path().apply {
+                    baseCachedPath.apply {
+                        reset()
                         moveTo(groundBaseRing[0].first, groundBaseRing[0].second)
                         for (k in 1 until groundBaseRing.size) {
                             lineTo(groundBaseRing[k].first, groundBaseRing[k].second)
@@ -997,25 +1003,26 @@ fun ArMeasurementCanvasOverlay(
                     }
                     // Ground shadow underneath
                     drawPath(
-                        path = basePath,
+                        path = baseCachedPath,
                         color = Color.Black.copy(alpha = 0.40f),
                         style = Stroke(width = 4.dp.toPx())
                     )
                     // Floor-parallel primary ring
                     drawPath(
-                        path = basePath,
+                        path = baseCachedPath,
                         color = colorPrimary,
                         style = Stroke(width = 2.5.dp.toPx())
                     )
                     // Semi-transparent floor disc fill
                     drawPath(
-                        path = basePath,
+                        path = baseCachedPath,
                         color = colorPrimary.copy(alpha = 0.18f)
                     )
                 }
 
                 if (groundInnerRing.size >= 3) {
-                    val innerPath = Path().apply {
+                    innerCachedPath.apply {
+                        reset()
                         moveTo(groundInnerRing[0].first, groundInnerRing[0].second)
                         for (k in 1 until groundInnerRing.size) {
                             lineTo(groundInnerRing[k].first, groundInnerRing[k].second)
@@ -1023,7 +1030,7 @@ fun ArMeasurementCanvasOverlay(
                         close()
                     }
                     drawPath(
-                        path = innerPath,
+                        path = innerCachedPath,
                         color = Color.White.copy(alpha = 0.85f),
                         style = Stroke(width = 1.8.dp.toPx())
                     )
@@ -1086,7 +1093,8 @@ fun ArMeasurementCanvasOverlay(
         val hasValid3DFloorProjection = floorReticlePoints.size >= 3
 
         if (hasValid3DFloorProjection) {
-            val reticlePath = Path().apply {
+            reticleCachedPath.apply {
+                reset()
                 moveTo(floorReticlePoints[0].first, floorReticlePoints[0].second)
                 for (k in 1 until floorReticlePoints.size) {
                     lineTo(floorReticlePoints[k].first, floorReticlePoints[k].second)
@@ -1097,28 +1105,29 @@ fun ArMeasurementCanvasOverlay(
             // Snapped Target Lock Radial Glow disc on floor
             if (isSnapped) {
                 drawPath(
-                    path = reticlePath,
+                    path = reticleCachedPath,
                     color = Color(0xFFFBBF24).copy(alpha = snapGlowAlphaAnimated.value * 0.35f)
                 )
             }
 
             // Floor disc shadow
             drawPath(
-                path = reticlePath,
+                path = reticleCachedPath,
                 color = Color.Black.copy(alpha = 0.35f),
                 style = Stroke(width = 3.5.dp.toPx())
             )
 
             // Floor-parallel gold outer ring
             drawPath(
-                path = reticlePath,
+                path = reticleCachedPath,
                 color = if (isSnapped) Color(0xFFFFD54F) else Color(0xFFFBBF24),
                 style = Stroke(width = if (isSnapped) 2.8.dp.toPx() else 2.2.dp.toPx())
             )
 
             // Floor-parallel inner accent ring
             if (floorInnerReticlePoints.size >= 3) {
-                val innerPath = Path().apply {
+                floorInnerReticleCachedPath.apply {
+                    reset()
                     moveTo(floorInnerReticlePoints[0].first, floorInnerReticlePoints[0].second)
                     for (k in 1 until floorInnerReticlePoints.size) {
                         lineTo(floorInnerReticlePoints[k].first, floorInnerReticlePoints[k].second)
@@ -1126,7 +1135,7 @@ fun ArMeasurementCanvasOverlay(
                     close()
                 }
                 drawPath(
-                    path = innerPath,
+                    path = floorInnerReticleCachedPath,
                     color = Color.White.copy(alpha = 0.75f),
                     style = Stroke(width = 1.5.dp.toPx())
                 )

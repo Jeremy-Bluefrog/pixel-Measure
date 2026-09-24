@@ -221,7 +221,11 @@ class ModernArEngine(private val context: Context) {
             }
 
             sessionInstance.configure(config)
-            sessionInstance.setCameraTextureName(0)
+            try {
+                sessionInstance.setCameraTextureName(0)
+            } catch (e: Throwable) {
+                // Handled when GLSurfaceView creates texture
+            }
             sessionInstance.resume()
 
             return sessionInstance
@@ -251,7 +255,11 @@ class ModernArEngine(private val context: Context) {
         if (isTorchActive) {
             setTorchMode(false)
         }
-        session?.pause()
+        try {
+            session?.pause()
+        } catch (e: Throwable) {
+            Log.w("ModernArEngine", "Failed to pause ARCore session: ${e.message}")
+        }
     }
 
     fun resume() {

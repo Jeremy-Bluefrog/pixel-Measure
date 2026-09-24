@@ -513,48 +513,116 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     val isLensSmudged: StateFlow<Boolean> = _isLensSmudged.asStateFlow()
 
     private var lastLensCheckTime = 0L
+    private val isAnalyzingLensDirt = java.util.concurrent.atomic.AtomicBoolean(false)
 
+    /**
+     * Background offloaded lens smudge & cleanliness analyzer.
+     * Throttled to max 1 sample per 2.5~3.0 seconds, dispatched strictly to background thread pool.
+     */
     fun analyzeLensCleanliness(bitmap: Bitmap) {
         if (!_isLensDirtWarningEnabled.value) return
         val now = System.currentTimeMillis()
         if (now - lastLensCheckTime < 2500L) return
+        if (!isAnalyzingLensDirt.compareAndSet(false, true)) return
+
         lastLensCheckTime = now
 
-        try {
-            val scaled = Bitmap.createScaledBitmap(bitmap, 48, 48, false)
-            var totalEdgeVariance = 0.0
-            var pixelCount = 0
-            val pixels = IntArray(48 * 48)
-            scaled.getPixels(pixels, 0, 48, 0, 0, 48, 48)
+        viewModelScope.launch(Dispatchers.Default) {
+            try {
+                val scaled = Bitmap.createScaledBitmap(bitmap, 48, 48, false)
+                var totalEdgeVariance = 0.0
+                var pixelCount = 0
+                val pixels = IntArray(48 * 48)
+                scaled.getPixels(pixels, 0, 48, 0, 0, 48, 48)
 
-            for (y in 1 until 47) {
-                for (x in 1 until 47) {
-                    val idx = y * 48 + x
-                    val centerL = (Color.red(pixels[idx]) * 0.299 + Color.green(pixels[idx]) * 0.587 + Color.blue(pixels[idx]) * 0.114)
-                    val rightL = (Color.red(pixels[idx + 1]) * 0.299 + Color.green(pixels[idx + 1]) * 0.587 + Color.blue(pixels[idx + 1]) * 0.114)
-                    val downL = (Color.red(pixels[idx + 48]) * 0.299 + Color.green(pixels[idx + 48]) * 0.587 + Color.blue(pixels[idx + 48]) * 0.114)
+                for (y in 1 until 47) {
+                    val rowIdx = y * 48
+                    for (x in 1 until 47) {
+                        val idx = rowIdx + x
+                        val centerL = (Color.red(pixels[idx]) * 0.299 + Color.green(pixels[idx]) * 0.587 + Color.blue(pixels[idx]) * 0.114)
+                        val rightL = (Color.red(pixels[idx + 1]) * 0.299 + Color.green(pixels[idx + 1]) * 0.587 + Color.blue(pixels[idx + 1]) * 0.114)
+                        val downL = (Color.red(pixels[idx + 48]) * 0.299 + Color.green(pixels[idx + 48]) * 0.587 + Color.blue(pixels[idx + 48]) * 0.114)
 
-                    val dx = centerL - rightL
-                    val dy = centerL - downL
-                    totalEdgeVariance += (dx * dx + dy * dy)
-                    pixelCount++
+                        val dx = centerL - rightL
+                        val dy = centerL - downL
+                        totalEdgeVariance += (dx * dx + dy * dy)
+                        pixelCount++
+                    }
                 }
-            }
 
-            val avgEdge = if (pixelCount > 0) totalEdgeVariance / pixelCount else 100.0
-            // Very low high-frequency variance indicates fingerprint/grease smudging fog
-            val detectedSmudge = avgEdge < 14.0
-            if (detectedSmudge != _isLensSmudged.value) {
-                _isLensSmudged.value = detectedSmudge
+                val avgEdge = if (pixelCount > 0) totalEdgeVariance / pixelCount else 100.0
+                // Very low high-frequency variance indicates fingerprint/grease smudging fog
+                val detectedSmudge = avgEdge < 14.0
+                if (detectedSmudge != _isLensSmudged.value) {
+                    _isLensSmudged.value = detectedSmudge
+                }
+            } catch (e: Throwable) {
+                // Ignore frame analysis errors
+            } finally {
+                isAnalyzingLensDirt.set(false)
             }
-        } catch (e: Exception) {
-            // Ignore frame analysis errors
         }
     }
 
     fun dismissLensDirtWarning() {
         _isLensSmudged.value = false
         triggerHapticFeedback()
+    }
+
+    private val _dismissedLowLight = MutableStateFlow(false)
+    val dismissedLowLight: StateFlow<Boolean> = _dismissedLowLight.asStateFlow()
+
+    private val _simulatedAlert = MutableStateFlow<String?>(null)
+    val simulatedAlert: StateFlow<String?> = _simulatedAlert.asStateFlow()
+
+    fun dismissLowLightWarning() {
+        _dismissedLowLight.value = true
+        _simulatedAlert.value = null
+        triggerHapticFeedback()
+    }
+
+    fun triggerLensDirtAlert() {
+        _isLensSmudged.value = true
+        _simulatedAlert.value = null
+        triggerHapticFeedback()
+        _toastMessage.tryEmit("已觸發鏡頭清潔提醒")
+    }
+
+    fun triggerLowLightAlert() {
+        _dismissedLowLight.value = false
+        _simulatedAlert.value = "LOW_LIGHT"
+        triggerHapticFeedback()
+        _toastMessage.tryEmit("已觸發亮度不足提醒")
+    }
+
+    fun triggerFastMovementAlert() {
+        _simulatedAlert.value = "MOTION_EXCESSIVE"
+        triggerHapticFeedback()
+        _toastMessage.tryEmit("已觸發移動過快提醒")
+    }
+
+    fun triggerLowFeatureAlert() {
+        _simulatedAlert.value = "FEATURE_DEFICIENT"
+        triggerHapticFeedback()
+        _toastMessage.tryEmit("已觸發特徵不足提醒")
+    }
+
+    fun dismissMovementWarning() {
+        if (_simulatedAlert.value == "MOTION_EXCESSIVE") {
+            _simulatedAlert.value = null
+        }
+        triggerHapticFeedback()
+    }
+
+    fun dismissFeatureDeficientWarning() {
+        if (_simulatedAlert.value == "FEATURE_DEFICIENT") {
+            _simulatedAlert.value = null
+        }
+        triggerHapticFeedback()
+    }
+
+    fun clearSimulatedAlert() {
+        _simulatedAlert.value = null
     }
 
     // Scanning Feature Point Cloud preference
@@ -715,6 +783,115 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         sensorCorrectionEngine.resetBarometerBase()
         triggerHapticFeedback()
         _toastMessage.tryEmit("已重設氣壓與感應器基準高度")
+    }
+
+    /**
+     * 一鍵套用特定情境模式 (Pro Presets)
+     */
+    fun applyMeasurementProfile(profileKey: String) {
+        when (profileKey) {
+            "PRO_PRECISION" -> {
+                setSelectedUnit("mm")
+                setHighFpsModeEnabled(true)
+                setHighDefinitionQualityEnabled(true)
+                setAntiJitterEnabled(true)
+                setMultiSampleAveragingEnabled(true)
+                setOrthogonalSnapEnabled(true)
+                setReticleStyle("PRECISION_CROSSHAIR")
+                setVibrateOnAlignment(true)
+                setRawDepthConfidenceEnabled(true)
+                setRawDepthConfidenceThreshold(55)
+                setShowPointCloud(true)
+                _toastMessage.tryEmit("已套用「專業工程極限精密」情境模式")
+            }
+            "POWER_SAVER" -> {
+                setSelectedUnit("cm")
+                setHighFpsModeEnabled(false)
+                setHighDefinitionQualityEnabled(false)
+                setAntiJitterEnabled(false)
+                setMultiSampleAveragingEnabled(false)
+                setOrthogonalSnapEnabled(false)
+                setReticleStyle("MINIMAL_DOT")
+                setGridOverlayStyle("OFF")
+                setRawDepthConfidenceEnabled(false)
+                setShowPointCloud(false)
+                _toastMessage.tryEmit("已套用「省電長效極速」情境模式")
+            }
+            else -> { // "BALANCED"
+                setSelectedUnit("cm")
+                setHighFpsModeEnabled(true)
+                setHighDefinitionQualityEnabled(true)
+                setAntiJitterEnabled(true)
+                setMultiSampleAveragingEnabled(false)
+                setOrthogonalSnapEnabled(true)
+                setReticleStyle("DOUBLE_RING")
+                setVibrateOnAlignment(true)
+                setGridOverlayStyle("PERSPECTIVE_GRID")
+                setRawDepthConfidenceEnabled(true)
+                setRawDepthConfidenceThreshold(45)
+                setShowPointCloud(true)
+                _toastMessage.tryEmit("已套用「日常智慧平衡」情境模式")
+            }
+        }
+        triggerHapticFeedback()
+    }
+
+    /**
+     * 恢復原廠預設設定
+     */
+    fun resetAllSettingsToDefault() {
+        setSelectedUnit("cm")
+        setReticleStyle("DOUBLE_RING")
+        setLineThickness(3.5f)
+        setArFontSize("STANDARD")
+        setHudStyle("GLASS")
+        setGridOverlayStyle("PERSPECTIVE_GRID")
+        setUiButtonScale(1.0f)
+        setCameraAspectRatio("4_3")
+        setUseDisplayP3ColorSpace(true)
+        setLensDirtWarningEnabled(true)
+        setHighFpsModeEnabled(true)
+        setHighDefinitionQualityEnabled(true)
+        setAntiJitterEnabled(true)
+        setSensorCorrectionEnabled(true)
+        setGravityAlignmentEnabled(true)
+        setBarometerFusionEnabled(true)
+        setJerkRejectionEnabled(true)
+        setProximityContactEnabled(true)
+        setStereoParallaxEnabled(true)
+        setMultiSampleAveragingEnabled(false)
+        setOrthogonalSnapEnabled(true)
+        setRawDepthConfidenceEnabled(true)
+        setRawDepthConfidenceThreshold(45)
+        setScaleCalibrationFactor(1.0000f)
+        setShowPointCloud(true)
+        setVibrateOnAlignment(true)
+        updateRulerCalibration(1.0f, true)
+        triggerHapticFeedback()
+        _toastMessage.tryEmit("已恢復原廠預設測量與系統設定")
+    }
+
+    /**
+     * 產生當前設定參數報告 (供複製或分享備份)
+     */
+    fun getSettingsSummaryReport(): String {
+        return buildString {
+            appendLine("=== AR 測量儀器參數設定報告 ===")
+            appendLine("• 測量單位: ${_selectedUnit.value.uppercase()}")
+            appendLine("• AR 準心樣式: ${_reticleStyle.value}")
+            appendLine("• 測量線粗細: ${_lineThickness.value} dp")
+            appendLine("• 空間標籤字體: ${_arFontSize.value}")
+            appendLine("• 相機畫面比例: ${_cameraAspectRatio.value}")
+            appendLine("• 60 FPS 模式: ${if (highFpsModeEnabled.value) "開啟" else "關閉"}")
+            appendLine("• 超高清晰度採樣: ${if (highDefinitionQualityEnabled.value) "開啟" else "關閉"}")
+            appendLine("• 9軸防手震濾波: ${if (antiJitterEnabled.value) "開啟" else "關閉"}")
+            appendLine("• 空間尺度校準: ${String.format(java.util.Locale.US, "%.4fx", scaleCalibrationFactor.value)}")
+            appendLine("• 螢幕尺實體係數: ${String.format(java.util.Locale.US, "%.3fx", _rulerCalibration.value)}")
+            appendLine("• 垂直/水平正交吸附: ${if (orthogonalSnapEnabled.value) "開啟" else "關閉"}")
+            appendLine("• 點雲可視化: ${if (_showPointCloud.value) "開啟" else "關閉"}")
+            appendLine("• 對齊觸覺回饋: ${if (vibrateOnAlignment.value) "開啟" else "關閉"}")
+            appendLine("報告產生時間: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())}")
+        }
     }
 
     // AI Core Tile Recognition & One-Tap Measurement State
@@ -1587,6 +1764,9 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         _isTorchOn.value = false
         modernArEngine.setTorchMode(false)
         try {
+            highSpeedCamera2Manager?.toggleTorch(false)
+        } catch (_: Exception) {}
+        try {
             cameraControl?.enableTorch(false)
         } catch (e: Exception) {}
         if (context != null) {
@@ -1874,9 +2054,25 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun closeHighSpeedCamera() {
+        try {
+            highSpeedCamera2Manager?.closeCamera()
+        } catch (_: Exception) {}
+        highSpeedCamera2Manager = null
+    }
+
+    val isArCoreSessionActive: Boolean
+        get() = modernArEngine.session != null
+
     fun deleteRecord(record: MeasureRecord) {
         viewModelScope.launch {
             try {
+                record.imagePath?.let { path ->
+                    try {
+                        val file = java.io.File(path)
+                        if (file.exists()) file.delete()
+                    } catch (_: Exception) {}
+                }
                 withContext(Dispatchers.IO) {
                     repository.delete(record)
                 }
@@ -1887,6 +2083,13 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun deleteRecordById(id: Int) {
         viewModelScope.launch {
             try {
+                val record = savedRecords.value.firstOrNull { it.id == id }
+                record?.imagePath?.let { path ->
+                    try {
+                        val file = java.io.File(path)
+                        if (file.exists()) file.delete()
+                    } catch (_: Exception) {}
+                }
                 withContext(Dispatchers.IO) {
                     repository.deleteById(id)
                 }
@@ -1897,6 +2100,14 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun clearAllRecords() {
         viewModelScope.launch {
             try {
+                savedRecords.value.forEach { record ->
+                    record.imagePath?.let { path ->
+                        try {
+                            val file = java.io.File(path)
+                            if (file.exists()) file.delete()
+                        } catch (_: Exception) {}
+                    }
+                }
                 withContext(Dispatchers.IO) {
                     repository.clearAll()
                 }
@@ -1913,6 +2124,9 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun onPause() {
         turnOffTorch(getApplication())
         modernArEngine.pause()
+        try {
+            highSpeedCamera2Manager?.closeCamera()
+        } catch (_: Exception) {}
         sensorCorrectionEngine.stopListening()
     }
 
@@ -1920,6 +2134,10 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         super.onCleared()
         turnOffTorch(getApplication())
         modernArEngine.destroy()
+        try {
+            highSpeedCamera2Manager?.closeCamera()
+        } catch (_: Exception) {}
+        highSpeedCamera2Manager = null
         sensorCorrectionEngine.stopListening()
     }
 }

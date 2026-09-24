@@ -98,8 +98,27 @@ class ModernArGlView(
 
     override fun onDetachedFromWindow() {
         try {
+            queueEvent {
+                if (bgProgram != -1) {
+                    GLES20.glDeleteProgram(bgProgram)
+                    bgProgram = -1
+                }
+                if (pointProgram != -1) {
+                    GLES20.glDeleteProgram(pointProgram)
+                    pointProgram = -1
+                }
+                if (planeProgram != -1) {
+                    GLES20.glDeleteProgram(planeProgram)
+                    planeProgram = -1
+                }
+                if (textureId != -1) {
+                    val textures = intArrayOf(textureId)
+                    GLES20.glDeleteTextures(1, textures, 0)
+                    textureId = -1
+                }
+            }
             onPause()
-        } catch (e: Exception) {}
+        } catch (e: Throwable) {}
         super.onDetachedFromWindow()
     }
 

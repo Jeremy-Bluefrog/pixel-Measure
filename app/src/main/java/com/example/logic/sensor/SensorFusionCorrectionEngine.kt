@@ -147,10 +147,12 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
     private var lastAngularVelocity = 0f
     private var lastLinearAccel = 0f
 
-    // Barometer tracking
+    // Barometer tracking with Zero-Alloc Circular Ring Buffer
     private var initialPressure: Float? = null
     private var currentPressure: Float = 0f
-    private val pressureHistory = ArrayList<Float>()
+    private val pressureRingBuffer = FloatArray(16)
+    private var pressureRingCount = 0
+    private var pressureRingHead = 0
 
     // Proximity tracking
     private var lastProximityDistance = 5.0f
@@ -163,7 +165,7 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
     private var kalmanCovariance = doubleArrayOf(0.01, 0.01, 0.01) // P_x, P_y, P_z
     private var isKalmanInitialized = false
 
-    // Multi-Sample Burst Averaging Ring Buffer
+    // Multi-Sample Burst Averaging Ring Buffer (16 samples, Zero-Alloc pre-allocated)
     private val burstSampleWindow = ArrayDeque<Point3D>(16)
     private var steadyStartTimeMs = 0L
     private var currentEstimatedErrorMm = 1.5f
@@ -175,7 +177,7 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
     private val STEADY_THRESHOLD_RADS = 0.040f
     private val JERK_THRESHOLD_MPS2 = 2.4f
 
-    // Telemetry update rate limiter (max ~30Hz to prevent Compose recomposition churn)
+    // Telemetry update rate limiter (V-Sync aligned ~30Hz to eliminate Compose recomposition churn)
     private var lastTelemetryEmitTimeMs = 0L
 
     /**
@@ -210,7 +212,11 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
         }
     }
 
+    private var isListening = false
+
     fun startListening() {
+        if (isListening) return
+        isListening = true
         gravitySensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
         gyroSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
         rotationVectorSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
@@ -221,13 +227,18 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
     }
 
     fun stopListening() {
-        sensorManager.unregisterListener(this)
+        if (!isListening) return
+        isListening = false
+        try {
+            sensorManager.unregisterListener(this)
+        } catch (_: Exception) {}
     }
 
     fun resetBarometerBase() {
         if (currentPressure > 0f) {
             initialPressure = currentPressure
-            pressureHistory.clear()
+            pressureRingCount = 0
+            pressureRingHead = 0
         }
         isKalmanInitialized = false
         burstSampleWindow.clear()
@@ -272,9 +283,11 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
                 if (initialPressure == null || initialPressure == 0f) {
                     initialPressure = p
                 }
-                pressureHistory.add(p)
-                if (pressureHistory.size > 20) {
-                    pressureHistory.removeAt(0)
+                // Zero-alloc circular ring buffer insertion
+                pressureRingBuffer[pressureRingHead] = p
+                pressureRingHead = (pressureRingHead + 1) % pressureRingBuffer.size
+                if (pressureRingCount < pressureRingBuffer.size) {
+                    pressureRingCount++
                 }
             }
 
