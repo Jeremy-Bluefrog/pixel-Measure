@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -11,13 +12,20 @@ import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
@@ -29,6 +37,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
@@ -41,18 +50,34 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.viewmodel.MeasureViewModel
 import kotlinx.coroutines.isActive
+import java.util.Locale
 import kotlin.math.*
 
-enum class LevelType {
-    SURFACE_2D,    // 雙軸圓盤水準儀 (Bullseye / Surface Level)
-    HORIZONTAL_1D, // 橫向管狀水準儀 (Tubular Horizontal Level)
-    VERTICAL_1D    // 垂直垂準儀 (Vertical Plumb Level)
+/**
+ * 水準儀測量模式 (Level Measurement Modes)
+ */
+enum class LevelType(val label: String) {
+    SURFACE_2D("雙軸圓盤"),       // 雙軸圓盤水準儀 (Surface Bullseye)
+    HORIZONTAL_1D("橫向水平"),    // 橫向管狀水準儀 (Horizontal Tube)
+    VERTICAL_1D("立面垂直")       // 垂直鉛垂水準儀 (Vertical Plumb)
 }
 
-enum class AngleUnit {
-    DEGREE,     // 角度 (0.0°)
-    PERCENT,    // 坡度百分比 (%)
-    ROOF_PITCH  // 斜率 (mm/m)
+/**
+ * 角度顯示單位 (Angle Units)
+ */
+enum class AngleUnit(val label: String, val symbol: String) {
+    DEGREE("角度", "°"),
+    PERCENT("坡度", "%"),
+    ROOF_PITCH("斜率", "mm/m")
+}
+
+/**
+ * 測量容差精度設定 (Measurement Tolerances)
+ */
+enum class LevelTolerance(val thresholdDeg: Float, val label: String, val description: String) {
+    ULTRA_FINE(0.2f, "超高精 (±0.2°)", "精密機械 / 實驗室校準"),
+    STANDARD(0.5f, "標準 (±0.5°)", "家具安裝 / 木工吊掛"),
+    CONSTRUCTION(1.0f, "工程 (±1.0°)", "泥作建築 / 戶外坡度")
 }
 
 /**
@@ -61,7 +86,7 @@ enum class AngleUnit {
  */
 @Stable
 class SpiritLevelRenderState {
-    // Continuous values consumed ONLY by Canvas draw scopes
+    // Continuous values consumed ONLY by Canvas draw scopes (Draw phase only)
     var drawPitch by mutableFloatStateOf(0f)
     var drawRoll by mutableFloatStateOf(0f)
 
@@ -73,14 +98,19 @@ class SpiritLevelRenderState {
 }
 
 /**
- * 專業多模式高精水準儀組件 (Spirit Level Component)
+ * 旗艦級 Material 3 數位水準儀組件 (Material 3 Spirit Level Component)
  *
- * 流暢度架構優化：
- * 1. 消除 animateFloatAsState 在 100Hz 感應器下的連續協程重啟抖動，採用雙緩衝物理 EMA 平滑濾波。
- * 2. Canvas 繪製採用 lambda 讀取提供者，僅觸發 GPU 繪製階段 (Draw phase)，完全略過重組 (Recomposition) 與測量排版 (Layout)。
- * 3. 數值讀數卡片節流至 20Hz 更新，避免每秒 120 次文字排版重建，大幅減輕 CPU 負載與電池消耗。
- * 4. 靜態角度刻度與圓環度數採預計算，完全消除 Canvas 幀渲染過程中的記憶體配置與 GC 停頓。
+ * 核心升級亮點：
+ * 1. 深度遵循 Material Design 3 設計語彙：Tonal Color Scheme, SingleChoiceSegmentedButtonRow,
+ *    ElevatedCard, FilterChip, AssistChip, 柔和狀態微動效與色彩轉場。
+ * 2. 雙重視覺適應性：完美支援 Material You 動態色彩、深色與淺色模式儀表刻度盤渲染。
+ * 3. 業界級三段精度容差設定 (超高精 ±0.2° / 標準 ±0.5° / 工程 ±1.0°)，即時動態連動靶心與管狀容差線。
+ * 4. 三維物理感氣泡渲染：多層次徑向光暈、液體折射鏡面、高光反光點與邊界彎月面。
+ * 5. 全向調平引導指示：偏離時顯示微動態水平引導標誌，輔助快速歸平。
+ * 6. 整合相對基準校準 (Relative Zero)、讀數鎖定 (Hold Freeze) 與一鍵測量紀錄保存 (Save to Room Database)。
+ * 7. 60/120Hz V-Sync 硬體加速 Canvas 繪製，無重組抖動，低 CPU 與耗電量。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SpiritLevelComponent(
     viewModel: MeasureViewModel,
@@ -89,12 +119,13 @@ fun SpiritLevelComponent(
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
+    val isDark = isSystemInDarkTheme()
 
-    // Audio cue tone generator
+    // Tone Generator for acoustic cue
     val toneGenerator = remember {
         try {
-            ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80)
-        } catch (e: Throwable) {
+            ToneGenerator(AudioManager.STREAM_NOTIFICATION, 75)
+        } catch (_: Throwable) {
             null
         }
     }
@@ -103,13 +134,11 @@ fun SpiritLevelComponent(
         onDispose {
             try {
                 toneGenerator?.release()
-            } catch (e: Throwable) {
-                // Ignore release errors
-            }
+            } catch (_: Throwable) {}
         }
     }
 
-    // Vibrator service
+    // Vibrator Service for tactile cue
     val vibrator = remember(context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val vm = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
@@ -123,20 +152,25 @@ fun SpiritLevelComponent(
     // High performance render state
     val renderState = remember { SpiritLevelRenderState() }
 
-    // Local level mode and settings states
+    // User Configurations & States
     var levelType by remember { mutableStateOf(LevelType.SURFACE_2D) }
     var angleUnit by remember { mutableStateOf(AngleUnit.DEGREE) }
+    var tolerance by remember { mutableStateOf(LevelTolerance.STANDARD) }
     var isHoldLocked by remember { mutableStateOf(false) }
     var isAudioEnabled by remember { mutableStateOf(true) }
     var isHapticEnabled by remember { mutableStateOf(true) }
 
-    // Calibration offsets for relative zeroing (相對歸零)
+    // Calibration offsets for relative zeroing (相對基準歸零)
     var zeroOffsetPitch by remember { mutableFloatStateOf(0f) }
     var zeroOffsetRoll by remember { mutableFloatStateOf(0f) }
 
     // Frozen values when locked
     var lockedPitch by remember { mutableFloatStateOf(0f) }
     var lockedRoll by remember { mutableFloatStateOf(0f) }
+
+    // Save record dialog state
+    var showSaveDialog by remember { mutableStateOf(false) }
+    var recordNotesInput by remember { mutableStateOf("") }
 
     // Primitive sensor smoothing accumulator (no Compose state overhead on raw sensor events)
     val sensorFilter = remember {
@@ -211,14 +245,13 @@ fun SpiritLevelComponent(
     }
 
     // 60/120 FPS display loop driven by V-Sync withFrameNanos
-    LaunchedEffect(isHoldLocked, zeroOffsetPitch, zeroOffsetRoll, levelType) {
+    LaunchedEffect(isHoldLocked, zeroOffsetPitch, zeroOffsetRoll, levelType, tolerance) {
         var lastUiUpdateTimeMs = 0L
         while (isActive) {
             withFrameNanos { frameTimeNanos ->
                 val curP = if (isHoldLocked) lockedPitch else (sensorFilter.filteredPitch - zeroOffsetPitch)
                 val curR = if (isHoldLocked) lockedRoll else (sensorFilter.filteredRoll - zeroOffsetRoll)
 
-                // Direct assignment updates Canvas Draw phase immediately without recomposing the tree
                 renderState.drawPitch = curP
                 renderState.drawRoll = curR
 
@@ -227,9 +260,8 @@ fun SpiritLevelComponent(
                     LevelType.HORIZONTAL_1D -> abs(curR)
                     LevelType.VERTICAL_1D -> abs(90f - abs(curP))
                 }
-                val curLevel = dev < 0.5f
+                val curLevel = dev <= tolerance.thresholdDeg
 
-                // Throttled UI text update (~20Hz or immediate on level boundary change)
                 val nowMs = frameTimeNanos / 1_000_000L
                 if (nowMs - lastUiUpdateTimeMs > 45L || curLevel != renderState.isLevel) {
                     lastUiUpdateTimeMs = nowMs
@@ -242,39 +274,42 @@ fun SpiritLevelComponent(
         }
     }
 
-    // Trigger haptic & acoustic cue upon crossing the level boundary
+    // Acoustic & Haptic Feedback on crossing level boundary
     var wasLevel by remember { mutableStateOf(false) }
     LaunchedEffect(renderState.isLevel) {
         if (renderState.isLevel && !wasLevel) {
             if (isHapticEnabled) {
                 try {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        vibrator?.vibrate(VibrationEffect.createOneShot(45, VibrationEffect.DEFAULT_AMPLITUDE))
+                        vibrator?.vibrate(VibrationEffect.createOneShot(35, VibrationEffect.DEFAULT_AMPLITUDE))
                     } else {
                         @Suppress("DEPRECATION")
-                        vibrator?.vibrate(45)
+                        vibrator?.vibrate(35)
                     }
-                } catch (e: Throwable) {
-                    // Ignore transient vibrator service error
-                }
+                } catch (_: Throwable) {}
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
             }
             if (isAudioEnabled) {
                 try {
-                    toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP, 80)
-                } catch (e: Throwable) {
-                    // Ignore transient tone error
-                }
+                    toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP, 70)
+                } catch (_: Throwable) {}
             }
         }
         wasLevel = renderState.isLevel
     }
 
-    // Color definitions
-    val emeraldColor = Color(0xFF10B981)
-    val amberColor = Color(0xFFF59E0B)
-    val cyanAccent = Color(0xFF00E5FF)
-    val activeLevelColor = if (renderState.isLevel) emeraldColor else amberColor
+    // Material 3 Color Theme Mapping
+    val levelAccentColor by animateColorAsState(
+        targetValue = if (renderState.isLevel) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
+        animationSpec = tween(durationMillis = 200),
+        label = "levelAccentColor"
+    )
+
+    val surfaceContainerColor = MaterialTheme.colorScheme.surfaceContainer
+    val surfaceContainerHighColor = MaterialTheme.colorScheme.surfaceContainerHigh
+    val outlineVariantColor = MaterialTheme.colorScheme.outlineVariant
+
+    val isRelativeZeroActive = zeroOffsetPitch != 0f || zeroOffsetRoll != 0f
 
     Column(
         modifier = modifier
@@ -284,158 +319,261 @@ fun SpiritLevelComponent(
             .testTag("spirit_level_screen"),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // 1. Top Mode Selector Segmented Bar
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            shape = RoundedCornerShape(20.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            tonalElevation = 2.dp
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                LevelType.values().forEach { type ->
-                    val isSelected = levelType == type
-                    val (title, icon) = when (type) {
-                        LevelType.SURFACE_2D -> "平面圓盤" to Icons.Rounded.Adjust
-                        LevelType.HORIZONTAL_1D -> "橫向水平" to Icons.Rounded.LinearScale
-                        LevelType.VERTICAL_1D -> "立面垂直" to Icons.Rounded.Height
-                    }
-
-                    Surface(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(42.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .clickable {
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                levelType = type
-                            },
-                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                        shape = RoundedCornerShape(16.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center,
-                            modifier = Modifier.padding(horizontal = 4.dp)
-                        ) {
-                            Icon(
-                                imageVector = icon,
-                                contentDescription = title,
-                                tint = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = title,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // 2. Main Instrument Visualizer Display Area (Canvas only, isolated from recompositions)
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 8.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            when (levelType) {
-                LevelType.SURFACE_2D -> {
-                    BullseyeSurfaceLevelView(
-                        pitchProvider = { renderState.drawPitch },
-                        rollProvider = { renderState.drawRoll },
-                        isLevel = renderState.isLevel,
-                        accentColor = activeLevelColor
-                    )
-                }
-                LevelType.HORIZONTAL_1D -> {
-                    TubularHorizontalLevelView(
-                        angleProvider = { renderState.drawRoll },
-                        isLevel = renderState.isLevel,
-                        accentColor = activeLevelColor
-                    )
-                }
-                LevelType.VERTICAL_1D -> {
-                    TubularVerticalLevelView(
-                        angleProvider = { 90f - abs(renderState.drawPitch) },
-                        isLevel = renderState.isLevel,
-                        accentColor = activeLevelColor
-                    )
-                }
-            }
-        }
-
-        // 3. Precision Readout Cards & Multi-Unit Panel
+        // 1. Material 3 Standard Segmented Button Row (Mode Selection)
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 6.dp),
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surfaceContainer,
-            border = BorderStroke(
-                width = 1.dp,
-                color = if (renderState.isLevel) emeraldColor.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+            color = Color.Transparent
+        ) {
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                LevelType.values().forEachIndexed { index, type ->
+                    val isSelected = levelType == type
+                    val icon = when (type) {
+                        LevelType.SURFACE_2D -> Icons.Rounded.FilterTiltShift
+                        LevelType.HORIZONTAL_1D -> Icons.Rounded.LinearScale
+                        LevelType.VERTICAL_1D -> Icons.Rounded.Height
+                    }
+
+                    SegmentedButton(
+                        selected = isSelected,
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            levelType = type
+                        },
+                        shape = SegmentedButtonDefaults.itemShape(index = index, count = LevelType.values().size),
+                        icon = {
+                            SegmentedButtonDefaults.Icon(active = isSelected) {
+                                Icon(
+                                    imageVector = icon,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(SegmentedButtonDefaults.IconSize)
+                                )
+                            }
+                        },
+                        colors = SegmentedButtonDefaults.colors(
+                            activeContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            activeContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            inactiveContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        ),
+                        modifier = Modifier.testTag("level_mode_${type.name.lowercase(Locale.ROOT)}")
+                    ) {
+                        Text(
+                            text = type.label,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                        )
+                    }
+                }
+            }
+        }
+
+        // 2. Tolerance & Unit Secondary Chips Bar
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Tolerance Selector Chip
+            AssistChip(
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    tolerance = when (tolerance) {
+                        LevelTolerance.ULTRA_FINE -> LevelTolerance.STANDARD
+                        LevelTolerance.STANDARD -> LevelTolerance.CONSTRUCTION
+                        LevelTolerance.CONSTRUCTION -> LevelTolerance.ULTRA_FINE
+                    }
+                },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Rounded.Tune,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                },
+                label = {
+                    Text(
+                        text = tolerance.label,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                },
+                shape = RoundedCornerShape(12.dp),
+                colors = AssistChipDefaults.assistChipColors(
+                    containerColor = surfaceContainerHighColor,
+                    labelColor = MaterialTheme.colorScheme.onSurface
+                ),
+                border = BorderStroke(1.dp, outlineVariantColor.copy(alpha = 0.5f))
             )
+
+            // Relative Zero Status Badge (if active)
+            if (isRelativeZeroActive) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.4f)),
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.MyLocation,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "相對基準模式",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    }
+                }
+            }
+
+            // Unit Toggle Chip
+            AssistChip(
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    angleUnit = when (angleUnit) {
+                        AngleUnit.DEGREE -> AngleUnit.PERCENT
+                        AngleUnit.PERCENT -> AngleUnit.ROOF_PITCH
+                        AngleUnit.ROOF_PITCH -> AngleUnit.DEGREE
+                    }
+                },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Rounded.SwapHoriz,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.secondary
+                    )
+                },
+                label = {
+                    Text(
+                        text = "單位: ${angleUnit.label} (${angleUnit.symbol})",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                },
+                shape = RoundedCornerShape(12.dp),
+                colors = AssistChipDefaults.assistChipColors(
+                    containerColor = surfaceContainerHighColor,
+                    labelColor = MaterialTheme.colorScheme.onSurface
+                ),
+                border = BorderStroke(1.dp, outlineVariantColor.copy(alpha = 0.5f))
+            )
+        }
+
+        // 3. Main Instrument Visualizer Display Area (Canvas only, isolated from recompositions)
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            when (levelType) {
+                LevelType.SURFACE_2D -> {
+                    Material3BullseyeLevelView(
+                        pitchProvider = { renderState.drawPitch },
+                        rollProvider = { renderState.drawRoll },
+                        isLevel = renderState.isLevel,
+                        accentColor = levelAccentColor,
+                        toleranceDeg = tolerance.thresholdDeg,
+                        isDark = isDark
+                    )
+                }
+                LevelType.HORIZONTAL_1D -> {
+                    Material3TubularHorizontalLevelView(
+                        angleProvider = { renderState.drawRoll },
+                        isLevel = renderState.isLevel,
+                        accentColor = levelAccentColor,
+                        toleranceDeg = tolerance.thresholdDeg,
+                        isDark = isDark
+                    )
+                }
+                LevelType.VERTICAL_1D -> {
+                    Material3TubularVerticalLevelView(
+                        angleProvider = { 90f - abs(renderState.drawPitch) },
+                        isLevel = renderState.isLevel,
+                        accentColor = levelAccentColor,
+                        toleranceDeg = tolerance.thresholdDeg,
+                        isDark = isDark
+                    )
+                }
+            }
+        }
+
+        // 4. Material 3 Precision Readout Card & Dynamic Angle Breakdown
+        ElevatedCard(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.elevatedCardColors(
+                containerColor = surfaceContainerColor
+            ),
+            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
             ) {
-                // Large primary reading & status indicator
+                // Top status and large deviation readout
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column {
-                        Text(
-                            text = if (renderState.isLevel) "✓ 基準精確水平 (±0.5°)" else "傾斜角度偏移",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (renderState.isLevel) emeraldColor else MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                shape = CircleShape,
+                                color = if (renderState.isLevel) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.surfaceContainerHighest,
+                                modifier = Modifier.size(8.dp)
+                            ) {}
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (renderState.isLevel) "✓ 基準精確水平 (±${tolerance.thresholdDeg}°)" else "當前傾角偏差",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (renderState.isLevel) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(2.dp))
+
                         Row(verticalAlignment = Alignment.Bottom) {
                             Text(
-                                text = when (angleUnit) {
-                                    AngleUnit.DEGREE -> String.format(java.util.Locale.US, "%.1f°", renderState.displayDeviation)
-                                    AngleUnit.PERCENT -> {
-                                        val pct = abs(tan(Math.toRadians(renderState.displayDeviation.toDouble()))) * 100
-                                        String.format(java.util.Locale.US, "%.2f%%", pct)
-                                    }
-                                    AngleUnit.ROOF_PITCH -> {
-                                        val mmPerM = abs(tan(Math.toRadians(renderState.displayDeviation.toDouble()))) * 1000
-                                        String.format(java.util.Locale.US, "%.1f mm/m", mmPerM)
-                                    }
-                                },
-                                style = MaterialTheme.typography.headlineLarge,
+                                text = formatAngleValue(renderState.displayDeviation, angleUnit),
+                                style = MaterialTheme.typography.headlineMedium,
                                 fontWeight = FontWeight.ExtraBold,
-                                color = if (renderState.isLevel) emeraldColor else MaterialTheme.colorScheme.onSurface,
+                                color = if (renderState.isLevel) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurface,
                                 fontFamily = FontFamily.Monospace
                             )
                             if (isHoldLocked) {
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = amberColor.copy(alpha = 0.2f),
-                                    modifier = Modifier.padding(bottom = 6.dp)
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.errorContainer,
+                                    modifier = Modifier.padding(bottom = 4.dp)
                                 ) {
                                     Text(
-                                        text = "HOLD 鎖定",
+                                        text = "HOLD 保持中",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = amberColor,
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
                                         fontWeight = FontWeight.Bold,
                                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                     )
@@ -444,93 +582,81 @@ fun SpiritLevelComponent(
                         }
                     }
 
-                    // Unit toggle chip
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        modifier = Modifier.clickable {
-                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            angleUnit = when (angleUnit) {
-                                AngleUnit.DEGREE -> AngleUnit.PERCENT
-                                AngleUnit.PERCENT -> AngleUnit.ROOF_PITCH
-                                AngleUnit.ROOF_PITCH -> AngleUnit.DEGREE
-                            }
-                        }
+                    // Save Record Button
+                    FilledTonalButton(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            recordNotesInput = ""
+                            showSaveDialog = true
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.SwapHoriz,
-                                contentDescription = "切換單位",
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = when (angleUnit) {
-                                    AngleUnit.DEGREE -> "角度 (°)"
-                                    AngleUnit.PERCENT -> "坡度 (%)"
-                                    AngleUnit.ROOF_PITCH -> "斜率 (mm/m)"
-                                },
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
+                        Icon(
+                            imageVector = Icons.Rounded.BookmarkAdd,
+                            contentDescription = "儲存紀錄",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "記錄",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
+                HorizontalDivider(color = outlineVariantColor.copy(alpha = 0.35f))
+                Spacer(modifier = Modifier.height(8.dp))
 
                 // Detailed Pitch (X) and Roll (Y) Breakdown
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceAround
                 ) {
-                    LevelAxisReadoutItem(
-                        axis = "X (俯仰 Pitch)",
+                    Material3AxisReadoutItem(
+                        axisName = "X (俯仰 Pitch)",
                         angle = renderState.displayPitch,
-                        isTarget = abs(renderState.displayPitch) < 0.5f,
-                        emerald = emeraldColor
+                        isTarget = abs(renderState.displayPitch) <= tolerance.thresholdDeg,
+                        targetColor = MaterialTheme.colorScheme.tertiary,
+                        unit = angleUnit
                     )
-                    LevelAxisReadoutItem(
-                        axis = "Y (橫滾 Roll)",
+                    Material3AxisReadoutItem(
+                        axisName = "Y (橫滾 Roll)",
                         angle = renderState.displayRoll,
-                        isTarget = abs(renderState.displayRoll) < 0.5f,
-                        emerald = emeraldColor
+                        isTarget = abs(renderState.displayRoll) <= tolerance.thresholdDeg,
+                        targetColor = MaterialTheme.colorScheme.tertiary,
+                        unit = angleUnit
                     )
                     val offsetMagnitude = sqrt(zeroOffsetPitch * zeroOffsetPitch + zeroOffsetRoll * zeroOffsetRoll)
-                    LevelAxisReadoutItem(
-                        axis = "相對歸零偏移",
+                    Material3AxisReadoutItem(
+                        axisName = "相對歸零偏移",
                         angle = offsetMagnitude,
                         isTarget = zeroOffsetPitch == 0f && zeroOffsetRoll == 0f,
-                        emerald = cyanAccent
+                        targetColor = MaterialTheme.colorScheme.secondary,
+                        unit = AngleUnit.DEGREE
                     )
                 }
             }
         }
 
-        // 4. Quick Action Toolbar: Relative Zero, Hold, Beeper, Haptic
+        // 5. Material 3 Bottom Action Toolbar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             // Relative Zero Calibration Button (相對基準歸零)
             Button(
                 onClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    if (zeroOffsetPitch != 0f || zeroOffsetRoll != 0f) {
-                        // Reset to absolute level
+                    if (isRelativeZeroActive) {
                         zeroOffsetPitch = 0f
                         zeroOffsetRoll = 0f
                     } else {
-                        // Set current inclination as relative zero
                         zeroOffsetPitch = renderState.displayPitch + zeroOffsetPitch
                         zeroOffsetRoll = renderState.displayRoll + zeroOffsetRoll
                     }
@@ -541,18 +667,18 @@ fun SpiritLevelComponent(
                     .testTag("level_btn_zero"),
                 shape = RoundedCornerShape(16.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (zeroOffsetPitch != 0f || zeroOffsetRoll != 0f) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
-                    contentColor = if (zeroOffsetPitch != 0f || zeroOffsetRoll != 0f) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
+                    containerColor = if (isRelativeZeroActive) MaterialTheme.colorScheme.secondaryContainer else surfaceContainerHighColor,
+                    contentColor = if (isRelativeZeroActive) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
                 )
             ) {
                 Icon(
-                    imageVector = Icons.Rounded.FilterTiltShift,
+                    imageVector = if (isRelativeZeroActive) Icons.Rounded.RestartAlt else Icons.Rounded.MyLocation,
                     contentDescription = null,
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = if (zeroOffsetPitch != 0f || zeroOffsetRoll != 0f) "重設絕對基準" else "相對歸零",
+                    text = if (isRelativeZeroActive) "重設絕對基準" else "相對歸零",
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold
                 )
@@ -576,8 +702,8 @@ fun SpiritLevelComponent(
                     .testTag("level_btn_hold"),
                 shape = RoundedCornerShape(16.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isHoldLocked) amberColor else MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = if (isHoldLocked) Color.Black else MaterialTheme.colorScheme.onPrimaryContainer
+                    containerColor = if (isHoldLocked) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = if (isHoldLocked) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer
                 )
             ) {
                 Icon(
@@ -602,7 +728,7 @@ fun SpiritLevelComponent(
                 modifier = Modifier
                     .size(48.dp)
                     .background(
-                        color = if (isAudioEnabled) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceContainerHigh,
+                        color = if (isAudioEnabled) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else surfaceContainerHighColor,
                         shape = RoundedCornerShape(16.dp)
                     )
             ) {
@@ -622,7 +748,7 @@ fun SpiritLevelComponent(
                 modifier = Modifier
                     .size(48.dp)
                     .background(
-                        color = if (isHapticEnabled) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceContainerHigh,
+                        color = if (isHapticEnabled) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else surfaceContainerHighColor,
                         shape = RoundedCornerShape(16.dp)
                     )
             ) {
@@ -633,82 +759,244 @@ fun SpiritLevelComponent(
                 )
             }
         }
+
+        // 6. Contextual Placement Advice Banner
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 2.dp),
+            color = Color.Transparent
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+                modifier = Modifier.padding(bottom = 4.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Info,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = when (levelType) {
+                        LevelType.SURFACE_2D -> "提示：請將手機平放於待測物表面進行雙軸校平"
+                        LevelType.HORIZONTAL_1D -> "提示：將手機長邊貼齊測量物體邊緣，調整至氣泡居中"
+                        LevelType.VERTICAL_1D -> "提示：將手機側邊垂直貼靠牆面或立柱進行垂準測量"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 11.sp
+                )
+            }
+        }
+    }
+
+    // Material 3 Save Measurement Dialog
+    if (showSaveDialog) {
+        AlertDialog(
+            onDismissRequest = { showSaveDialog = false },
+            icon = {
+                Icon(
+                    imageVector = Icons.Rounded.FilterTiltShift,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            },
+            title = {
+                Text(
+                    text = "儲存水準儀測量紀錄",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "當前測量模式：${levelType.label}",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        text = "傾斜偏差：${String.format(Locale.US, "%.1f°", renderState.displayDeviation)} (${if (renderState.isLevel) "水平精確 ✓" else "未校平"})",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (renderState.isLevel) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = "俯仰 (X): ${String.format(Locale.US, "%+.1f°", renderState.displayPitch)} | 橫滾 (Y): ${String.format(Locale.US, "%+.1f°", renderState.displayRoll)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    OutlinedTextField(
+                        value = recordNotesInput,
+                        onValueChange = { recordNotesInput = it },
+                        label = { Text("備註 (可選，如：客廳電視牆水平校正)") },
+                        placeholder = { Text("輸入測量位置或用途...") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        viewModel.saveLevelRecord(
+                            pitchDeg = renderState.displayPitch,
+                            rollDeg = renderState.displayRoll,
+                            modeName = levelType.label,
+                            toleranceDeg = tolerance.thresholdDeg,
+                            customNotes = recordNotesInput.ifBlank { null }
+                        )
+                        showSaveDialog = false
+                    },
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("儲存至歷史紀錄")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showSaveDialog = false },
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("取消")
+                }
+            }
+        )
     }
 }
 
 /**
- * 2D 雙軸圓盤水準儀 (Bullseye / Surface Level)
+ * 格式化角度、坡度與斜率文字
+ */
+private fun formatAngleValue(deviationDeg: Float, unit: AngleUnit): String {
+    return when (unit) {
+        AngleUnit.DEGREE -> String.format(Locale.US, "%.1f°", deviationDeg)
+        AngleUnit.PERCENT -> {
+            val pct = abs(tan(Math.toRadians(deviationDeg.toDouble()))) * 100.0
+            String.format(Locale.US, "%.2f%%", pct)
+        }
+        AngleUnit.ROOF_PITCH -> {
+            val mmPerM = abs(tan(Math.toRadians(deviationDeg.toDouble()))) * 1000.0
+            String.format(Locale.US, "%.1f mm/m", mmPerM)
+        }
+    }
+}
+
+/**
+ * Material 3 雙軸圓盤水準儀繪製畫布 (Bullseye / Surface Level)
  * Pure Hardware-Accelerated Draw Canvas: 0 recompositions, 60/120 FPS fluid physics.
  */
 @Composable
-private fun BullseyeSurfaceLevelView(
+private fun Material3BullseyeLevelView(
     pitchProvider: () -> Float,
     rollProvider: () -> Float,
     isLevel: Boolean,
-    accentColor: Color
+    accentColor: Color,
+    toleranceDeg: Float,
+    isDark: Boolean
 ) {
     Canvas(
         modifier = Modifier
             .fillMaxSize()
-            .aspectRatio(1f)
+            .aspectRatio(1f, matchHeightConstraintsFirst = true)
             .testTag("bullseye_level_canvas")
     ) {
         val pitch = pitchProvider()
         val roll = rollProvider()
         val center = Offset(size.width / 2f, size.height / 2f)
         val outerRadius = minOf(size.width, size.height) * 0.44f
-        val innerTargetRadius = outerRadius * 0.22f
 
-        // 1. Outer dial metallic ring background
-        drawCircle(
-            brush = Brush.radialGradient(
+        // Tolerance target radius dynamically mapped to tolerance threshold (10° = 0.75 * outerRadius)
+        val toleranceRatio = (toleranceDeg / 10f).coerceIn(0.12f, 0.40f)
+        val innerTargetRadius = outerRadius * toleranceRatio
+
+        // 1. Dial Metallic Bezel / Ring Base (Theme-aware)
+        val dialBaseGradient = if (isDark) {
+            Brush.radialGradient(
                 colors = listOf(
                     Color(0xFF1E293B),
                     Color(0xFF0F172A),
-                    Color(0xFF020617)
+                    Color(0xFF060911)
                 ),
                 center = center,
                 radius = outerRadius
-            ),
+            )
+        } else {
+            Brush.radialGradient(
+                colors = listOf(
+                    Color(0xFFF8FAFC),
+                    Color(0xFFE2E8F0),
+                    Color(0xFFCBD5E1)
+                ),
+                center = center,
+                radius = outerRadius
+            )
+        }
+
+        drawCircle(
+            brush = dialBaseGradient,
             center = center,
             radius = outerRadius
         )
 
-        // Subtle outer border ring
+        // Outer Metallic Rim Stroke
+        val rimColor = if (isDark) Color.White.copy(alpha = 0.22f) else Color(0xFF64748B).copy(alpha = 0.35f)
         drawCircle(
-            color = Color.White.copy(alpha = 0.2f),
+            color = rimColor,
             center = center,
             radius = outerRadius,
             style = Stroke(width = 3.dp.toPx())
         )
 
-        // 2. Concentric Angle Degree Rings (10°, 5°, 2°, 1°)
-        val ringRatios = floatArrayOf(0.85f, 0.60f, 0.38f, 0.22f)
-        for (i in ringRatios.indices) {
-            val ratio = ringRatios[i]
+        // Subtle Outer Shadow / Inner Bevel
+        drawCircle(
+            color = if (isDark) Color.Black.copy(alpha = 0.4f) else Color.White.copy(alpha = 0.6f),
+            center = center,
+            radius = outerRadius - 1.5.dp.toPx(),
+            style = Stroke(width = 1.5.dp.toPx())
+        )
+
+        // 2. Concentric Angle Degree Rings (10°, 5°, 2°, and Target Zone)
+        val ringColor = if (isDark) Color.White.copy(alpha = 0.14f) else Color(0xFF475569).copy(alpha = 0.22f)
+        val ringRatios = floatArrayOf(0.85f, 0.58f, 0.32f)
+        for (ratio in ringRatios) {
             drawCircle(
-                color = if (i == 3) accentColor.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.15f),
+                color = ringColor,
                 center = center,
                 radius = outerRadius * ratio,
-                style = Stroke(width = if (i == 3) 2.5.dp.toPx() else 1.2.dp.toPx())
+                style = Stroke(width = 1.2.dp.toPx())
             )
         }
 
-        // 3. Crosshair coordinate lines
-        drawLine(
-            color = Color.White.copy(alpha = 0.22f),
-            start = Offset(center.x - outerRadius, center.y),
-            end = Offset(center.x + outerRadius, center.y),
-            strokeWidth = 1.5.dp.toPx()
-        )
-        drawLine(
-            color = Color.White.copy(alpha = 0.22f),
-            start = Offset(center.x, center.y - outerRadius),
-            end = Offset(center.x, center.y + outerRadius),
-            strokeWidth = 1.5.dp.toPx()
+        // Active Tolerance Target Ring
+        drawCircle(
+            color = if (isLevel) accentColor.copy(alpha = 0.9f) else accentColor.copy(alpha = 0.5f),
+            center = center,
+            radius = innerTargetRadius,
+            style = Stroke(width = if (isLevel) 2.5.dp.toPx() else 1.5.dp.toPx())
         )
 
-        // Radial degree ticks every 15 degrees (precalculated PI / 180 = 0.0174532925f)
+        // 3. Precision Crosshair coordinate lines
+        val crosshairColor = if (isDark) Color.White.copy(alpha = 0.20f) else Color(0xFF334155).copy(alpha = 0.25f)
+        drawLine(
+            color = crosshairColor,
+            start = Offset(center.x - outerRadius, center.y),
+            end = Offset(center.x + outerRadius, center.y),
+            strokeWidth = 1.2.dp.toPx()
+        )
+        drawLine(
+            color = crosshairColor,
+            start = Offset(center.x, center.y - outerRadius),
+            end = Offset(center.x, center.y + outerRadius),
+            strokeWidth = 1.2.dp.toPx()
+        )
+
+        // Radial degree tick marks every 15 degrees (precalculated PI / 180 = 0.0174532925f)
         for (deg in 0 until 360 step 15) {
             val rad = deg * 0.0174532925f
             val cosV = cos(rad)
@@ -716,56 +1004,94 @@ private fun BullseyeSurfaceLevelView(
             val isMajor = deg % 45 == 0
             val tickLen = if (isMajor) 14.dp.toPx() else 7.dp.toPx()
             val rStart = outerRadius - tickLen
+            val tickColor = if (isMajor) {
+                if (isDark) Color.White.copy(alpha = 0.55f) else Color(0xFF1E293B).copy(alpha = 0.6f)
+            } else {
+                if (isDark) Color.White.copy(alpha = 0.2f) else Color(0xFF64748B).copy(alpha = 0.3f)
+            }
             drawLine(
-                color = if (isMajor) Color.White.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.2f),
+                color = tickColor,
                 start = Offset(center.x + cosV * rStart, center.y + sinV * rStart),
                 end = Offset(center.x + cosV * outerRadius, center.y + sinV * outerRadius),
                 strokeWidth = if (isMajor) 2.dp.toPx() else 1.dp.toPx()
             )
         }
 
-        // 4. Center Target Level Bullseye Disc
+        // 4. Center Target Level Glow Disk when device is aligned
         if (isLevel) {
             drawCircle(
-                color = accentColor.copy(alpha = 0.25f),
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        accentColor.copy(alpha = 0.35f),
+                        accentColor.copy(alpha = 0.12f),
+                        Color.Transparent
+                    ),
+                    center = center,
+                    radius = innerTargetRadius * 1.4f
+                ),
+                center = center,
+                radius = innerTargetRadius * 1.4f
+            )
+            drawCircle(
+                color = accentColor.copy(alpha = 0.22f),
                 center = center,
                 radius = innerTargetRadius
             )
         }
 
-        // 5. Dynamic Floating Liquid Bubble
-        // Bubble displacement scales with tilt angle: 10° corresponds to outer ring
+        // 5. Dynamic Bubble Physics Simulation
+        // Bubble displacement scales with tilt angle: 10° corresponds to 75% of outer ring
         val maxAngle = 10f
-        val normX = (roll / maxAngle).coerceIn(-1.1f, 1.1f)
-        val normY = (pitch / maxAngle).coerceIn(-1.1f, 1.1f)
+        val normX = (roll / maxAngle).coerceIn(-1.15f, 1.15f)
+        val normY = (pitch / maxAngle).coerceIn(-1.15f, 1.15f)
         val bubbleOffset = Offset(
             x = center.x + normX * (outerRadius * 0.75f),
             y = center.y + normY * (outerRadius * 0.75f)
         )
-        val bubbleRadius = innerTargetRadius * 0.78f
+        val bubbleRadius = innerTargetRadius * 0.76f
 
-        // Bubble glow & liquid refraction
+        // Real-time direction guide chevron when off-level
+        if (!isLevel) {
+            val devX = center.x - bubbleOffset.x
+            val devY = center.y - bubbleOffset.y
+            val dist = sqrt(devX * devX + devY * devY)
+            if (dist > bubbleRadius * 1.2f) {
+                val dirX = devX / dist
+                val dirY = devY / dist
+                val arrowStart = Offset(center.x - dirX * (innerTargetRadius * 1.2f), center.y - dirY * (innerTargetRadius * 1.2f))
+                val arrowEnd = Offset(center.x - dirX * (innerTargetRadius * 0.7f), center.y - dirY * (innerTargetRadius * 0.7f))
+                drawLine(
+                    color = accentColor.copy(alpha = 0.65f),
+                    start = arrowStart,
+                    end = arrowEnd,
+                    strokeWidth = 2.5.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+            }
+        }
+
+        // Bubble Outer Glow & Liquid Aura
         drawCircle(
             brush = Brush.radialGradient(
                 colors = listOf(
-                    accentColor.copy(alpha = 0.85f),
-                    accentColor.copy(alpha = 0.45f),
+                    accentColor.copy(alpha = 0.75f),
+                    accentColor.copy(alpha = 0.35f),
                     Color.Transparent
                 ),
                 center = bubbleOffset,
-                radius = bubbleRadius * 1.5f
+                radius = bubbleRadius * 1.4f
             ),
             center = bubbleOffset,
-            radius = bubbleRadius * 1.5f
+            radius = bubbleRadius * 1.4f
         )
 
-        // Bubble fluid body
+        // 3D Spherical Fluid Body
         drawCircle(
             brush = Brush.radialGradient(
                 colors = listOf(
                     Color.White.copy(alpha = 0.95f),
-                    accentColor,
-                    accentColor.copy(alpha = 0.75f)
+                    accentColor.copy(alpha = 0.90f),
+                    accentColor.copy(alpha = 0.70f)
                 ),
                 center = Offset(bubbleOffset.x - bubbleRadius * 0.28f, bubbleOffset.y - bubbleRadius * 0.28f),
                 radius = bubbleRadius
@@ -774,9 +1100,16 @@ private fun BullseyeSurfaceLevelView(
             radius = bubbleRadius
         )
 
-        // Bubble crisp rim
+        // Specular highlight spot for high realism
         drawCircle(
-            color = Color.White.copy(alpha = 0.9f),
+            color = Color.White.copy(alpha = 0.90f),
+            center = Offset(bubbleOffset.x - bubbleRadius * 0.32f, bubbleOffset.y - bubbleRadius * 0.32f),
+            radius = bubbleRadius * 0.25f
+        )
+
+        // Bubble crisp rim meniscus
+        drawCircle(
+            color = Color.White.copy(alpha = 0.85f),
             center = bubbleOffset,
             radius = bubbleRadius,
             style = Stroke(width = 2.dp.toPx())
@@ -785,14 +1118,15 @@ private fun BullseyeSurfaceLevelView(
 }
 
 /**
- * 橫向管狀水準儀 (Horizontal Tubular Level)
- * Direct GPU draw without coroutine spring cancellation overhead.
+ * Material 3 橫向管狀水準儀 (Horizontal Tubular Level)
  */
 @Composable
-private fun TubularHorizontalLevelView(
+private fun Material3TubularHorizontalLevelView(
     angleProvider: () -> Float,
     isLevel: Boolean,
-    accentColor: Color
+    accentColor: Color,
+    toleranceDeg: Float,
+    isDark: Boolean
 ) {
     Canvas(
         modifier = Modifier
@@ -808,49 +1142,76 @@ private fun TubularHorizontalLevelView(
         val tubeRadius = tubeH / 2f
 
         // Tube vial glass background
-        drawRoundRect(
-            brush = Brush.verticalGradient(
+        val vialGradient = if (isDark) {
+            Brush.verticalGradient(
                 colors = listOf(
                     Color(0xFF1E293B),
                     Color(0xFF0F172A),
-                    Color(0xFF020617)
-                )
-            ),
+                    Color(0xFF060911)
+                ),
+                startY = tubeTop,
+                endY = tubeTop + tubeH
+            )
+        } else {
+            Brush.verticalGradient(
+                colors = listOf(
+                    Color(0xFFF1F5F9),
+                    Color(0xFFE2E8F0),
+                    Color(0xFFCBD5E1)
+                ),
+                startY = tubeTop,
+                endY = tubeTop + tubeH
+            )
+        }
+
+        drawRoundRect(
+            brush = vialGradient,
             topLeft = Offset(tubeLeft, tubeTop),
             size = Size(tubeW, tubeH),
             cornerRadius = CornerRadius(tubeRadius, tubeRadius)
         )
 
         // Tube outer border
+        val borderColor = if (isDark) Color.White.copy(alpha = 0.30f) else Color(0xFF64748B).copy(alpha = 0.45f)
         drawRoundRect(
-            color = Color.White.copy(alpha = 0.35f),
+            color = borderColor,
             topLeft = Offset(tubeLeft, tubeTop),
             size = Size(tubeW, tubeH),
             cornerRadius = CornerRadius(tubeRadius, tubeRadius),
             style = Stroke(width = 2.5.dp.toPx())
         )
 
+        // Glass reflection sheen stripe
+        drawRoundRect(
+            color = Color.White.copy(alpha = if (isDark) 0.12f else 0.45f),
+            topLeft = Offset(tubeLeft + 12.dp.toPx(), tubeTop + 6.dp.toPx()),
+            size = Size(tubeW - 24.dp.toPx(), 8.dp.toPx()),
+            cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
+        )
+
         // Center level indicator target zone
         val centerX = size.width / 2f
-        val targetZoneWidth = 44.dp.toPx()
+        val targetZoneWidth = (toleranceDeg / 0.5f * 44.dp.toPx()).coerceIn(24.dp.toPx(), 72.dp.toPx())
+
         if (isLevel) {
             drawRoundRect(
-                color = accentColor.copy(alpha = 0.20f),
+                color = accentColor.copy(alpha = 0.22f),
                 topLeft = Offset(centerX - targetZoneWidth / 2f, tubeTop),
                 size = Size(targetZoneWidth, tubeH),
                 cornerRadius = CornerRadius(12f, 12f)
             )
         }
 
-        // Target alignment vertical lines
+        // Target alignment vertical boundary lines
+        val lineCol = if (isLevel) accentColor else accentColor.copy(alpha = 0.7f)
         drawLine(
-            color = accentColor.copy(alpha = 0.85f),
+            color = lineCol,
             start = Offset(centerX - targetZoneWidth / 2f, tubeTop),
             end = Offset(centerX - targetZoneWidth / 2f, tubeTop + tubeH),
             strokeWidth = 2.dp.toPx()
         )
         drawLine(
-            color = accentColor.copy(alpha = 0.85f),
+            color = lineCol,
             start = Offset(centerX + targetZoneWidth / 2f, tubeTop),
             end = Offset(centerX + targetZoneWidth / 2f, tubeTop + tubeH),
             strokeWidth = 2.dp.toPx()
@@ -858,11 +1219,26 @@ private fun TubularHorizontalLevelView(
 
         // Center centerline tick
         drawLine(
-            color = Color.White.copy(alpha = 0.4f),
+            color = if (isDark) Color.White.copy(alpha = 0.45f) else Color(0xFF1E293B).copy(alpha = 0.5f),
             start = Offset(centerX, tubeTop + 6.dp.toPx()),
             end = Offset(centerX, tubeTop + tubeH - 6.dp.toPx()),
-            strokeWidth = 1.dp.toPx()
+            strokeWidth = 1.2.dp.toPx()
         )
+
+        // Degree scale ticks
+        for (i in -4..4) {
+            if (i == 0) continue
+            val tickX = centerX + i * 22.dp.toPx()
+            if (tickX > tubeLeft + tubeRadius && tickX < tubeLeft + tubeW - tubeRadius) {
+                val tickH = if (abs(i) % 2 == 0) 14.dp.toPx() else 8.dp.toPx()
+                drawLine(
+                    color = if (isDark) Color.White.copy(alpha = 0.25f) else Color(0xFF64748B).copy(alpha = 0.35f),
+                    start = Offset(tickX, tubeTop + 6.dp.toPx()),
+                    end = Offset(tickX, tubeTop + 6.dp.toPx() + tickH),
+                    strokeWidth = 1.dp.toPx()
+                )
+            }
+        }
 
         // Bubble physics displacement
         val maxTravel = (tubeW - tubeH) / 2f
@@ -875,18 +1251,27 @@ private fun TubularHorizontalLevelView(
         drawCircle(
             brush = Brush.radialGradient(
                 colors = listOf(
-                    Color.White,
+                    Color.White.copy(alpha = 0.95f),
                     accentColor,
                     accentColor.copy(alpha = 0.65f)
                 ),
-                center = Offset(bubbleX - bubbleRadius * 0.2f, bubbleY - bubbleRadius * 0.2f),
+                center = Offset(bubbleX - bubbleRadius * 0.22f, bubbleY - bubbleRadius * 0.22f),
                 radius = bubbleRadius
             ),
             center = Offset(bubbleX, bubbleY),
             radius = bubbleRadius
         )
+
+        // Bubble specular highlight
         drawCircle(
             color = Color.White.copy(alpha = 0.9f),
+            center = Offset(bubbleX - bubbleRadius * 0.28f, bubbleY - bubbleRadius * 0.28f),
+            radius = bubbleRadius * 0.25f
+        )
+
+        // Bubble edge rim
+        drawCircle(
+            color = Color.White.copy(alpha = 0.85f),
             center = Offset(bubbleX, bubbleY),
             radius = bubbleRadius,
             style = Stroke(width = 2.dp.toPx())
@@ -895,14 +1280,15 @@ private fun TubularHorizontalLevelView(
 }
 
 /**
- * 垂直垂準儀 (Vertical Plumb Level)
- * Direct GPU draw without coroutine spring cancellation overhead.
+ * Material 3 垂直垂準儀 (Vertical Plumb Level)
  */
 @Composable
-private fun TubularVerticalLevelView(
+private fun Material3TubularVerticalLevelView(
     angleProvider: () -> Float,
     isLevel: Boolean,
-    accentColor: Color
+    accentColor: Color,
+    toleranceDeg: Float,
+    isDark: Boolean
 ) {
     Canvas(
         modifier = Modifier
@@ -918,34 +1304,60 @@ private fun TubularVerticalLevelView(
         val tubeRadius = tubeW / 2f
 
         // Tube vial glass background
-        drawRoundRect(
-            brush = Brush.horizontalGradient(
+        val vialGradient = if (isDark) {
+            Brush.horizontalGradient(
                 colors = listOf(
                     Color(0xFF1E293B),
                     Color(0xFF0F172A),
-                    Color(0xFF020617)
-                )
-            ),
+                    Color(0xFF060911)
+                ),
+                startX = tubeLeft,
+                endX = tubeLeft + tubeW
+            )
+        } else {
+            Brush.horizontalGradient(
+                colors = listOf(
+                    Color(0xFFF1F5F9),
+                    Color(0xFFE2E8F0),
+                    Color(0xFFCBD5E1)
+                ),
+                startX = tubeLeft,
+                endX = tubeLeft + tubeW
+            )
+        }
+
+        drawRoundRect(
+            brush = vialGradient,
             topLeft = Offset(tubeLeft, tubeTop),
             size = Size(tubeW, tubeH),
             cornerRadius = CornerRadius(tubeRadius, tubeRadius)
         )
 
         // Tube outer border
+        val borderColor = if (isDark) Color.White.copy(alpha = 0.30f) else Color(0xFF64748B).copy(alpha = 0.45f)
         drawRoundRect(
-            color = Color.White.copy(alpha = 0.35f),
+            color = borderColor,
             topLeft = Offset(tubeLeft, tubeTop),
             size = Size(tubeW, tubeH),
             cornerRadius = CornerRadius(tubeRadius, tubeRadius),
             style = Stroke(width = 2.5.dp.toPx())
         )
 
+        // Glass reflection sheen stripe
+        drawRoundRect(
+            color = Color.White.copy(alpha = if (isDark) 0.12f else 0.45f),
+            topLeft = Offset(tubeLeft + 6.dp.toPx(), tubeTop + 12.dp.toPx()),
+            size = Size(8.dp.toPx(), tubeH - 24.dp.toPx()),
+            cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
+        )
+
         // Center level indicator target zone
         val centerY = size.height / 2f
-        val targetZoneHeight = 44.dp.toPx()
+        val targetZoneHeight = (toleranceDeg / 0.5f * 44.dp.toPx()).coerceIn(24.dp.toPx(), 72.dp.toPx())
+
         if (isLevel) {
             drawRoundRect(
-                color = accentColor.copy(alpha = 0.20f),
+                color = accentColor.copy(alpha = 0.22f),
                 topLeft = Offset(tubeLeft, centerY - targetZoneHeight / 2f),
                 size = Size(tubeW, targetZoneHeight),
                 cornerRadius = CornerRadius(12f, 12f)
@@ -953,14 +1365,15 @@ private fun TubularVerticalLevelView(
         }
 
         // Target alignment horizontal lines
+        val lineCol = if (isLevel) accentColor else accentColor.copy(alpha = 0.7f)
         drawLine(
-            color = accentColor.copy(alpha = 0.85f),
+            color = lineCol,
             start = Offset(tubeLeft, centerY - targetZoneHeight / 2f),
             end = Offset(tubeLeft + tubeW, centerY - targetZoneHeight / 2f),
             strokeWidth = 2.dp.toPx()
         )
         drawLine(
-            color = accentColor.copy(alpha = 0.85f),
+            color = lineCol,
             start = Offset(tubeLeft, centerY + targetZoneHeight / 2f),
             end = Offset(tubeLeft + tubeW, centerY + targetZoneHeight / 2f),
             strokeWidth = 2.dp.toPx()
@@ -968,11 +1381,26 @@ private fun TubularVerticalLevelView(
 
         // Center centerline tick
         drawLine(
-            color = Color.White.copy(alpha = 0.4f),
+            color = if (isDark) Color.White.copy(alpha = 0.45f) else Color(0xFF1E293B).copy(alpha = 0.5f),
             start = Offset(tubeLeft + 6.dp.toPx(), centerY),
             end = Offset(tubeLeft + tubeW - 6.dp.toPx(), centerY),
-            strokeWidth = 1.dp.toPx()
+            strokeWidth = 1.2.dp.toPx()
         )
+
+        // Degree scale ticks
+        for (i in -4..4) {
+            if (i == 0) continue
+            val tickY = centerY + i * 22.dp.toPx()
+            if (tickY > tubeTop + tubeRadius && tickY < tubeTop + tubeH - tubeRadius) {
+                val tickW = if (abs(i) % 2 == 0) 14.dp.toPx() else 8.dp.toPx()
+                drawLine(
+                    color = if (isDark) Color.White.copy(alpha = 0.25f) else Color(0xFF64748B).copy(alpha = 0.35f),
+                    start = Offset(tubeLeft + 6.dp.toPx(), tickY),
+                    end = Offset(tubeLeft + 6.dp.toPx() + tickW, tickY),
+                    strokeWidth = 1.dp.toPx()
+                )
+            }
+        }
 
         // Bubble physics displacement
         val maxTravel = (tubeH - tubeW) / 2f
@@ -985,18 +1413,27 @@ private fun TubularVerticalLevelView(
         drawCircle(
             brush = Brush.radialGradient(
                 colors = listOf(
-                    Color.White,
+                    Color.White.copy(alpha = 0.95f),
                     accentColor,
                     accentColor.copy(alpha = 0.65f)
                 ),
-                center = Offset(bubbleX - bubbleRadius * 0.2f, bubbleY - bubbleRadius * 0.2f),
+                center = Offset(bubbleX - bubbleRadius * 0.22f, bubbleY - bubbleRadius * 0.22f),
                 radius = bubbleRadius
             ),
             center = Offset(bubbleX, bubbleY),
             radius = bubbleRadius
         )
+
+        // Specular highlight
         drawCircle(
             color = Color.White.copy(alpha = 0.9f),
+            center = Offset(bubbleX - bubbleRadius * 0.28f, bubbleY - bubbleRadius * 0.28f),
+            radius = bubbleRadius * 0.25f
+        )
+
+        // Bubble rim
+        drawCircle(
+            color = Color.White.copy(alpha = 0.85f),
             center = Offset(bubbleX, bubbleY),
             radius = bubbleRadius,
             style = Stroke(width = 2.dp.toPx())
@@ -1004,25 +1441,41 @@ private fun TubularVerticalLevelView(
     }
 }
 
+/**
+ * Detailed readout item for X and Y axes
+ */
 @Composable
-private fun LevelAxisReadoutItem(
-    axis: String,
+private fun Material3AxisReadoutItem(
+    axisName: String,
     angle: Float,
     isTarget: Boolean,
-    emerald: Color
+    targetColor: Color,
+    unit: AngleUnit
 ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
-            text = axis,
+            text = axisName,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 11.sp
         )
         Spacer(modifier = Modifier.height(2.dp))
+        val formattedAngle = when (unit) {
+            AngleUnit.DEGREE -> String.format(Locale.US, "%+.1f°", angle)
+            AngleUnit.PERCENT -> {
+                val pct = tan(Math.toRadians(angle.toDouble())) * 100.0
+                String.format(Locale.US, "%+.2f%%", pct)
+            }
+            AngleUnit.ROOF_PITCH -> {
+                val mmPerM = tan(Math.toRadians(angle.toDouble())) * 1000.0
+                String.format(Locale.US, "%+.1f mm/m", mmPerM)
+            }
+        }
         Text(
-            text = String.format(java.util.Locale.US, "%+.1f°", angle),
+            text = formattedAngle,
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
-            color = if (isTarget) emerald else MaterialTheme.colorScheme.onSurface,
+            color = if (isTarget) targetColor else MaterialTheme.colorScheme.onSurface,
             fontFamily = FontFamily.Monospace
         )
     }

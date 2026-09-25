@@ -441,7 +441,12 @@ object ShareUtility {
     fun formatTextReport(record: MeasureRecord): String {
         val sdf = SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.getDefault())
         val dateStr = sdf.format(Date(record.timestamp))
-        val modeStr = if (record.type == "CAM") "相機 AR 測量" else "螢幕卡鉗直尺"
+        val modeStr = when (record.type) {
+            "CAM" -> "相機 AR 測量"
+            "RULER" -> "螢幕卡鉗直尺"
+            "LEVEL" -> "高精數位水準儀"
+            else -> "數位測量"
+        }
         
         val sb = StringBuilder()
         sb.append("===============================\n")
@@ -450,11 +455,15 @@ object ShareUtility {
         sb.append("✍️ 測量名稱 : ${record.title}\n")
         sb.append("⏱️ 測量時間 : $dateStr\n")
         sb.append("🔧 測量模式 : $modeStr\n")
-        val valueStr = if (record.type == "RULER") {
-            val cm = record.value * 100.0
-            "${String.format(Locale.US, "%.2f", cm)} cm (${String.format(Locale.US, "%.1f", cm * 10.0)} mm)"
-        } else {
-            "${Math.round(record.value)} ${record.unit}"
+        val valueStr = when (record.type) {
+            "RULER" -> {
+                val cm = record.value * 100.0
+                "${String.format(Locale.US, "%.2f", cm)} cm (${String.format(Locale.US, "%.1f", cm * 10.0)} mm)"
+            }
+            "LEVEL" -> {
+                String.format(Locale.US, "%.1f° (傾角偏差)", record.value)
+            }
+            else -> "${Math.round(record.value)} ${record.unit}"
         }
         sb.append("📐 測量數值 : $valueStr\n")
         
@@ -572,11 +581,15 @@ object ShareUtility {
             typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
             isAntiAlias = true
         }
-        val formattedVal = if (record.type == "RULER") {
-            val cm = record.value * 100.0
-            "${String.format(Locale.US, "%.2f", cm)} cm"
-        } else {
-            "${Math.round(record.value)} ${record.unit}"
+        val formattedVal = when (record.type) {
+            "RULER" -> {
+                val cm = record.value * 100.0
+                "${String.format(Locale.US, "%.2f", cm)} cm"
+            }
+            "LEVEL" -> {
+                String.format(Locale.US, "%.1f°", record.value)
+            }
+            else -> "${Math.round(record.value)} ${record.unit}"
         }
         canvas.drawText(formattedVal, 80f, 175f, valPaint)
         
@@ -589,7 +602,12 @@ object ShareUtility {
         }
         val sdf = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault())
         val dateStr = sdf.format(Date(record.timestamp))
-        val modeStr = if (record.type == "CAM") "相機 AR 測量模式" else "螢幕尺模式"
+        val modeStr = when (record.type) {
+            "CAM" -> "相機 AR 測量模式"
+            "RULER" -> "螢幕卡鉗直尺模式"
+            "LEVEL" -> "高精數位水準儀模式"
+            else -> "數位測量模式"
+        }
         canvas.drawText("$modeStr | $dateStr", 80f, 210f, metaPaint)
         
         // Notes if any

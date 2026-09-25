@@ -137,7 +137,7 @@ fun AdaptiveNavigationRail(
                 onClick = { onModeSelected(2) },
                 icon = {
                     Icon(
-                        imageVector = Icons.Rounded.Adjust,
+                        imageVector = Icons.Rounded.FilterTiltShift,
                         contentDescription = levelLabel
                     )
                 },

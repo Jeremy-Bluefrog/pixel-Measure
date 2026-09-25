@@ -2040,6 +2040,43 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun saveLevelRecord(
+        pitchDeg: Float,
+        rollDeg: Float,
+        modeName: String,
+        toleranceDeg: Float,
+        customNotes: String? = null,
+        onSaved: ((MeasureRecord) -> Unit)? = null
+    ) {
+        viewModelScope.launch {
+            val timeStr = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
+            val dev = kotlin.math.sqrt((pitchDeg * pitchDeg + rollDeg * rollDeg).toDouble())
+            val isLevel = dev <= toleranceDeg
+            val statusStr = if (isLevel) "水平精確 (±${toleranceDeg}°)" else String.format(java.util.Locale.US, "偏差 %.1f°", dev)
+            val title = "水準儀測量 ($modeName · $statusStr) · $timeStr"
+            val notes = customNotes ?: "俯仰: ${String.format(java.util.Locale.US, "%+.1f°", pitchDeg)} | 橫滾: ${String.format(java.util.Locale.US, "%+.1f°", rollDeg)} | 容差: ±${toleranceDeg}°"
+            val record = MeasureRecord(
+                title = title,
+                value = dev,
+                unit = "°",
+                type = "LEVEL",
+                notes = notes,
+                imagePath = null
+            )
+            try {
+                withContext(Dispatchers.IO) {
+                    repository.insert(record)
+                }
+                _lastSavedRecord.value = record
+                _toastMessage.tryEmit("已儲存紀錄: $title")
+                onSaved?.invoke(record)
+                triggerHapticFeedback(HapticType.DOUBLE)
+            } catch (e: Exception) {
+                _toastMessage.tryEmit("儲存失敗: ${e.localizedMessage}")
+            }
+        }
+    }
+
     fun updateRecordNotes(record: MeasureRecord, newNotes: String) {
         viewModelScope.launch {
             try {

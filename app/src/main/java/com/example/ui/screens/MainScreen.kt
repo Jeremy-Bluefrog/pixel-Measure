@@ -97,7 +97,7 @@ fun MainScreen(viewModel: MeasureViewModel) {
             FloatingPillNavItem(
                 id = 2,
                 label = levelLabel,
-                icon = Icons.Rounded.Adjust,
+                icon = Icons.Rounded.FilterTiltShift,
                 testTag = "segmented_button_level"
             )
         )
@@ -250,6 +250,15 @@ fun MainScreen(viewModel: MeasureViewModel) {
                                             )
                                         }
 
+                                        // History button
+                                        IconButton(onClick = { showHistorySheet = !showHistorySheet }) {
+                                            Icon(
+                                                Icons.Rounded.History,
+                                                contentDescription = "歷史記錄",
+                                                tint = if (showHistorySheet) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+
                                         // Settings dialog button
                                         IconButton(onClick = { showSettingsDialog = true }) {
                                             Icon(
@@ -346,7 +355,7 @@ fun MainScreen(viewModel: MeasureViewModel) {
                                 2 -> {
                                     SpiritLevelComponent(
                                         viewModel = viewModel,
-                                        bottomPadding = if (isCompact) innerPadding.calculateBottomPadding() else 0.dp
+                                        bottomPadding = 0.dp
                                     )
                                 }
                             }
@@ -551,7 +560,8 @@ fun HistorySheetContent(
             "HEIGHT" to "高度",
             "VOLUME" to "體積",
             "ANGLE" to "角度",
-            "RULER" to "螢幕尺"
+            "RULER" to "螢幕尺",
+            "LEVEL" to "水平儀"
         )
     }
 
@@ -559,7 +569,7 @@ fun HistorySheetContent(
         records.filter { record ->
             val matchesCategory = when (selectedCategory) {
                 "ALL" -> true
-                "DISTANCE" -> record.type != "AREA" && record.type != "HEIGHT" && record.type != "VOLUME" && record.type != "ANGLE" && record.type != "RULER"
+                "DISTANCE" -> record.type != "AREA" && record.type != "HEIGHT" && record.type != "VOLUME" && record.type != "ANGLE" && record.type != "RULER" && record.type != "LEVEL"
                 else -> record.type == selectedCategory
             }
             val matchesSearch = searchQuery.isBlank() ||
@@ -727,6 +737,7 @@ fun HistorySheetContent(
                                             "CIRCLE" -> Icons.Rounded.Adjust
                                             "ANGLE" -> Icons.Rounded.Architecture
                                             "RULER" -> Icons.Rounded.Straighten
+                                            "LEVEL" -> Icons.Rounded.FilterTiltShift
                                             else -> Icons.Rounded.LinearScale
                                         },
                                         contentDescription = null,
@@ -754,6 +765,7 @@ fun HistorySheetContent(
                                                 "CIRCLE" -> "圓形直徑"
                                                 "ANGLE" -> "空間夾角"
                                                 "RULER" -> "螢幕尺"
+                                                "LEVEL" -> "水準儀"
                                                 else -> "距離"
                                             },
                                             fontSize = 11.sp,
@@ -778,6 +790,9 @@ fun HistorySheetContent(
                                         val cm = record.value * 100.0
                                         val mm = cm * 10.0
                                         String.format(java.util.Locale.US, "%.2f cm (%.1f mm)", cm, mm)
+                                    }
+                                    "LEVEL" -> {
+                                        String.format(java.util.Locale.US, "%.1f° (傾角偏差)", record.value)
                                     }
                                     "AREA" -> viewModel.formatArea(record.value, record.unit)
                                     "VOLUME" -> viewModel.formatVolume(record.value, record.unit)
@@ -973,6 +988,9 @@ fun RecordDetailDialog(
                                 val cm = record.value * 100.0
                                 val mm = cm * 10.0
                                 String.format(java.util.Locale.US, "%.2f cm (%.1f mm)", cm, mm)
+                            }
+                            "LEVEL" -> {
+                                String.format(java.util.Locale.US, "%.1f° (傾角偏差)", record.value)
                             }
                             "AREA" -> viewModel.formatArea(record.value, record.unit)
                             "VOLUME" -> viewModel.formatVolume(record.value, record.unit)
