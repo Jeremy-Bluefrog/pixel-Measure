@@ -33,6 +33,7 @@ fun TileDetailBottomSheet(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val localView = androidx.compose.ui.platform.LocalView.current
     val activePreset by viewModel.activeTilePreset.collectAsState()
 
     val widthCm = Math.round(if (tile.estimatedWidthCm > 0) tile.estimatedWidthCm else activePreset.widthCm).toInt()
@@ -249,11 +250,14 @@ fun TileDetailBottomSheet(
                     onClick = {
                         val title = "磁磚測量 (${df.format(widthCm)}×${df.format(heightCm)} cm)"
                         val notes = "寬度：${df.format(widthCm)} cm | 長度：${df.format(heightCm)} cm | 面積：${df.format(areaCm2)} cm² | 周長：${df.format(perimeterCm)} cm"
-                        viewModel.saveMeasurementRecord(
-                            customTitle = title,
-                            customNotes = notes
-                        )
-                        onDismiss()
+                        ShareUtility.captureViewSnapshot(view = localView) { path ->
+                            viewModel.saveMeasurementRecord(
+                                imagePath = path,
+                                customTitle = title,
+                                customNotes = notes
+                            )
+                            onDismiss()
+                        }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = colorPrimary, contentColor = colorOnPrimary),
                     shape = RoundedCornerShape(14.dp),

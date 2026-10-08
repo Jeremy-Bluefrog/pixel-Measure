@@ -208,56 +208,57 @@ fun GradientBlurBottomBar(
 }
 
 /**
- * Elegant Frosted Glass Camera Scrim:
- * Provides a modern translucent HUD backdrop (deep slate glass gradient)
- * that ensures 100% legibility for the status bar, buttons, and badges over any camera scene.
- * Uses progressive blur (AGSL Golden Spiral Poisson / RenderEffect) coupled with an optical
- * 8-stop smoothstep gradient and a subtle specular light boundary edge to achieve authentic
- * progressive blur glassmorphism without harsh banding.
+ * Dynamic Frosted Glass Camera Scrim:
+ * Automatically adapts to light and dark theme modes:
+ * - Light Mode: Soft progressive White gradient scrim ensuring optimal legibility.
+ * - Dark Mode: Deep progressive Black gradient scrim for dark ambiance.
  */
 @Composable
 fun GradientBlurScrim(
     modifier: Modifier = Modifier,
     isTop: Boolean,
-    baseColor: Color = Color(0xFF0F172A),
+    isDark: Boolean = androidx.compose.foundation.isSystemInDarkTheme(),
+    baseColor: Color = MaterialTheme.colorScheme.surface,
     blurRadius: Dp = 24.dp
 ) {
     // 8-stop non-linear progressive easing gradient (cubic-Hermite optical curve)
-    val progressiveStops = remember(isTop, baseColor) {
+    val progressiveStops = remember(isTop, baseColor, isDark) {
+        val maxAlpha = if (isDark) 0.85f else 0.78f
         if (isTop) {
             listOf(
-                0.00f to baseColor.copy(alpha = 0.85f),
-                0.15f to baseColor.copy(alpha = 0.76f),
-                0.35f to baseColor.copy(alpha = 0.58f),
-                0.55f to baseColor.copy(alpha = 0.36f),
-                0.72f to baseColor.copy(alpha = 0.18f),
-                0.86f to baseColor.copy(alpha = 0.06f),
-                0.95f to baseColor.copy(alpha = 0.015f),
+                0.00f to baseColor.copy(alpha = maxAlpha),
+                0.15f to baseColor.copy(alpha = maxAlpha * 0.90f),
+                0.35f to baseColor.copy(alpha = maxAlpha * 0.68f),
+                0.55f to baseColor.copy(alpha = maxAlpha * 0.42f),
+                0.72f to baseColor.copy(alpha = maxAlpha * 0.22f),
+                0.86f to baseColor.copy(alpha = maxAlpha * 0.08f),
+                0.95f to baseColor.copy(alpha = maxAlpha * 0.02f),
                 1.00f to Color.Transparent
             )
         } else {
             listOf(
                 0.00f to Color.Transparent,
-                0.05f to baseColor.copy(alpha = 0.015f),
-                0.14f to baseColor.copy(alpha = 0.06f),
-                0.28f to baseColor.copy(alpha = 0.18f),
-                0.45f to baseColor.copy(alpha = 0.36f),
-                0.65f to baseColor.copy(alpha = 0.58f),
-                0.85f to baseColor.copy(alpha = 0.76f),
-                1.00f to baseColor.copy(alpha = 0.88f)
+                0.05f to baseColor.copy(alpha = maxAlpha * 0.02f),
+                0.14f to baseColor.copy(alpha = maxAlpha * 0.08f),
+                0.28f to baseColor.copy(alpha = maxAlpha * 0.22f),
+                0.45f to baseColor.copy(alpha = maxAlpha * 0.42f),
+                0.65f to baseColor.copy(alpha = maxAlpha * 0.68f),
+                0.85f to baseColor.copy(alpha = maxAlpha * 0.90f),
+                1.00f to baseColor.copy(alpha = maxAlpha)
             )
         }
     }
 
-    val rimHighlight = remember(isTop) {
+    val rimHighlight = remember(isTop, isDark) {
+        val edgeColor = if (isDark) Color.White.copy(alpha = 0.12f) else Color.Black.copy(alpha = 0.04f)
         if (isTop) {
             Brush.verticalGradient(
                 0.88f to Color.Transparent,
-                1.00f to Color.White.copy(alpha = 0.12f)
+                1.00f to edgeColor
             )
         } else {
             Brush.verticalGradient(
-                0.00f to Color.White.copy(alpha = 0.12f),
+                0.00f to edgeColor,
                 0.12f to Color.Transparent
             )
         }

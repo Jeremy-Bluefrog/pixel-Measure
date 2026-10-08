@@ -65,13 +65,20 @@ class ArVideoRecorder(private val context: Context) {
         return null
     }
 
+    private var cameraBitmapSupplier: (() -> Bitmap?)? = null
+
     /**
      * Starts recording the AR measurement view.
      */
-    fun startRecording(view: View, onStarted: (() -> Unit)? = null) {
+    fun startRecording(
+        view: View,
+        cameraBitmapProvider: (() -> Bitmap?)? = null,
+        onStarted: (() -> Unit)? = null
+    ) {
         if (_isRecording.value) return
 
         targetView = view
+        cameraBitmapSupplier = cameraBitmapProvider
         _isRecording.value = true
         _recordingSeconds.value = 0
         recordingStartTime = System.currentTimeMillis()
@@ -111,6 +118,30 @@ class ArVideoRecorder(private val context: Context) {
             val scaledW = (rawW / 16) * 16
             val scaledH = (rawH / 16) * 16
             val bitmap = Bitmap.createBitmap(scaledW, scaledH, Bitmap.Config.ARGB_8888)
+
+            // Direct hardware camera frame sampling if available
+            val cameraBmp = try { cameraBitmapSupplier?.invoke() } catch (e: Throwable) { null }
+            if (cameraBmp != null && !cameraBmp.isRecycled) {
+                val canvas = Canvas(bitmap)
+                val srcRect = Rect(0, 0, cameraBmp.width, cameraBmp.height)
+                val dstRect = Rect(0, 0, scaledW, scaledH)
+                canvas.drawBitmap(cameraBmp, srcRect, dstRect, null)
+                val scaleX = scaledW.toFloat() / view.width.toFloat()
+                val scaleY = scaledH.toFloat() / view.height.toFloat()
+                canvas.scale(scaleX, scaleY)
+                try {
+                    view.draw(canvas)
+                } catch (e: Exception) {}
+                synchronized(capturedFrameBitmaps) {
+                    if (capturedFrameBitmaps.size < 600) {
+                        capturedFrameBitmaps.add(bitmap)
+                    }
+                }
+                if (firstThumbnailPath == null) {
+                    firstThumbnailPath = saveThumbnail(bitmap)
+                }
+                return
+            }
 
             val activity = findActivity(view.context)
             val window = activity?.window

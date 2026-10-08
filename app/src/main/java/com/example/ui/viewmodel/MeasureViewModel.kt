@@ -304,6 +304,13 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     private val _isTorchOn = MutableStateFlow(false)
     val isTorchOn: StateFlow<Boolean> = _isTorchOn.asStateFlow()
 
+    private val _isTakingPhoto = MutableStateFlow(false)
+    val isTakingPhoto: StateFlow<Boolean> = _isTakingPhoto.asStateFlow()
+
+    fun setIsTakingPhoto(taking: Boolean) {
+        _isTakingPhoto.value = taking
+    }
+
     private val _torchBrightness = MutableStateFlow(prefs.getFloat("torch_brightness", 1.0f))
     val torchBrightness: StateFlow<Float> = _torchBrightness.asStateFlow()
 
@@ -338,6 +345,81 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     // Dynamic color preference (Forced enabled for Material You Dynamic Color)
     private val _dynamicColorEnabled = MutableStateFlow(true)
     val dynamicColorEnabled: StateFlow<Boolean> = _dynamicColorEnabled.asStateFlow()
+
+    // Battery & Power Saver Automated Strategy State
+    private val _batteryLevel = MutableStateFlow(100)
+    val batteryLevel: StateFlow<Int> = _batteryLevel.asStateFlow()
+
+    private val _isPowerSaveMode = MutableStateFlow(false)
+    val isPowerSaveMode: StateFlow<Boolean> = _isPowerSaveMode.asStateFlow()
+
+    private val _autoBatteryProfileEnabled = MutableStateFlow(prefs.getBoolean("auto_battery_profile", true))
+    val autoBatteryProfileEnabled: StateFlow<Boolean> = _autoBatteryProfileEnabled.asStateFlow()
+
+    private val _currentAppliedProfile = MutableStateFlow(prefs.getString("current_applied_profile", "BALANCED") ?: "BALANCED")
+    val currentAppliedProfile: StateFlow<String> = _currentAppliedProfile.asStateFlow()
+
+    fun setAutoBatteryProfileEnabled(enabled: Boolean) {
+        _autoBatteryProfileEnabled.value = enabled
+        prefs.edit().putBoolean("auto_battery_profile", enabled).apply()
+        if (enabled) {
+            updateBatteryStatusAndEvaluate(showToast = true)
+        } else {
+            _toastMessage.tryEmit("已關閉電量與省電模式自動情境調優")
+        }
+        triggerHapticFeedback()
+    }
+
+    /**
+     * 根據當前電量與省電模式評估應採用的情境模式
+     * 
+     * 規則：
+     * 1. 當未開啟省電模式且電量高於59：使用專業工程極限精密 (PRO_PRECISION)
+     * 2. 當已開啟省電模式且電量高於59：使用日常智慧平衡 (BALANCED)
+     * 3. 當電量低於59且高於45，且未開啟省電模式：使用日常智慧平衡 (BALANCED)
+     * 4. 當電量低於45：使用省電長效極速 (POWER_SAVER)
+     */
+    fun evaluateBatteryProfile(level: Int, powerSave: Boolean): String {
+        return when {
+            level < 45 -> "POWER_SAVER"
+            !powerSave && level > 59 -> "PRO_PRECISION"
+            else -> "BALANCED"
+        }
+    }
+
+    fun updateBatteryStatusAndEvaluate(showToast: Boolean = false) {
+        try {
+            val context = getApplication<Application>().applicationContext
+            
+            // Read system battery status
+            val batteryFilter = android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED)
+            val batteryStatusIntent = context.registerReceiver(null, batteryFilter)
+            val level = batteryStatusIntent?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
+            val scale = batteryStatusIntent?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
+            val pct = if (level >= 0 && scale > 0) (level * 100 / scale.toFloat()).toInt() else 100
+            _batteryLevel.value = pct
+
+            // Read system power save mode status
+            val powerManager = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+            val powerSave = powerManager?.isPowerSaveMode ?: false
+            _isPowerSaveMode.value = powerSave
+
+            if (_autoBatteryProfileEnabled.value) {
+                val targetProfile = evaluateBatteryProfile(pct, powerSave)
+                if (targetProfile != _currentAppliedProfile.value || showToast) {
+                    applyMeasurementProfile(targetProfile, isAutoTriggered = true)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("MeasureViewModel", "Failed to update battery status", e)
+        }
+    }
+
+    private val batteryReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            updateBatteryStatusAndEvaluate(showToast = false)
+        }
+    }
 
     fun setDynamicColorEnabled(enabled: Boolean = true) {
         _dynamicColorEnabled.value = true
@@ -788,7 +870,10 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     /**
      * 一鍵套用特定情境模式 (Pro Presets)
      */
-    fun applyMeasurementProfile(profileKey: String) {
+    fun applyMeasurementProfile(profileKey: String, isAutoTriggered: Boolean = false) {
+        _currentAppliedProfile.value = profileKey
+        prefs.edit().putString("current_applied_profile", profileKey).apply()
+
         when (profileKey) {
             "PRO_PRECISION" -> {
                 setSelectedUnit("mm")
@@ -802,7 +887,8 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 setRawDepthConfidenceEnabled(true)
                 setRawDepthConfidenceThreshold(55)
                 setShowPointCloud(true)
-                _toastMessage.tryEmit("已套用「專業工程極限精密」情境模式")
+                val prefix = if (isAutoTriggered) "🔋 智能電量調優：" else ""
+                _toastMessage.tryEmit("${prefix}已套用「專業工程極限精密」情境模式")
             }
             "POWER_SAVER" -> {
                 setSelectedUnit("cm")
@@ -815,7 +901,8 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 setGridOverlayStyle("OFF")
                 setRawDepthConfidenceEnabled(false)
                 setShowPointCloud(false)
-                _toastMessage.tryEmit("已套用「省電長效極速」情境模式")
+                val prefix = if (isAutoTriggered) "🔋 智能電量調優：" else ""
+                _toastMessage.tryEmit("${prefix}已套用「省電長效極速」情境模式")
             }
             else -> { // "BALANCED"
                 setSelectedUnit("cm")
@@ -830,7 +917,8 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 setRawDepthConfidenceEnabled(true)
                 setRawDepthConfidenceThreshold(45)
                 setShowPointCloud(true)
-                _toastMessage.tryEmit("已套用「日常智慧平衡」情境模式")
+                val prefix = if (isAutoTriggered) "🔋 智能電量調優：" else ""
+                _toastMessage.tryEmit("${prefix}已套用「日常智慧平衡」情境模式")
             }
         }
         triggerHapticFeedback()
@@ -1176,6 +1264,19 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         modernArEngine.isRawDepthConfidenceFilterEnabled = rawDepthConfidenceEnabled.value
         modernArEngine.rawDepthConfidenceThreshold = rawDepthConfidenceThreshold.value
         sensorCorrectionEngine.startListening()
+
+        try {
+            val filter = android.content.IntentFilter().apply {
+                addAction(android.content.Intent.ACTION_BATTERY_CHANGED)
+                addAction(android.os.PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
+                addAction(android.content.Intent.ACTION_POWER_CONNECTED)
+                addAction(android.content.Intent.ACTION_POWER_DISCONNECTED)
+            }
+            app.registerReceiver(batteryReceiver, filter)
+        } catch (e: Exception) {
+            Log.e("MeasureViewModel", "Failed to register batteryReceiver", e)
+        }
+        updateBatteryStatusAndEvaluate(showToast = false)
     }
 
     // Ruler calibration & physical screen scale
@@ -1827,89 +1928,83 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // Formatting utilities (整數顯示，無小數點)
+    // Formatting utilities with precise and adaptive decimal places
     fun formatLength(meters: Double, unit: String = _selectedUnit.value): String {
-        val df = DecimalFormat("#,##0")
         return when (unit.lowercase().trim()) {
             "m" -> {
-                val m = Math.round(meters)
-                val displayM = if (meters > 0.001 && m == 0L) 1L else m
-                "${df.format(displayM)} m"
+                String.format(Locale.US, "%.2f m", meters)
             }
             "in" -> {
-                val inches = Math.round(meters * 39.3701)
-                val displayIn = if (meters > 0.001 && inches == 0L) 1L else inches
-                "${df.format(displayIn)} in"
+                val inches = meters * 39.3701
+                if (inches >= 100.0) String.format(Locale.US, "%.1f in", inches) else String.format(Locale.US, "%.2f in", inches)
             }
             "ft" -> {
-                val ft = Math.round(meters * 3.28084)
-                val displayFt = if (meters > 0.001 && ft == 0L) 1L else ft
-                "${df.format(displayFt)} ft"
+                val ft = meters * 3.28084
+                String.format(Locale.US, "%.2f ft", ft)
             }
             "yd" -> {
-                val yd = Math.round(meters * 1.09361)
-                val displayYd = if (meters > 0.001 && yd == 0L) 1L else yd
-                "${df.format(displayYd)} yd"
+                val yd = meters * 1.09361
+                String.format(Locale.US, "%.2f yd", yd)
+            }
+            "mm" -> {
+                val mm = meters * 1000.0
+                String.format(Locale.US, "%.0f mm", mm)
             }
             else -> {
                 val cm = meters * 100.0
-                val roundedCm = Math.round(cm)
-                val displayCm = if (meters > 0.001 && roundedCm == 0L) 1L else roundedCm
-                "${df.format(displayCm)} cm"
+                if (abs(cm - round(cm)) < 0.05) {
+                    String.format(Locale.US, "%.0f cm", cm)
+                } else {
+                    String.format(Locale.US, "%.1f cm", cm)
+                }
             }
         }
     }
 
     fun formatArea(sqMeters: Double, unit: String = _selectedUnit.value): String {
-        val df = DecimalFormat("#,##0")
         return when (unit.lowercase().trim()) {
             "m" -> {
-                val m2 = Math.round(sqMeters)
-                val displayM2 = if (sqMeters > 0.0001 && m2 == 0L) 1L else m2
-                "${df.format(displayM2)} m²"
+                String.format(Locale.US, "%.2f m²", sqMeters)
             }
             "in" -> {
-                val in2 = Math.round(sqMeters * 1550.0)
-                val displayIn2 = if (sqMeters > 0.0001 && in2 == 0L) 1L else in2
-                "${df.format(displayIn2)} in²"
+                val in2 = sqMeters * 1550.0
+                String.format(Locale.US, "%.1f in²", in2)
             }
             "ft" -> {
-                val ft2 = Math.round(sqMeters * 10.7639)
-                val displayFt2 = if (sqMeters > 0.0001 && ft2 == 0L) 1L else ft2
-                "${df.format(displayFt2)} sq ft"
+                val ft2 = sqMeters * 10.7639
+                String.format(Locale.US, "%.2f sq ft", ft2)
             }
             "yd" -> {
-                val yd2 = Math.round(sqMeters * 1.19599)
-                val displayYd2 = if (sqMeters > 0.0001 && yd2 == 0L) 1L else yd2
-                "${df.format(displayYd2)} sq yd"
+                val yd2 = sqMeters * 1.19599
+                String.format(Locale.US, "%.2f sq yd", yd2)
             }
             else -> {
                 val sqCm = sqMeters * 10000.0
-                val roundedSqCm = Math.round(sqCm)
-                val displaySqCm = if (sqMeters > 0.0001 && roundedSqCm == 0L) 1L else roundedSqCm
-                "${df.format(displaySqCm)} cm²"
+                if (sqCm >= 100.0) {
+                    String.format(Locale.US, "%.0f cm²", sqCm)
+                } else {
+                    String.format(Locale.US, "%.1f cm²", sqCm)
+                }
             }
         }
     }
 
     fun formatVolume(cuMeters: Double, unit: String = _selectedUnit.value): String {
-        val df = DecimalFormat("#,##0")
         return when (unit.lowercase().trim()) {
             "m" -> {
-                val m3 = Math.round(cuMeters)
-                val displayM3 = if (cuMeters > 0.0001 && m3 == 0L) 1L else m3
-                "${df.format(displayM3)} m³"
+                String.format(Locale.US, "%.3f m³", cuMeters)
             }
             "ft" -> {
-                val ft3 = Math.round(cuMeters * 35.3147)
-                val displayFt3 = if (cuMeters > 0.0001 && ft3 == 0L) 1L else ft3
-                "${df.format(displayFt3)} cu ft"
+                val ft3 = cuMeters * 35.3147
+                String.format(Locale.US, "%.2f cu ft", ft3)
             }
             else -> {
                 val liters = cuMeters * 1000.0
-                val roundedL = Math.round(liters)
-                val displayL = if (cuMeters > 0.0001 && roundedL == 0L) 1L else roundedL
-                "${df.format(displayL)} L"
+                if (liters >= 10.0) {
+                    String.format(Locale.US, "%.1f L", liters)
+                } else {
+                    String.format(Locale.US, "%.2f L", liters)
+                }
             }
         }
     }
@@ -2003,6 +2098,27 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                     _toastMessage.tryEmit("儲存失敗: ${e.localizedMessage}")
                 }
             }
+        }
+    }
+
+    fun getPrimaryMeasurementDisplayString(): String {
+        val subMode = _cameraSubMode.value
+        val unit = _selectedUnit.value
+        val effectiveType = if (subMode == 0) _autoDetectedType.value else when (subMode) {
+            1 -> "AREA"
+            2 -> "HEIGHT"
+            3 -> "VOLUME"
+            4 -> "CIRCLE"
+            5 -> "ANGLE"
+            else -> "DISTANCE"
+        }
+        return when (effectiveType) {
+            "AREA" -> formatArea(calculatePolygonArea(), unit)
+            "HEIGHT" -> formatLength(calculateVerticalHeight(), unit)
+            "VOLUME" -> formatVolume(calculateBoundingBox().volume, unit)
+            "CIRCLE" -> "直徑 ${formatLength(calculateCircle()?.diameter ?: 0.0, unit)}"
+            "ANGLE" -> "${Math.round(calculateAngle())}°"
+            else -> formatLength(calculateTotalDistance(), unit)
         }
     }
 
@@ -2156,6 +2272,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         syncWithSystemLocale()
         modernArEngine.resume()
         sensorCorrectionEngine.startListening()
+        updateBatteryStatusAndEvaluate(showToast = false)
     }
 
     fun onPause() {
@@ -2169,6 +2286,9 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         super.onCleared()
+        try {
+            getApplication<Application>().unregisterReceiver(batteryReceiver)
+        } catch (_: Exception) {}
         turnOffTorch(getApplication())
         modernArEngine.destroy()
         try {

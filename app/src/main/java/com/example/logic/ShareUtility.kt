@@ -16,6 +16,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import android.view.PixelCopy
+import android.view.TextureView
 import android.view.View
 import android.view.Window
 import androidx.core.content.FileProvider
@@ -40,6 +41,133 @@ object ShareUtility {
     }
 
     /**
+     * Captures a composite AR measurement photo combining:
+     * 1. Real Hardware Camera frame (from TextureView bitmap or GLSurfaceView render buffer).
+     * 2. AR measurement overlay graphics (lines, points, text labels, badges, angles).
+     * 3. Professional watermark stamp (AR measurement branding, current measurement value, date/time).
+     *
+     * Cropped to target Aspect Ratio (4:3, 16:9, 1:1, or FULL) and saved as a high-quality JPEG.
+     */
+    fun captureArCompositeSnapshot(
+        view: View,
+        cameraBitmap: Bitmap?,
+        textureView: TextureView? = null,
+        glView: View? = null,
+        aspectRatio: String = "4_3",
+        useDisplayP3: Boolean = true,
+        primaryMeasurement: String? = null,
+        onComplete: (String?) -> Unit
+    ) {
+        if (view.width <= 0 || view.height <= 0) {
+            onComplete(null)
+            return
+        }
+
+        val width = view.width
+        val height = view.height
+        val compositeBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(compositeBitmap)
+
+        // 1. Draw live hardware camera preview
+        if (cameraBitmap != null && !cameraBitmap.isRecycled) {
+            val srcRect = Rect(0, 0, cameraBitmap.width, cameraBitmap.height)
+            val dstRect = Rect(0, 0, width, height)
+            val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+            canvas.drawBitmap(cameraBitmap, srcRect, dstRect, paint)
+        } else {
+            // Elegant dark space background if hardware camera stream is unavailable
+            val darkGrad = LinearGradient(
+                0f, 0f, 0f, height.toFloat(),
+                intArrayOf(
+                    Color.rgb(15, 23, 42),
+                    Color.rgb(30, 41, 59),
+                    Color.rgb(15, 23, 42)
+                ),
+                null,
+                Shader.TileMode.CLAMP
+            )
+            val bgPaint = Paint().apply { shader = darkGrad }
+            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgPaint)
+        }
+
+        // 2. Hide hardware preview views (TextureView / GLSurfaceView) so their opaque surfaces do not wipe out cameraBitmap
+        val prevTvVisibility = textureView?.visibility
+        val prevGlVisibility = glView?.visibility
+
+        textureView?.visibility = View.INVISIBLE
+        glView?.visibility = View.INVISIBLE
+
+        // Draw view hierarchy (AR overlay lines, distance tags, badges) on top
+        try {
+            view.draw(canvas)
+        } catch (e: Exception) {
+            android.util.Log.e("ShareUtility", "Error drawing overlay on composite snapshot", e)
+        } finally {
+            if (prevTvVisibility != null) textureView.visibility = prevTvVisibility
+            if (prevGlVisibility != null) glView.visibility = prevGlVisibility
+        }
+
+        // 3. Draw Watermark Tag (Bottom Left)
+        try {
+            drawArMeasurementWatermark(canvas, width, height, primaryMeasurement)
+        } catch (e: Exception) {
+            android.util.Log.w("ShareUtility", "Watermark drawing error", e)
+        }
+
+        // 4. Crop to Aspect Ratio and save
+        val croppedBitmap = cropBitmapToAspectRatio(compositeBitmap, aspectRatio)
+        val savedPath = saveBitmapToInternalStorage(view.context, croppedBitmap, useDisplayP3)
+        onComplete(savedPath)
+    }
+
+    private fun drawArMeasurementWatermark(
+        canvas: Canvas,
+        width: Int,
+        height: Int,
+        primaryMeasurement: String?
+    ) {
+        val padX = 36f
+        val padY = height - 44f
+
+        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.argb(175, 15, 23, 42)
+            style = Paint.Style.FILL
+        }
+        val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.argb(80, 255, 255, 255)
+            style = Paint.Style.STROKE
+            strokeWidth = 2f
+        }
+
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.WHITE
+            textSize = 28f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+
+        val subTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.argb(210, 226, 232, 240)
+            textSize = 20f
+        }
+
+        val dateFormat = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault())
+        val timeStr = dateFormat.format(Date())
+        val badgeTitle = "📐 AR 實境精準測量"
+        val measurementStr = if (!primaryMeasurement.isNullOrBlank() && primaryMeasurement != "0.0 cm" && primaryMeasurement != "0.00 m") {
+            " · $primaryMeasurement"
+        } else ""
+
+        val displayText = "$badgeTitle$measurementStr"
+        val textWidth = max(textPaint.measureText(displayText), subTextPaint.measureText(timeStr))
+        val boxRect = RectF(padX, padY - 60f, padX + textWidth + 36f, padY + 16f)
+
+        canvas.drawRoundRect(boxRect, 16f, 16f, bgPaint)
+        canvas.drawRoundRect(boxRect, 16f, 16f, borderPaint)
+        canvas.drawText(displayText, padX + 18f, padY - 26f, textPaint)
+        canvas.drawText(timeStr, padX + 18f, padY + 2f, subTextPaint)
+    }
+
+    /**
      * Captures a screenshot of the specified view and saves it to local app internal storage.
      * Supports customizable Aspect Ratio cropping (4:3, 16:9, 1:1, FULL) and Display P3 wide color gamut export.
      */
@@ -49,63 +177,14 @@ object ShareUtility {
         useDisplayP3: Boolean = true,
         onComplete: (String?) -> Unit
     ) {
-        val activity = findActivity(view.context)
-        val window = activity?.window
-
-        if (view.width <= 0 || view.height <= 0) {
-            onComplete(null)
-            return
-        }
-
-        val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
-
-        val processCapturedBitmap: (Bitmap) -> Unit = { rawBitmap ->
-            val croppedBitmap = cropBitmapToAspectRatio(rawBitmap, aspectRatio)
-            val savedPath = saveBitmapToInternalStorage(view.context, croppedBitmap, useDisplayP3)
-            onComplete(savedPath)
-        }
-
-        if (window != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val locationOfViewInWindow = IntArray(2)
-            view.getLocationInWindow(locationOfViewInWindow)
-
-            try {
-                PixelCopy.request(
-                    window,
-                    Rect(
-                        locationOfViewInWindow[0],
-                        locationOfViewInWindow[1],
-                        locationOfViewInWindow[0] + view.width,
-                        locationOfViewInWindow[1] + view.height
-                    ),
-                    bitmap,
-                    { copyResult ->
-                        if (copyResult == PixelCopy.SUCCESS) {
-                            processCapturedBitmap(bitmap)
-                        } else {
-                            // Fallback to view drawing
-                            val canvas = Canvas(bitmap)
-                            view.draw(canvas)
-                            processCapturedBitmap(bitmap)
-                        }
-                    },
-                    Handler(Looper.getMainLooper())
-                )
-                return
-            } catch (e: Exception) {
-                // Fallback below
-            }
-        }
-
-        // Standard View Draw fallback
-        try {
-            val canvas = Canvas(bitmap)
-            view.draw(canvas)
-            processCapturedBitmap(bitmap)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            onComplete(null)
-        }
+        captureArCompositeSnapshot(
+            view = view,
+            cameraBitmap = null,
+            aspectRatio = aspectRatio,
+            useDisplayP3 = useDisplayP3,
+            primaryMeasurement = null,
+            onComplete = onComplete
+        )
     }
 
     private fun cropBitmapToAspectRatio(src: Bitmap, aspectRatio: String): Bitmap {

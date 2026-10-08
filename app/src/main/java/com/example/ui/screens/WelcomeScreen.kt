@@ -137,7 +137,7 @@ fun WelcomeScreen(
                             // Clean badge
                             Surface(
                                 shape = RoundedCornerShape(10.dp),
-                                color = Color(0xCC0F172A),
+                                color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.85f),
                                 modifier = Modifier
                                     .align(Alignment.BottomStart)
                                     .padding(14.dp)
@@ -150,12 +150,12 @@ fun WelcomeScreen(
                                     Icon(
                                         imageVector = Icons.Rounded.Verified,
                                         contentDescription = null,
-                                        tint = Color(0xFF00E5FF),
+                                        tint = colorPrimary,
                                         modifier = Modifier.size(14.dp)
                                     )
                                     Text(
                                         text = "高精度 AR 空間運算",
-                                        color = Color.White,
+                                        color = colorOnSurface,
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Medium
                                     )
@@ -207,7 +207,7 @@ fun WelcomeScreen(
 
                         CleanFeatureRow(
                             icon = Icons.Rounded.ViewModule,
-                            iconColor = Color(0xFFF59E0B),
+                            iconColor = MaterialTheme.colorScheme.tertiary,
                             title = "智慧地磚與磁磚網格",
                             description = "自動辨識磁磚紋理，計算單塊規格與整區鋪設數量。"
                         )

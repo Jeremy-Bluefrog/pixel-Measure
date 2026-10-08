@@ -1,10 +1,15 @@
 package com.example.logic.ar
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.opengl.Matrix
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.view.PixelCopy
 import com.example.ui.viewmodel.MeasureViewModel
 import com.google.ar.core.Session
 import java.nio.ByteBuffer
@@ -89,6 +94,55 @@ class ModernArGlView(
     private val viewMat = FloatArray(16)
     private val projMat = FloatArray(16)
     private val isFrameUpdatePending = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile
+    private var pendingSnapshotCallback: ((Bitmap?) -> Unit)? = null
+
+    fun captureBitmap(onCaptured: (Bitmap?) -> Unit) {
+        if (width <= 0 || height <= 0) {
+            onCaptured(null)
+            return
+        }
+
+        val hasCompleted = java.util.concurrent.atomic.AtomicBoolean(false)
+        val safeCallback: (Bitmap?) -> Unit = { bmp ->
+            if (hasCompleted.compareAndSet(false, true)) {
+                post { onCaptured(bmp) }
+            }
+        }
+
+        // Safety fallback timeout: if rendering or PixelCopy doesn't respond in 350ms, return null safely
+        postDelayed({
+            safeCallback(null)
+        }, 350)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            try {
+                PixelCopy.request(
+                    this,
+                    bmp,
+                    { result ->
+                        if (result == PixelCopy.SUCCESS) {
+                            safeCallback(bmp)
+                        } else {
+                            captureWithGlReadPixels(safeCallback)
+                        }
+                    },
+                    Handler(Looper.getMainLooper())
+                )
+                return
+            } catch (e: Throwable) {
+                captureWithGlReadPixels(safeCallback)
+                return
+            }
+        }
+        captureWithGlReadPixels(safeCallback)
+    }
+
+    private fun captureWithGlReadPixels(onCaptured: (Bitmap?) -> Unit) {
+        pendingSnapshotCallback = onCaptured
+        requestRender()
+    }
 
     init {
         setEGLContextClientVersion(2)
@@ -355,6 +409,29 @@ class ModernArGlView(
                 }
             }
 
+            // Capture GL Frame Snapshot if requested
+            val snapshotCb = pendingSnapshotCallback
+            if (snapshotCb != null) {
+                pendingSnapshotCallback = null
+                try {
+                    val w = width
+                    val h = height
+                    if (w > 0 && h > 0) {
+                        val byteBuf = ByteBuffer.allocateDirect(w * h * 4).order(ByteOrder.nativeOrder())
+                        GLES20.glReadPixels(0, 0, w, h, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, byteBuf)
+                        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                        bmp.copyPixelsFromBuffer(byteBuf)
+                        val matrix = android.graphics.Matrix().apply { postScale(1f, -1f, w / 2f, h / 2f) }
+                        val flippedBmp = Bitmap.createBitmap(bmp, 0, 0, w, h, matrix, true)
+                        post { snapshotCb(flippedBmp) }
+                    } else {
+                        post { snapshotCb(null) }
+                    }
+                } catch (e: Throwable) {
+                    post { snapshotCb(null) }
+                }
+            }
+
         } catch (e: com.google.ar.core.exceptions.SessionPausedException) {
             // Expected when activity/view pauses
             return
@@ -364,6 +441,12 @@ class ModernArGlView(
         } catch (t: Throwable) {
             // Safeguard against any transient rendering, buffer, or native exceptions
             return
+        } finally {
+            val pendingCb = pendingSnapshotCallback
+            if (pendingCb != null) {
+                pendingSnapshotCallback = null
+                post { pendingCb(null) }
+            }
         }
     }
 }

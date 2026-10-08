@@ -75,6 +75,7 @@ fun MainScreen(viewModel: MeasureViewModel) {
     )
 
     val colorPrimary = MaterialTheme.colorScheme.primary
+    val isTakingPhoto by viewModel.isTakingPhoto.collectAsState()
 
     val cameraLabel = viewModel.getString("nav_camera").ifEmpty { "相機 AR" }
     val rulerLabel = viewModel.getString("nav_ruler").ifEmpty { "螢幕尺" }
@@ -137,6 +138,7 @@ fun MainScreen(viewModel: MeasureViewModel) {
                     .fillMaxHeight()
             ) {
                 Scaffold(
+                    containerColor = if (currentMode == 0) Color.Transparent else MaterialTheme.colorScheme.background,
                     topBar = {
                         if (currentMode == 1) {
                             GradientBlurTopBar(
@@ -276,8 +278,8 @@ fun MainScreen(viewModel: MeasureViewModel) {
                         }
                     },
                     bottomBar = {
-                        // Only show bottom navigation bar on compact screens (phones)
-                        if (isCompact) {
+                        // Only show bottom navigation bar on compact screens (phones) and when not capturing a photo snapshot
+                        if (isCompact && !isTakingPhoto) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -349,7 +351,7 @@ fun MainScreen(viewModel: MeasureViewModel) {
                                     RulerComponent(
                                         viewModel = viewModel,
                                         onShowHistoryClick = { showHistorySheet = !showHistorySheet },
-                                        bottomPadding = if (isCompact) innerPadding.calculateBottomPadding() else 0.dp
+                                        bottomPadding = 0.dp
                                     )
                                 }
                                 2 -> {
@@ -725,7 +727,7 @@ fun HistorySheetContent(
                                         contentDescription = "測量截圖",
                                         modifier = Modifier
                                             .fillMaxSize()
-                                            .background(Color.Black, RoundedCornerShape(12.dp)),
+                                            .background(MaterialTheme.colorScheme.surfaceContainerHighest, RoundedCornerShape(12.dp)),
                                         contentScale = androidx.compose.ui.layout.ContentScale.Crop
                                     )
                                 } else {

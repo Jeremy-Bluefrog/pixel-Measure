@@ -14,6 +14,9 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -475,7 +478,7 @@ fun SpiritLevelComponent(
             )
         }
 
-        // 3. Main Instrument Visualizer Display Area (Canvas only, isolated from recompositions)
+        // 3. Main Instrument Visualizer Display Area (Fluid Compose Animation Canvas)
         Box(
             modifier = Modifier
                 .weight(1f)
@@ -486,8 +489,8 @@ fun SpiritLevelComponent(
             when (levelType) {
                 LevelType.SURFACE_2D -> {
                     Material3BullseyeLevelView(
-                        pitchProvider = { renderState.drawPitch },
-                        rollProvider = { renderState.drawRoll },
+                        pitch = renderState.drawPitch,
+                        roll = renderState.drawRoll,
                         isLevel = renderState.isLevel,
                         accentColor = levelAccentColor,
                         toleranceDeg = tolerance.thresholdDeg,
@@ -496,7 +499,7 @@ fun SpiritLevelComponent(
                 }
                 LevelType.HORIZONTAL_1D -> {
                     Material3TubularHorizontalLevelView(
-                        angleProvider = { renderState.drawRoll },
+                        angle = renderState.drawRoll,
                         isLevel = renderState.isLevel,
                         accentColor = levelAccentColor,
                         toleranceDeg = tolerance.thresholdDeg,
@@ -505,7 +508,7 @@ fun SpiritLevelComponent(
                 }
                 LevelType.VERTICAL_1D -> {
                     Material3TubularVerticalLevelView(
-                        angleProvider = { 90f - abs(renderState.drawPitch) },
+                        angle = 90f - abs(renderState.drawPitch),
                         isLevel = renderState.isLevel,
                         accentColor = levelAccentColor,
                         toleranceDeg = tolerance.thresholdDeg,
@@ -889,25 +892,70 @@ private fun formatAngleValue(deviationDeg: Float, unit: AngleUnit): String {
 
 /**
  * Material 3 雙軸圓盤水準儀繪製畫布 (Bullseye / Surface Level)
- * Pure Hardware-Accelerated Draw Canvas: 0 recompositions, 60/120 FPS fluid physics.
+ * Compose 物理狀態彈簧動畫：流體阻尼、極致絲滑移動與水平吸附光暈
  */
 @Composable
 private fun Material3BullseyeLevelView(
-    pitchProvider: () -> Float,
-    rollProvider: () -> Float,
+    pitch: Float,
+    roll: Float,
     isLevel: Boolean,
     accentColor: Color,
     toleranceDeg: Float,
     isDark: Boolean
 ) {
+    // 物理流體阻尼彈簧動畫 (Fluid Liquid Spring Damping Animation)
+    val animatedPitch by animateFloatAsState(
+        targetValue = pitch,
+        animationSpec = spring(
+            dampingRatio = 0.78f, // 模擬礦物油流體阻尼，平滑且具備自然流暢慣性
+            stiffness = 380f      // 高反應性且無階梯跳動
+        ),
+        label = "animatedBullseyePitch"
+    )
+
+    val animatedRoll by animateFloatAsState(
+        targetValue = roll,
+        animationSpec = spring(
+            dampingRatio = 0.78f,
+            stiffness = 380f
+        ),
+        label = "animatedBullseyeRoll"
+    )
+
+    val bubblePulseScale by animateFloatAsState(
+        targetValue = if (isLevel) 1.08f else 1.0f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow
+        ),
+        label = "bubblePulseScale"
+    )
+
+    val targetGlowAlpha by animateFloatAsState(
+        targetValue = if (isLevel) 0.95f else 0.35f,
+        animationSpec = tween(durationMillis = 200),
+        label = "targetGlowAlpha"
+    )
+
+    val guideAlpha by animateFloatAsState(
+        targetValue = if (!isLevel) 0.85f else 0.0f,
+        animationSpec = tween(durationMillis = 220),
+        label = "guideAlpha"
+    )
+
+    val surfaceContainer = MaterialTheme.colorScheme.surfaceContainer
+    val surfaceContainerHigh = MaterialTheme.colorScheme.surfaceContainerHigh
+    val surfaceContainerLowest = MaterialTheme.colorScheme.surfaceContainerLowest
+    val outlineVariant = MaterialTheme.colorScheme.outlineVariant
+    val onSurface = MaterialTheme.colorScheme.onSurface
+    val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
+
     Canvas(
         modifier = Modifier
             .fillMaxSize()
             .aspectRatio(1f, matchHeightConstraintsFirst = true)
             .testTag("bullseye_level_canvas")
     ) {
-        val pitch = pitchProvider()
-        val roll = rollProvider()
         val center = Offset(size.width / 2f, size.height / 2f)
         val outerRadius = minOf(size.width, size.height) * 0.44f
 
@@ -915,28 +963,16 @@ private fun Material3BullseyeLevelView(
         val toleranceRatio = (toleranceDeg / 10f).coerceIn(0.12f, 0.40f)
         val innerTargetRadius = outerRadius * toleranceRatio
 
-        // 1. Dial Metallic Bezel / Ring Base (Theme-aware)
-        val dialBaseGradient = if (isDark) {
-            Brush.radialGradient(
-                colors = listOf(
-                    Color(0xFF1E293B),
-                    Color(0xFF0F172A),
-                    Color(0xFF060911)
-                ),
-                center = center,
-                radius = outerRadius
-            )
-        } else {
-            Brush.radialGradient(
-                colors = listOf(
-                    Color(0xFFF8FAFC),
-                    Color(0xFFE2E8F0),
-                    Color(0xFFCBD5E1)
-                ),
-                center = center,
-                radius = outerRadius
-            )
-        }
+        // 1. Dial Metallic Bezel / Ring Base (Dynamic Theme)
+        val dialBaseGradient = Brush.radialGradient(
+            colors = listOf(
+                surfaceContainerHigh,
+                surfaceContainer,
+                surfaceContainerLowest
+            ),
+            center = center,
+            radius = outerRadius
+        )
 
         drawCircle(
             brush = dialBaseGradient,
@@ -945,7 +981,7 @@ private fun Material3BullseyeLevelView(
         )
 
         // Outer Metallic Rim Stroke
-        val rimColor = if (isDark) Color.White.copy(alpha = 0.22f) else Color(0xFF64748B).copy(alpha = 0.35f)
+        val rimColor = outlineVariant.copy(alpha = if (isDark) 0.5f else 0.7f)
         drawCircle(
             color = rimColor,
             center = center,
@@ -962,7 +998,7 @@ private fun Material3BullseyeLevelView(
         )
 
         // 2. Concentric Angle Degree Rings (10°, 5°, 2°, and Target Zone)
-        val ringColor = if (isDark) Color.White.copy(alpha = 0.14f) else Color(0xFF475569).copy(alpha = 0.22f)
+        val ringColor = outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f)
         val ringRatios = floatArrayOf(0.85f, 0.58f, 0.32f)
         for (ratio in ringRatios) {
             drawCircle(
@@ -975,14 +1011,14 @@ private fun Material3BullseyeLevelView(
 
         // Active Tolerance Target Ring
         drawCircle(
-            color = if (isLevel) accentColor.copy(alpha = 0.9f) else accentColor.copy(alpha = 0.5f),
+            color = accentColor.copy(alpha = targetGlowAlpha),
             center = center,
             radius = innerTargetRadius,
             style = Stroke(width = if (isLevel) 2.5.dp.toPx() else 1.5.dp.toPx())
         )
 
         // 3. Precision Crosshair coordinate lines
-        val crosshairColor = if (isDark) Color.White.copy(alpha = 0.20f) else Color(0xFF334155).copy(alpha = 0.25f)
+        val crosshairColor = outlineVariant.copy(alpha = if (isDark) 0.45f else 0.65f)
         drawLine(
             color = crosshairColor,
             start = Offset(center.x - outerRadius, center.y),
@@ -996,7 +1032,7 @@ private fun Material3BullseyeLevelView(
             strokeWidth = 1.2.dp.toPx()
         )
 
-        // Radial degree tick marks every 15 degrees (precalculated PI / 180 = 0.0174532925f)
+        // Radial degree tick marks every 15 degrees
         for (deg in 0 until 360 step 15) {
             val rad = deg * 0.0174532925f
             val cosV = cos(rad)
@@ -1005,9 +1041,9 @@ private fun Material3BullseyeLevelView(
             val tickLen = if (isMajor) 14.dp.toPx() else 7.dp.toPx()
             val rStart = outerRadius - tickLen
             val tickColor = if (isMajor) {
-                if (isDark) Color.White.copy(alpha = 0.55f) else Color(0xFF1E293B).copy(alpha = 0.6f)
+                onSurface.copy(alpha = if (isDark) 0.65f else 0.75f)
             } else {
-                if (isDark) Color.White.copy(alpha = 0.2f) else Color(0xFF64748B).copy(alpha = 0.3f)
+                onSurfaceVariant.copy(alpha = if (isDark) 0.35f else 0.45f)
             }
             drawLine(
                 color = tickColor,
@@ -1022,8 +1058,8 @@ private fun Material3BullseyeLevelView(
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        accentColor.copy(alpha = 0.35f),
-                        accentColor.copy(alpha = 0.12f),
+                        accentColor.copy(alpha = 0.35f * targetGlowAlpha),
+                        accentColor.copy(alpha = 0.12f * targetGlowAlpha),
                         Color.Transparent
                     ),
                     center = center,
@@ -1033,25 +1069,24 @@ private fun Material3BullseyeLevelView(
                 radius = innerTargetRadius * 1.4f
             )
             drawCircle(
-                color = accentColor.copy(alpha = 0.22f),
+                color = accentColor.copy(alpha = 0.22f * targetGlowAlpha),
                 center = center,
                 radius = innerTargetRadius
             )
         }
 
-        // 5. Dynamic Bubble Physics Simulation
-        // Bubble displacement scales with tilt angle: 10° corresponds to 75% of outer ring
+        // 5. Dynamic Bubble Physics Simulation with Animated States
         val maxAngle = 10f
-        val normX = (roll / maxAngle).coerceIn(-1.15f, 1.15f)
-        val normY = (pitch / maxAngle).coerceIn(-1.15f, 1.15f)
+        val normX = (animatedRoll / maxAngle).coerceIn(-1.15f, 1.15f)
+        val normY = (animatedPitch / maxAngle).coerceIn(-1.15f, 1.15f)
         val bubbleOffset = Offset(
             x = center.x + normX * (outerRadius * 0.75f),
             y = center.y + normY * (outerRadius * 0.75f)
         )
-        val bubbleRadius = innerTargetRadius * 0.76f
+        val bubbleRadius = innerTargetRadius * 0.76f * bubblePulseScale
 
-        // Real-time direction guide chevron when off-level
-        if (!isLevel) {
+        // Real-time direction guide chevron with smooth fade
+        if (guideAlpha > 0.05f) {
             val devX = center.x - bubbleOffset.x
             val devY = center.y - bubbleOffset.y
             val dist = sqrt(devX * devX + devY * devY)
@@ -1061,7 +1096,7 @@ private fun Material3BullseyeLevelView(
                 val arrowStart = Offset(center.x - dirX * (innerTargetRadius * 1.2f), center.y - dirY * (innerTargetRadius * 1.2f))
                 val arrowEnd = Offset(center.x - dirX * (innerTargetRadius * 0.7f), center.y - dirY * (innerTargetRadius * 0.7f))
                 drawLine(
-                    color = accentColor.copy(alpha = 0.65f),
+                    color = accentColor.copy(alpha = 0.65f * guideAlpha),
                     start = arrowStart,
                     end = arrowEnd,
                     strokeWidth = 2.5.dp.toPx(),
@@ -1119,22 +1154,47 @@ private fun Material3BullseyeLevelView(
 
 /**
  * Material 3 橫向管狀水準儀 (Horizontal Tubular Level)
+ * Compose 物理狀態彈簧動畫：流體水平移動
  */
 @Composable
 private fun Material3TubularHorizontalLevelView(
-    angleProvider: () -> Float,
+    angle: Float,
     isLevel: Boolean,
     accentColor: Color,
     toleranceDeg: Float,
     isDark: Boolean
 ) {
+    val animatedAngle by animateFloatAsState(
+        targetValue = angle,
+        animationSpec = spring(
+            dampingRatio = 0.78f,
+            stiffness = 380f
+        ),
+        label = "animatedHorizontalAngle"
+    )
+
+    val bubblePulseScale by animateFloatAsState(
+        targetValue = if (isLevel) 1.08f else 1.0f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow
+        ),
+        label = "tubularBubblePulseScale"
+    )
+
+    val surfaceContainer = MaterialTheme.colorScheme.surfaceContainer
+    val surfaceContainerHigh = MaterialTheme.colorScheme.surfaceContainerHigh
+    val surfaceContainerLowest = MaterialTheme.colorScheme.surfaceContainerLowest
+    val outlineVariant = MaterialTheme.colorScheme.outlineVariant
+    val onSurface = MaterialTheme.colorScheme.onSurface
+    val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
+
     Canvas(
         modifier = Modifier
             .fillMaxWidth()
             .height(130.dp)
             .testTag("tubular_horizontal_level_canvas")
     ) {
-        val angle = angleProvider()
         val tubeW = size.width * 0.92f
         val tubeH = 68.dp.toPx()
         val tubeLeft = (size.width - tubeW) / 2f
@@ -1142,27 +1202,15 @@ private fun Material3TubularHorizontalLevelView(
         val tubeRadius = tubeH / 2f
 
         // Tube vial glass background
-        val vialGradient = if (isDark) {
-            Brush.verticalGradient(
-                colors = listOf(
-                    Color(0xFF1E293B),
-                    Color(0xFF0F172A),
-                    Color(0xFF060911)
-                ),
-                startY = tubeTop,
-                endY = tubeTop + tubeH
-            )
-        } else {
-            Brush.verticalGradient(
-                colors = listOf(
-                    Color(0xFFF1F5F9),
-                    Color(0xFFE2E8F0),
-                    Color(0xFFCBD5E1)
-                ),
-                startY = tubeTop,
-                endY = tubeTop + tubeH
-            )
-        }
+        val vialGradient = Brush.verticalGradient(
+            colors = listOf(
+                surfaceContainerHigh,
+                surfaceContainer,
+                surfaceContainerLowest
+            ),
+            startY = tubeTop,
+            endY = tubeTop + tubeH
+        )
 
         drawRoundRect(
             brush = vialGradient,
@@ -1172,7 +1220,7 @@ private fun Material3TubularHorizontalLevelView(
         )
 
         // Tube outer border
-        val borderColor = if (isDark) Color.White.copy(alpha = 0.30f) else Color(0xFF64748B).copy(alpha = 0.45f)
+        val borderColor = outlineVariant.copy(alpha = if (isDark) 0.5f else 0.7f)
         drawRoundRect(
             color = borderColor,
             topLeft = Offset(tubeLeft, tubeTop),
@@ -1219,7 +1267,7 @@ private fun Material3TubularHorizontalLevelView(
 
         // Center centerline tick
         drawLine(
-            color = if (isDark) Color.White.copy(alpha = 0.45f) else Color(0xFF1E293B).copy(alpha = 0.5f),
+            color = onSurface.copy(alpha = if (isDark) 0.5f else 0.6f),
             start = Offset(centerX, tubeTop + 6.dp.toPx()),
             end = Offset(centerX, tubeTop + tubeH - 6.dp.toPx()),
             strokeWidth = 1.2.dp.toPx()
@@ -1232,7 +1280,7 @@ private fun Material3TubularHorizontalLevelView(
             if (tickX > tubeLeft + tubeRadius && tickX < tubeLeft + tubeW - tubeRadius) {
                 val tickH = if (abs(i) % 2 == 0) 14.dp.toPx() else 8.dp.toPx()
                 drawLine(
-                    color = if (isDark) Color.White.copy(alpha = 0.25f) else Color(0xFF64748B).copy(alpha = 0.35f),
+                    color = onSurfaceVariant.copy(alpha = if (isDark) 0.35f else 0.45f),
                     start = Offset(tickX, tubeTop + 6.dp.toPx()),
                     end = Offset(tickX, tubeTop + 6.dp.toPx() + tickH),
                     strokeWidth = 1.dp.toPx()
@@ -1240,12 +1288,12 @@ private fun Material3TubularHorizontalLevelView(
             }
         }
 
-        // Bubble physics displacement
+        // Bubble physics displacement with animated angle
         val maxTravel = (tubeW - tubeH) / 2f
-        val norm = (angle / 8f).coerceIn(-1f, 1f)
+        val norm = (animatedAngle / 8f).coerceIn(-1f, 1f)
         val bubbleX = centerX + norm * maxTravel
         val bubbleY = tubeTop + tubeRadius
-        val bubbleRadius = tubeRadius * 0.72f
+        val bubbleRadius = tubeRadius * 0.72f * bubblePulseScale
 
         // Bubble glow & body
         drawCircle(
@@ -1281,22 +1329,47 @@ private fun Material3TubularHorizontalLevelView(
 
 /**
  * Material 3 垂直垂準儀 (Vertical Plumb Level)
+ * Compose 物理狀態彈簧動畫：垂直平滑升降
  */
 @Composable
 private fun Material3TubularVerticalLevelView(
-    angleProvider: () -> Float,
+    angle: Float,
     isLevel: Boolean,
     accentColor: Color,
     toleranceDeg: Float,
     isDark: Boolean
 ) {
+    val animatedAngle by animateFloatAsState(
+        targetValue = angle,
+        animationSpec = spring(
+            dampingRatio = 0.78f,
+            stiffness = 380f
+        ),
+        label = "animatedVerticalAngle"
+    )
+
+    val bubblePulseScale by animateFloatAsState(
+        targetValue = if (isLevel) 1.08f else 1.0f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow
+        ),
+        label = "verticalBubblePulseScale"
+    )
+
+    val surfaceContainer = MaterialTheme.colorScheme.surfaceContainer
+    val surfaceContainerHigh = MaterialTheme.colorScheme.surfaceContainerHigh
+    val surfaceContainerLowest = MaterialTheme.colorScheme.surfaceContainerLowest
+    val outlineVariant = MaterialTheme.colorScheme.outlineVariant
+    val onSurface = MaterialTheme.colorScheme.onSurface
+    val onSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
+
     Canvas(
         modifier = Modifier
             .fillMaxHeight()
             .width(130.dp)
             .testTag("tubular_vertical_level_canvas")
     ) {
-        val angle = angleProvider()
         val tubeW = 68.dp.toPx()
         val tubeH = size.height * 0.88f
         val tubeLeft = (size.width - tubeW) / 2f
@@ -1304,27 +1377,15 @@ private fun Material3TubularVerticalLevelView(
         val tubeRadius = tubeW / 2f
 
         // Tube vial glass background
-        val vialGradient = if (isDark) {
-            Brush.horizontalGradient(
-                colors = listOf(
-                    Color(0xFF1E293B),
-                    Color(0xFF0F172A),
-                    Color(0xFF060911)
-                ),
-                startX = tubeLeft,
-                endX = tubeLeft + tubeW
-            )
-        } else {
-            Brush.horizontalGradient(
-                colors = listOf(
-                    Color(0xFFF1F5F9),
-                    Color(0xFFE2E8F0),
-                    Color(0xFFCBD5E1)
-                ),
-                startX = tubeLeft,
-                endX = tubeLeft + tubeW
-            )
-        }
+        val vialGradient = Brush.horizontalGradient(
+            colors = listOf(
+                surfaceContainerHigh,
+                surfaceContainer,
+                surfaceContainerLowest
+            ),
+            startX = tubeLeft,
+            endX = tubeLeft + tubeW
+        )
 
         drawRoundRect(
             brush = vialGradient,
@@ -1334,7 +1395,7 @@ private fun Material3TubularVerticalLevelView(
         )
 
         // Tube outer border
-        val borderColor = if (isDark) Color.White.copy(alpha = 0.30f) else Color(0xFF64748B).copy(alpha = 0.45f)
+        val borderColor = outlineVariant.copy(alpha = if (isDark) 0.5f else 0.7f)
         drawRoundRect(
             color = borderColor,
             topLeft = Offset(tubeLeft, tubeTop),
@@ -1381,7 +1442,7 @@ private fun Material3TubularVerticalLevelView(
 
         // Center centerline tick
         drawLine(
-            color = if (isDark) Color.White.copy(alpha = 0.45f) else Color(0xFF1E293B).copy(alpha = 0.5f),
+            color = onSurface.copy(alpha = if (isDark) 0.5f else 0.6f),
             start = Offset(tubeLeft + 6.dp.toPx(), centerY),
             end = Offset(tubeLeft + tubeW - 6.dp.toPx(), centerY),
             strokeWidth = 1.2.dp.toPx()
@@ -1394,7 +1455,7 @@ private fun Material3TubularVerticalLevelView(
             if (tickY > tubeTop + tubeRadius && tickY < tubeTop + tubeH - tubeRadius) {
                 val tickW = if (abs(i) % 2 == 0) 14.dp.toPx() else 8.dp.toPx()
                 drawLine(
-                    color = if (isDark) Color.White.copy(alpha = 0.25f) else Color(0xFF64748B).copy(alpha = 0.35f),
+                    color = onSurfaceVariant.copy(alpha = if (isDark) 0.35f else 0.45f),
                     start = Offset(tubeLeft + 6.dp.toPx(), tickY),
                     end = Offset(tubeLeft + 6.dp.toPx() + tickW, tickY),
                     strokeWidth = 1.dp.toPx()
@@ -1402,12 +1463,12 @@ private fun Material3TubularVerticalLevelView(
             }
         }
 
-        // Bubble physics displacement
+        // Bubble physics displacement with animated vertical angle
         val maxTravel = (tubeH - tubeW) / 2f
-        val norm = (angle / 8f).coerceIn(-1f, 1f)
+        val norm = (animatedAngle / 8f).coerceIn(-1f, 1f)
         val bubbleX = tubeLeft + tubeRadius
         val bubbleY = centerY - norm * maxTravel
-        val bubbleRadius = tubeRadius * 0.72f
+        val bubbleRadius = tubeRadius * 0.72f * bubblePulseScale
 
         // Bubble glow & body
         drawCircle(

@@ -47,10 +47,12 @@ import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -134,6 +136,8 @@ fun ModernArCameraView(
     var showTileDetailSheet by remember { mutableStateOf(false) }
     val revealedTileIds = remember { mutableStateMapOf<String, Boolean>() }
     var textureViewRef by remember { mutableStateOf<TextureView?>(null) }
+    var modernArGlViewRef by remember { mutableStateOf<com.example.logic.ar.ModernArGlView?>(null) }
+    val isTakingPhoto by viewModel.isTakingPhoto.collectAsState()
 
     // Camera Quality, Aspect Ratio & Lens Cleanliness States
     val cameraAspectRatio by viewModel.cameraAspectRatio.collectAsState()
@@ -328,6 +332,8 @@ fun ModernArCameraView(
         label = "snapGlowAlphaAnimated"
     )
 
+    val isDark = androidx.compose.foundation.isSystemInDarkTheme()
+
     val colorPrimary = MaterialTheme.colorScheme.primary
     val colorOnPrimary = MaterialTheme.colorScheme.onPrimary
     val colorPrimaryContainer = MaterialTheme.colorScheme.primaryContainer
@@ -373,15 +379,16 @@ fun ModernArCameraView(
     val wallCachedPath = remember { Path() }
 
     val isMeasurementAvailable by viewModel.isMeasurementAvailable.collectAsState()
+    val sensorTelemetry by viewModel.sensorTelemetry.collectAsState()
 
     val addFabContainerColor by animateColorAsState(
-        targetValue = if (isMeasurementAvailable) colorPrimary else Color(0xFF3C3C3E),
+        targetValue = if (isMeasurementAvailable) colorPrimary else MaterialTheme.colorScheme.surfaceContainerHighest,
         animationSpec = tween(240, easing = FastOutSlowInEasing),
         label = "addFabContainerColor"
     )
 
     val addFabIconColor by animateColorAsState(
-        targetValue = if (isMeasurementAvailable) colorOnPrimary else Color(0xFF8E8E93),
+        targetValue = if (isMeasurementAvailable) colorOnPrimary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
         animationSpec = tween(240, easing = FastOutSlowInEasing),
         label = "addFabIconColor"
     )
@@ -463,13 +470,18 @@ fun ModernArCameraView(
                             modernArEngine = viewModel.modernArEngine,
                             viewModel = viewModel
                         ).apply {
+                            modernArGlViewRef = this
                             onResume()
                         }
                     },
                     update = { view ->
-                        (view as? ModernArGlView)?.onResume()
+                        (view as? ModernArGlView)?.let {
+                            modernArGlViewRef = it
+                            it.onResume()
+                        }
                     },
                     onRelease = { view ->
+                        modernArGlViewRef = null
                         (view as? android.opengl.GLSurfaceView)?.onPause()
                     },
                     modifier = Modifier
@@ -505,7 +517,9 @@ fun ModernArCameraView(
                 // Step 3: Scene mode disabled & 16.6ms exposure clamp to prevent 30 FPS drop in dim conditions
                 AndroidView(
                     factory = { ctx ->
-                        val textureView = TextureView(ctx)
+                        val textureView = TextureView(ctx).apply {
+                            isOpaque = false
+                        }
                         textureViewRef = textureView
                         val camera2Manager = HighSpeedCamera2Manager(ctx)
                         viewModel.setHighSpeedCamera2Manager(camera2Manager)
@@ -666,7 +680,7 @@ fun ModernArCameraView(
                                         modifier = Modifier.size(13.dp)
                                     )
                                     Text(
-                                        text = "寬 $heightFormatted",
+                                        text = "高 $heightFormatted",
                                         color = colorOnSurface,
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.ExtraBold
@@ -744,7 +758,7 @@ fun ModernArCameraView(
                                             fontWeight = FontWeight.Bold
                                         )
                                     } else {
-                                        // Pressed: Shows length and width!
+                                        // Pressed: Shows length and height!
                                         Icon(
                                             imageVector = Icons.Rounded.Straighten,
                                             contentDescription = "尺寸",
@@ -752,7 +766,7 @@ fun ModernArCameraView(
                                             modifier = Modifier.size(17.dp)
                                         )
                                         Text(
-                                            text = "長 $widthFormatted × 寬 $heightFormatted",
+                                            text = "長 $widthFormatted × 高 $heightFormatted",
                                             color = colorOnPrimaryContainer,
                                             fontSize = 13.5.sp,
                                             fontWeight = FontWeight.ExtraBold
@@ -779,20 +793,13 @@ fun ModernArCameraView(
                 }
             }
 
-            // 5. Clean Minimal Top Bar with Translucent Glass Scrim & Status Bar Protection
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.TopCenter)
-            ) {
-                // Top Frosted Dark Glass Scrim (晶透暗色玻璃遮罩，確保狀態列與圖示清晰可讀)
-                GradientBlurScrim(
+            // 5. Clean Minimal Top Bar (Pure Full-Screen Camera Viewport)
+            if (!isTakingPhoto) {
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(96.dp),
-                    isTop = true
-                )
-
+                        .align(Alignment.TopCenter)
+                ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -801,7 +808,158 @@ fun ModernArCameraView(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Left area: empty Spacer so top row remains balanced and right actions stay on right (no badges/tags)
+                    // Left: Quick SubMode Selector & Unit Selector
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        // 1. SubMode Selector Pill
+                        var showSubModeMenu by remember { mutableStateOf(false) }
+                        val subModeLabel = when (subMode) {
+                            1 -> "面積"
+                            2 -> "高度"
+                            5 -> "角度"
+                            else -> if (autoDetectedType == "HEIGHT") "自動 (高度)" else if (autoDetectedType == "AREA") "自動 (面積)" else "自動"
+                        }
+
+                        Box {
+                            Surface(
+                                onClick = { showSubModeMenu = true },
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f),
+                                contentColor = colorOnSurface,
+                                border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f)),
+                                shadowElevation = 2.dp,
+                                modifier = Modifier.testTag("submode_selector_button")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    Icon(
+                                        when (subMode) {
+                                            1 -> Icons.Rounded.SquareFoot
+                                            2 -> Icons.Rounded.Height
+                                            5 -> Icons.Rounded.Architecture
+                                            else -> Icons.Rounded.AutoAwesome
+                                        },
+                                        contentDescription = null,
+                                        tint = colorPrimary,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Text(
+                                        text = subModeLabel,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = colorOnSurface
+                                    )
+                                    Icon(
+                                        Icons.Rounded.ArrowDropDown,
+                                        contentDescription = null,
+                                        tint = colorOnSurfaceVariant,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                }
+                            }
+
+                            DropdownMenu(
+                                expanded = showSubModeMenu,
+                                onDismissRequest = { showSubModeMenu = false },
+                                modifier = Modifier.background(colorSurfaceContainer)
+                            ) {
+                                listOf(
+                                    0 to ("智慧自動 (Auto)" to Icons.Rounded.AutoAwesome),
+                                    -1 to ("直線距離 (Distance)" to Icons.Rounded.Straighten),
+                                    1 to ("封閉面積 (Area)" to Icons.Rounded.SquareFoot),
+                                    2 to ("垂直高度 (Height)" to Icons.Rounded.Height),
+                                    5 to ("空間夾角 (Angle)" to Icons.Rounded.Architecture)
+                                ).forEach { (modeId, info) ->
+                                    val (label, icon) = info
+                                    val isSelected = (modeId == 0 && subMode == 0) || (modeId == subMode) || (modeId == -1 && subMode == 0 && autoDetectedType == "DISTANCE")
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                label,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                color = if (isSelected) colorPrimary else colorOnSurface
+                                            )
+                                        },
+                                        leadingIcon = {
+                                            Icon(icon, null, tint = if (isSelected) colorPrimary else colorOnSurfaceVariant)
+                                        },
+                                        onClick = {
+                                            if (modeId == -1) {
+                                                viewModel.setCameraSubMode(0)
+                                            } else {
+                                                viewModel.setCameraSubMode(modeId)
+                                            }
+                                            showSubModeMenu = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        // 2. Unit Quick Selector Pill
+                        var showUnitMenu by remember { mutableStateOf(false) }
+                        Box {
+                            Surface(
+                                onClick = { showUnitMenu = true },
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f),
+                                contentColor = colorPrimary,
+                                border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f)),
+                                shadowElevation = 2.dp,
+                                modifier = Modifier.testTag("unit_selector_button")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                ) {
+                                    Text(
+                                        text = selectedUnit.uppercase(),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = colorPrimary
+                                    )
+                                    Icon(
+                                        Icons.Rounded.ArrowDropDown,
+                                        contentDescription = null,
+                                        tint = colorPrimary,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                }
+                            }
+
+                            DropdownMenu(
+                                expanded = showUnitMenu,
+                                onDismissRequest = { showUnitMenu = false },
+                                modifier = Modifier.background(colorSurfaceContainer)
+                            ) {
+                                listOf("cm" to "公分 (cm)", "m" to "公尺 (m)", "in" to "英吋 (in)", "ft" to "英呎 (ft)", "yd" to "碼 (yd)").forEach { (unitCode, label) ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                label,
+                                                fontWeight = if (selectedUnit == unitCode) FontWeight.Bold else FontWeight.Normal,
+                                                color = if (selectedUnit == unitCode) colorPrimary else colorOnSurface
+                                            )
+                                        },
+                                        onClick = {
+                                            viewModel.setSelectedUnit(unitCode)
+                                            showUnitMenu = false
+                                        },
+                                        leadingIcon = if (selectedUnit == unitCode) {
+                                            { Icon(Icons.Rounded.Check, null, tint = colorPrimary) }
+                                        } else null
+                                    )
+                                }
+                            }
+                        }
+                    }
+
                     Spacer(modifier = Modifier.weight(1f))
 
                     // Right: Clean quick actions with AI tool menu
@@ -819,12 +977,12 @@ fun ModernArCameraView(
                             modifier = Modifier
                                 .size(38.dp)
                                 .background(
-                                    if (isAnyAiActive) colorPrimary else MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
+                                    if (isAnyAiActive) colorPrimary else MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f),
                                     CircleShape
                                 )
                                 .border(
                                     width = 0.8.dp,
-                                    color = if (isAnyAiActive) Color.Transparent else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+                                    color = if (isAnyAiActive) Color.Transparent else MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f),
                                     shape = CircleShape
                                 )
                                 .shadow(if (isAnyAiActive) 5.dp else 2.dp, CircleShape)
@@ -833,7 +991,7 @@ fun ModernArCameraView(
                             Icon(
                                 Icons.Rounded.AutoAwesome,
                                 contentDescription = "AI 智慧工具",
-                                tint = if (isAnyAiActive) colorOnPrimary else Color.White,
+                                tint = if (isAnyAiActive) colorOnPrimary else colorOnSurface,
                                 modifier = Modifier.size(19.dp)
                             )
                         }
@@ -978,7 +1136,7 @@ fun ModernArCameraView(
                                     Icon(
                                         Icons.Rounded.AutoAwesome,
                                         contentDescription = null,
-                                        tint = Color(0xFF00E5FF)
+                                        tint = colorPrimary
                                     )
                                 },
                                 onClick = {
@@ -1003,12 +1161,12 @@ fun ModernArCameraView(
                             modifier = Modifier
                                 .size(38.dp)
                                 .background(
-                                    if (isTorchOn) colorPrimary else MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
+                                    if (isTorchOn) colorPrimary else MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f),
                                     CircleShape
                                 )
                                 .border(
                                     width = 0.8.dp,
-                                    color = if (isTorchOn) Color.Transparent else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+                                    color = if (isTorchOn) Color.Transparent else MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f),
                                     shape = CircleShape
                                 )
                                 .shadow(if (isTorchOn) 5.dp else 2.dp, CircleShape)
@@ -1017,7 +1175,7 @@ fun ModernArCameraView(
                             Icon(
                                 if (isTorchOn) Icons.Rounded.FlashlightOn else Icons.Rounded.FlashlightOff,
                                 contentDescription = "手電筒補光",
-                                tint = if (isTorchOn) colorOnPrimary else Color.White,
+                                tint = if (isTorchOn) colorOnPrimary else colorOnSurface,
                                 modifier = Modifier.size(19.dp)
                             )
                         }
@@ -1145,10 +1303,10 @@ fun ModernArCameraView(
                         onClick = onShowHistoryClick,
                         modifier = Modifier
                             .size(38.dp)
-                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.65f), CircleShape)
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f), CircleShape)
                             .border(
                                 width = 0.8.dp,
-                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f),
                                 shape = CircleShape
                             )
                             .shadow(2.dp, CircleShape)
@@ -1156,7 +1314,7 @@ fun ModernArCameraView(
                         Icon(
                             Icons.Rounded.History,
                             contentDescription = "History",
-                            tint = Color.White,
+                            tint = colorOnSurface,
                             modifier = Modifier.size(19.dp)
                         )
                     }
@@ -1166,10 +1324,10 @@ fun ModernArCameraView(
                         onClick = onShowSettingsClick,
                         modifier = Modifier
                             .size(38.dp)
-                            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.65f), CircleShape)
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f), CircleShape)
                             .border(
                                 width = 0.8.dp,
-                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f),
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f),
                                 shape = CircleShape
                             )
                             .shadow(2.dp, CircleShape)
@@ -1177,11 +1335,22 @@ fun ModernArCameraView(
                         Icon(
                             Icons.Rounded.Settings,
                             contentDescription = "Settings",
-                            tint = Color.White,
+                            tint = colorOnSurface,
                             modifier = Modifier.size(19.dp)
                         )
                     }
                 }
+            }
+
+                // 5D. AR Horizon & Spatial Surface Guidance Indicator
+                ArHorizonGuidanceIndicator(
+                    sensorTelemetry = sensorTelemetry,
+                    planesCount = planesCount,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .statusBarsPadding()
+                        .padding(top = 54.dp)
+                )
             }
         }
 
@@ -1215,20 +1384,21 @@ fun ModernArCameraView(
                                 padV = ((totalH.value - frameH) / 2f).coerceAtLeast(0f).dp
                             }
 
+                            val maskColor = Color.Transparent
                             if (padV > 0.dp) {
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(padV)
                                         .align(Alignment.TopCenter)
-                                        .background(Color.Black.copy(alpha = 0.45f))
+                                        .background(maskColor)
                                 )
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(padV)
                                         .align(Alignment.BottomCenter)
-                                        .background(Color.Black.copy(alpha = 0.45f))
+                                        .background(maskColor)
                                 )
                             }
                             if (padH > 0.dp) {
@@ -1237,14 +1407,14 @@ fun ModernArCameraView(
                                         .fillMaxHeight()
                                         .width(padH)
                                         .align(Alignment.CenterStart)
-                                        .background(Color.Black.copy(alpha = 0.45f))
+                                        .background(maskColor)
                                 )
                                 Box(
                                     modifier = Modifier
                                         .fillMaxHeight()
                                         .width(padH)
                                         .align(Alignment.CenterEnd)
-                                        .background(Color.Black.copy(alpha = 0.45f))
+                                        .background(maskColor)
                                 )
                             }
                         }
@@ -1263,8 +1433,8 @@ fun ModernArCameraView(
 
                 // Recording Time & REC Badge Pill
                 Surface(
-                    color = Color.Black.copy(alpha = 0.82f),
-                    contentColor = Color.White,
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.95f),
+                    contentColor = MaterialTheme.colorScheme.onSurface,
                     shape = RoundedCornerShape(24.dp),
                     border = BorderStroke(1.5.dp, Color(0xFFE53935)),
                     shadowElevation = 10.dp,
@@ -1322,26 +1492,30 @@ fun ModernArCameraView(
                 )
             }
 
-            val bottomScrimHeight = remember(bottomPadding) {
-                (bottomPadding + 150.dp).coerceAtLeast(220.dp)
-            }
+            if (!isTakingPhoto) {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = bottomPadding + 10.dp)
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                // Real-Time Measurement Completed Summary Card (1-tap copy, save & unit conversion)
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = hasCapturedPoints && capturedPoints.size >= 2,
+                    enter = fadeIn(animationSpec = tween(200)) + expandVertically(animationSpec = tween(200)),
+                    exit = fadeOut(animationSpec = tween(150)) + shrinkVertically(animationSpec = tween(150))
+                ) {
+                    Box(modifier = Modifier.padding(bottom = 8.dp)) {
+                        MeasurementLiveSummaryCard(
+                            viewModel = viewModel,
+                            subMode = subMode,
+                            selectedUnit = selectedUnit,
+                            onShowHistory = onShowHistoryClick
+                        )
+                    }
+                }
 
-            // Bottom Frosted Dark Glass Scrim for camera control deck
-            GradientBlurScrim(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(bottomScrimHeight)
-                    .align(Alignment.BottomCenter),
-                isTop = false
-            )
-
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = bottomPadding + 10.dp)
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
                 // Dynamic Live Measurement Guidance & Status Pill
                 val hasGuidanceContent = (!isMobileSamMode && !isObjectronMode && isWaitingForSecondPoint) ||
                         isMobileSamMode || isObjectronMode
@@ -1402,7 +1576,7 @@ fun ModernArCameraView(
                                         Icon(Icons.Rounded.TouchApp, null, tint = colorTertiary, modifier = Modifier.size(15.dp))
                                         Text(
                                             text = "輕觸畫面任意物件，即時分割邊界與面積",
-                                            color = Color.White,
+                                            color = colorOnSurface,
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.Medium
                                         )
@@ -1461,15 +1635,15 @@ fun ModernArCameraView(
                                     },
                                     modifier = Modifier
                                         .size((44 * uiButtonScale).dp)
-                                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.70f), CircleShape)
-                                        .border(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f), CircleShape)
+                                        .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.70f else 0.88f), CircleShape)
+                                        .border(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f), CircleShape)
                                         .shadow(3.dp, CircleShape)
                                         .testTag("undo_button")
                                 ) {
                                     Icon(
                                         Icons.Rounded.Undo,
                                         contentDescription = "復原上一點",
-                                        tint = Color.White,
+                                        tint = colorOnSurface,
                                         modifier = Modifier.size((20 * uiButtonScale).dp)
                                     )
                                 }
@@ -1481,15 +1655,15 @@ fun ModernArCameraView(
                                     },
                                     modifier = Modifier
                                         .size((44 * uiButtonScale).dp)
-                                        .background(Color(0xFFE53935).copy(alpha = 0.22f), CircleShape)
-                                        .border(0.8.dp, Color(0xFFE53935).copy(alpha = 0.55f), CircleShape)
+                                        .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.85f), CircleShape)
+                                        .border(0.8.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.55f), CircleShape)
                                         .shadow(3.dp, CircleShape)
                                         .testTag("clear_all_button")
                                 ) {
                                     Icon(
                                         Icons.Rounded.DeleteOutline,
                                         contentDescription = "全部清除",
-                                        tint = Color(0xFFFF8A80),
+                                        tint = MaterialTheme.colorScheme.onErrorContainer,
                                         modifier = Modifier.size((20 * uiButtonScale).dp)
                                     )
                                 }
@@ -1497,26 +1671,14 @@ fun ModernArCameraView(
                         }
                     }
 
-                    // Center Slot: Primary Circular Main Button with dynamic press morphing
+                    // Center Slot: Primary Main Add Button (Only Corner Radius Morphs on Press, No Scale/Ripple/Elevation Effects)
                     val addFabInteractionSource = remember { MutableInteractionSource() }
                     val isAddFabPressed by addFabInteractionSource.collectIsPressedAsState()
 
                     val addFabCornerRadius by animateDpAsState(
                         targetValue = if (isAddFabPressed) 16.dp else 32.dp,
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioMediumBouncy,
-                            stiffness = Spring.StiffnessMedium
-                        ),
+                        animationSpec = tween(150),
                         label = "addFabCornerRadius"
-                    )
-
-                    val addFabScale by animateFloatAsState(
-                        targetValue = (if (isAddFabPressed) 0.93f else 1.0f) * uiButtonScale,
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioLowBouncy,
-                            stiffness = Spring.StiffnessMedium
-                        ),
-                        label = "addFabScale"
                     )
 
                     Box(
@@ -1526,14 +1688,13 @@ fun ModernArCameraView(
                         Surface(
                             color = addFabContainerColor,
                             shape = RoundedCornerShape(addFabCornerRadius),
-                            border = if (!isMeasurementAvailable) BorderStroke(1.5.dp, Color(0xFF5A5A5E)) else null,
-                            shadowElevation = if (isMeasurementAvailable) (if (isAddFabPressed) 3.dp else 8.dp) else 2.dp,
+                            border = if (!isMeasurementAvailable) BorderStroke(1.5.dp, MaterialTheme.colorScheme.outlineVariant) else null,
+                            shadowElevation = if (isMeasurementAvailable) 4.dp else 2.dp,
                             modifier = Modifier
                                 .size((64 * uiButtonScale).dp)
-                                .scale(addFabScale)
                                 .clickable(
                                     interactionSource = addFabInteractionSource,
-                                    indication = ripple(bounded = true, radius = 32.dp)
+                                    indication = null
                                 ) {
                                     if (isMeasurementAvailable) {
                                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
@@ -1588,31 +1749,77 @@ fun ModernArCameraView(
                                         }
                                     }
                                 } else {
-                                    // Capture Photo Snapshot
-                                    isShutterFlash = true
+                                    // Capture Photo Snapshot with Real Hardware Camera Feed
                                     coroutineScope.launch {
-                                        kotlinx.coroutines.delay(100)
-                                        isShutterFlash = false
-                                    }
-                                    ShareUtility.captureViewSnapshot(
-                                        view = localView,
-                                        aspectRatio = cameraAspectRatio,
-                                        useDisplayP3 = useDisplayP3ColorSpace
-                                    ) { path ->
-                                        viewModel.saveMeasurementRecord(imagePath = path)
+                                        try {
+                                            viewModel.setIsTakingPhoto(true)
+                                            // Wait 40ms for Compose to recompose with UI controls hidden
+                                            kotlinx.coroutines.delay(40)
+
+                                            val currentTv = textureViewRef
+                                            val currentGl = modernArGlViewRef
+
+                                            val onCameraFrameReady: (Bitmap?) -> Unit = { cameraBmp ->
+                                                ShareUtility.captureArCompositeSnapshot(
+                                                    view = localView,
+                                                    cameraBitmap = cameraBmp,
+                                                    textureView = currentTv,
+                                                    glView = currentGl,
+                                                    aspectRatio = cameraAspectRatio,
+                                                    useDisplayP3 = useDisplayP3ColorSpace,
+                                                    primaryMeasurement = viewModel.getPrimaryMeasurementDisplayString()
+                                                ) { savedPath ->
+                                                    viewModel.setIsTakingPhoto(false)
+                                                    // Trigger screen flash animation for satisfying shutter feedback
+                                                    isShutterFlash = true
+                                                    coroutineScope.launch {
+                                                        kotlinx.coroutines.delay(120)
+                                                        isShutterFlash = false
+                                                    }
+                                                    viewModel.saveMeasurementRecord(imagePath = savedPath)
+                                                }
+                                            }
+
+                                            if (currentTv != null && currentTv.isAvailable) {
+                                                val bmp = try {
+                                                    currentTv.bitmap ?: if (localView.width > 0 && localView.height > 0) {
+                                                        currentTv.getBitmap(localView.width, localView.height)
+                                                    } else null
+                                                } catch (e: Throwable) {
+                                                    try { currentTv.bitmap } catch (_: Throwable) { null }
+                                                }
+                                                onCameraFrameReady(bmp)
+                                            } else if (currentGl != null) {
+                                                currentGl.captureBitmap { glBmp ->
+                                                    onCameraFrameReady(glBmp)
+                                                }
+                                            } else {
+                                                onCameraFrameReady(null)
+                                            }
+                                        } catch (e: Throwable) {
+                                            viewModel.setIsTakingPhoto(false)
+                                            android.util.Log.e("ModernArCameraView", "Error capturing snapshot", e)
+                                        }
                                     }
                                 }
                             },
                             onLongClick = {
                                 haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                                 if (!isRecordingVideo) {
-                                    videoRecorder.startRecording(localView)
+                                    videoRecorder.startRecording(
+                                        view = localView,
+                                        cameraBitmapProvider = {
+                                            val tv = textureViewRef
+                                            if (tv != null && tv.isAvailable) tv.bitmap else null
+                                        }
+                                    )
                                 }
                             },
                             testTag = "camera_shutter_button"
                         )
                     }
                 }
+            }
             }
         }
     }
@@ -1710,7 +1917,7 @@ fun ModernArCameraView(
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Surface(
-                                    color = if (antiJitter) colorPrimary else Color.Gray,
+                                    color = if (antiJitter) colorPrimary else MaterialTheme.colorScheme.outlineVariant,
                                     shape = CircleShape,
                                     modifier = Modifier.size(8.dp)
                                 ) {}
@@ -1799,7 +2006,7 @@ fun ModernArCameraView(
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Surface(
-                                        color = if (sensorTelemetry.isProximityNear) colorPrimary else Color.Gray,
+                                        color = if (sensorTelemetry.isProximityNear) colorPrimary else MaterialTheme.colorScheme.outlineVariant,
                                         shape = CircleShape,
                                         modifier = Modifier.size(8.dp)
                                     ) {}
@@ -1846,7 +2053,7 @@ fun ModernArCameraView(
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Surface(
-                                    color = if (rawDepthConfidenceEnabled) colorPrimary else Color.Gray,
+                                    color = if (rawDepthConfidenceEnabled) colorPrimary else MaterialTheme.colorScheme.outlineVariant,
                                     shape = CircleShape,
                                     modifier = Modifier.size(8.dp)
                                 ) {}
@@ -1875,7 +2082,7 @@ fun ModernArCameraView(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Surface(
-                                    color = if (highFpsModeEnabled) colorPrimary else Color.Gray,
+                                    color = if (highFpsModeEnabled) colorPrimary else MaterialTheme.colorScheme.outlineVariant,
                                     shape = CircleShape,
                                     modifier = Modifier.size(8.dp)
                                 ) {}
@@ -1921,7 +2128,7 @@ fun ModernArCameraView(
                 Icon(
                     imageVector = Icons.Rounded.CleaningServices,
                     contentDescription = null,
-                    tint = Color(0xFFFFB74D),
+                    tint = MaterialTheme.colorScheme.tertiary,
                     modifier = Modifier.size(32.dp)
                 )
             },
@@ -1934,7 +2141,7 @@ fun ModernArCameraView(
                         "偵測到鏡頭可能附著指紋油污或灰塵髒污。",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFFFFB74D)
+                        color = MaterialTheme.colorScheme.tertiary
                     )
                     Text(
                         "建議使用拭鏡布或乾淨棉布擦拭手機鏡頭表面，以維持最清晰的 AR 深度辨識與色彩品質。",
@@ -1950,8 +2157,8 @@ fun ModernArCameraView(
                         showLensCleaningDialog = false
                     },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFFFB74D),
-                        contentColor = Color.Black
+                        containerColor = MaterialTheme.colorScheme.tertiary,
+                        contentColor = MaterialTheme.colorScheme.onTertiary
                     )
                 ) {
                     Text("已擦拭完成", fontWeight = FontWeight.Bold)
@@ -1978,7 +2185,7 @@ fun ModernArCameraView(
                 Icon(
                     imageVector = Icons.Rounded.WbSunny,
                     contentDescription = null,
-                    tint = Color(0xFFFFCA28),
+                    tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(32.dp)
                 )
             },
@@ -1991,7 +2198,7 @@ fun ModernArCameraView(
                         "目前環境光照較弱，可能導致 AR 特徵點追蹤精度降低或產生飄移。",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFFFFCA28)
+                        color = MaterialTheme.colorScheme.primary
                     )
                     Text(
                         "建議開啟手電筒補光或前往光源充足之處進行精確量測。",
@@ -2008,8 +2215,8 @@ fun ModernArCameraView(
                         showLowLightDialog = false
                     },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFFFCA28),
-                        contentColor = Color.Black
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
                     )
                 ) {
                     Text("開啟手電筒補光", fontWeight = FontWeight.Bold)
@@ -2036,7 +2243,7 @@ fun ModernArCameraView(
                 Icon(
                     imageVector = Icons.Rounded.Speed,
                     contentDescription = null,
-                    tint = Color(0xFFFF7043),
+                    tint = MaterialTheme.colorScheme.secondary,
                     modifier = Modifier.size(32.dp)
                 )
             },
@@ -2049,7 +2256,7 @@ fun ModernArCameraView(
                         "移動速度過快容易引起空間錨點跳動或重定位失敗。",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFFFF7043)
+                        color = MaterialTheme.colorScheme.secondary
                     )
                     Text(
                         "請放慢平移與轉向速度，平穩掃描周遭環境以獲取最精準的尺寸數值。",
@@ -2065,8 +2272,8 @@ fun ModernArCameraView(
                         showMotionDialog = false
                     },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFFF7043),
-                        contentColor = Color.White
+                        containerColor = MaterialTheme.colorScheme.secondary,
+                        contentColor = MaterialTheme.colorScheme.onSecondary
                     )
                 ) {
                     Text("瞭解，放慢移動", fontWeight = FontWeight.Bold)
@@ -2093,7 +2300,7 @@ fun ModernArCameraView(
                 Icon(
                     imageVector = Icons.Rounded.Grain,
                     contentDescription = null,
-                    tint = Color(0xFFBA68C8),
+                    tint = MaterialTheme.colorScheme.tertiary,
                     modifier = Modifier.size(32.dp)
                 )
             },
@@ -2106,7 +2313,7 @@ fun ModernArCameraView(
                         "鏡頭視野內缺乏足夠的幾何或紋理特徵點（例如大面積純白牆面、光滑無紋理桌面）。",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFFBA68C8)
+                        color = MaterialTheme.colorScheme.tertiary
                     )
                     Text(
                         "建議將相機稍作平移，對準物體邊界、縫隙、踢腳板或有紋理的地面以建立堅固的空間錨點。",
@@ -2122,8 +2329,8 @@ fun ModernArCameraView(
                         showFeatureDialog = false
                     },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFBA68C8),
-                        contentColor = Color.White
+                        containerColor = MaterialTheme.colorScheme.tertiary,
+                        contentColor = MaterialTheme.colorScheme.onTertiary
                     )
                 ) {
                     Text("知道了", fontWeight = FontWeight.Bold)
@@ -2431,7 +2638,7 @@ fun ArStabilityDiagnosticsDialog(
                             Icon(
                                 Icons.Rounded.CleaningServices,
                                 null,
-                                tint = if (isLensSmudged) Color(0xFFFFB74D) else MaterialTheme.colorScheme.primary,
+                                tint = if (isLensSmudged) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(Modifier.width(6.dp))
@@ -2441,7 +2648,7 @@ fun ArStabilityDiagnosticsDialog(
                             if (isLensSmudged) "⚠️ 需擦拭 (提醒中)" else "鏡頭清晰",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
-                            color = if (isLensSmudged) Color(0xFFFFB74D) else MaterialTheme.colorScheme.onSurface
+                            color = if (isLensSmudged) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurface
                         )
                     }
                 }
@@ -2556,7 +2763,7 @@ fun ArStabilityDiagnosticsDialog(
                         onDismiss()
                     }
                 ) {
-                    Text("測試清潔提醒", color = Color(0xFFFFB74D))
+                    Text("測試清潔提醒", color = MaterialTheme.colorScheme.tertiary)
                 }
             }
         } else null
@@ -2575,9 +2782,9 @@ private fun LiveDistanceBadge(
 ) {
     val liveDistanceMeters by viewModel.liveDistanceMeters.collectAsState()
     Surface(
-        color = Color(0xDD002B36),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
         shape = RoundedCornerShape(18.dp),
-        border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.7f)),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)),
         modifier = Modifier.shadow(4.dp, RoundedCornerShape(18.dp))
     ) {
         Row(
@@ -2585,14 +2792,250 @@ private fun LiveDistanceBadge(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Icon(Icons.Rounded.Straighten, null, tint = Color(0xFF00E5FF), modifier = Modifier.size(15.dp))
+            Icon(Icons.Rounded.Straighten, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(15.dp))
             val liveDistText = liveDistanceMeters?.let { viewModel.formatLength(it, selectedUnit) } ?: "量測中..."
             Text(
                 text = "即時長度: $liveDistText • 輕觸 ✓ 釘選終點",
-                color = Color(0xFF00E5FF),
+                color = MaterialTheme.colorScheme.primary,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold
             )
+        }
+    }
+}
+
+/**
+ * AR Spatial Horizon & Level Tilt Bar.
+ * Provides instant real-time visual feedback on phone orientation (pitch and roll)
+ * and detected spatial anchor planes, empowering users to align measurements perfectly.
+ */
+@Composable
+private fun ArHorizonGuidanceIndicator(
+    sensorTelemetry: com.example.logic.sensor.SensorCorrectionTelemetry,
+    planesCount: Int,
+    modifier: Modifier = Modifier
+) {
+    val pitch: Float = sensorTelemetry.pitchDeg
+    val roll: Float = sensorTelemetry.rollDeg
+    val isRollLevel = kotlin.math.abs(roll) < 2.0f
+    val isPitchLevel = kotlin.math.abs(pitch) < 2.5f || kotlin.math.abs(pitch - 90f) < 2.5f || kotlin.math.abs(pitch + 90f) < 2.5f
+    val isLevel = isRollLevel && isPitchLevel
+
+    val animatedIndicatorColor by animateColorAsState(
+        targetValue = if (isLevel) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+        animationSpec = tween(200),
+        label = "horizonColor"
+    )
+
+    Surface(
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(0.8.dp, animatedIndicatorColor),
+        modifier = modifier
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(
+                if (isLevel) Icons.Rounded.CheckCircle else Icons.Rounded.FilterTiltShift,
+                contentDescription = null,
+                tint = if (isLevel) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(13.dp)
+            )
+            Text(
+                text = if (isLevel) "🎯 基準水平對齊 (0°)" else "俯仰 ${String.format(java.util.Locale.US, "%.0f°", pitch)} · 滾轉 ${String.format(java.util.Locale.US, "%.0f°", roll)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (isLevel) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = if (isLevel) FontWeight.Bold else FontWeight.Normal,
+                fontSize = 11.sp
+            )
+            if (planesCount > 0) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = RoundedCornerShape(6.dp)
+                ) {
+                    Text(
+                        text = "表面×$planesCount",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Real-Time Measurement Completed Summary Card.
+ * Appears whenever 2+ points are placed, featuring primary dimensions, dual-unit conversion,
+ * 1-tap copy to clipboard, and instant save-to-history button.
+ */
+@Composable
+private fun MeasurementLiveSummaryCard(
+    viewModel: MeasureViewModel,
+    subMode: Int,
+    selectedUnit: String,
+    onShowHistory: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val capturedPoints = viewModel.capturedPoints
+    if (capturedPoints.size < 2) return
+
+    val clipboardManager = LocalClipboardManager.current
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    var isCopied by remember { mutableStateOf(false) }
+    var isSaved by remember { mutableStateOf(false) }
+
+    LaunchedEffect(capturedPoints.size) {
+        isSaved = false
+        isCopied = false
+    }
+
+    val autoDetectedType by viewModel.autoDetectedType.collectAsState()
+    val effectiveType = if (subMode == 0) autoDetectedType else when (subMode) {
+        1 -> "AREA"
+        2 -> "HEIGHT"
+        5 -> "ANGLE"
+        else -> "DISTANCE"
+    }
+
+    val (primaryText, secondaryText, icon) = when (effectiveType) {
+        "AREA" -> {
+            val area = viewModel.calculatePolygonArea()
+            val ping = String.format(java.util.Locale.US, "%.2f 坪", area * 0.3025)
+            val sqft = String.format(java.util.Locale.US, "%.1f sq ft", area * 10.7639)
+            Triple(viewModel.formatArea(area, selectedUnit), "$ping · $sqft", Icons.Rounded.SquareFoot)
+        }
+        "HEIGHT" -> {
+            val h = viewModel.calculateVerticalHeight()
+            val cm = String.format(java.util.Locale.US, "%.1f cm", h * 100)
+            val ft = String.format(java.util.Locale.US, "%.2f ft", h * 3.28084)
+            val inch = String.format(java.util.Locale.US, "%.1f in", h * 39.3701)
+            Triple("垂直高 ${viewModel.formatLength(h, selectedUnit)}", "$cm · $ft · $inch", Icons.Rounded.Height)
+        }
+        "ANGLE" -> {
+            val deg = viewModel.calculateAngle()
+            val rad = String.format(java.util.Locale.US, "%.3f rad", Math.toRadians(deg.toDouble()))
+            Triple("空間夾角 ${Math.round(deg)}°", rad, Icons.Rounded.Architecture)
+        }
+        else -> {
+            val dist = viewModel.calculateTotalDistance()
+            val cm = String.format(java.util.Locale.US, "%.1f cm", dist * 100)
+            val ft = String.format(java.util.Locale.US, "%.2f ft", dist * 3.28084)
+            val inch = String.format(java.util.Locale.US, "%.1f in", dist * 39.3701)
+            Triple(viewModel.formatLength(dist, selectedUnit), "$cm · $ft · $inch", Icons.Rounded.Straighten)
+        }
+    }
+
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.94f),
+        shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
+        shadowElevation = 8.dp,
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("measurement_live_summary_card")
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = CircleShape,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            icon,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+
+                Column {
+                    Text(
+                        text = primaryText,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        text = secondaryText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+
+            // Quick Action Buttons (Copy, Save)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                // Copy Button
+                IconButton(
+                    onClick = {
+                        clipboardManager.setText(AnnotatedString(primaryText))
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                        isCopied = true
+                    },
+                    modifier = Modifier
+                        .size(34.dp)
+                        .background(
+                            if (isCopied) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
+                            CircleShape
+                        )
+                ) {
+                    Icon(
+                        if (isCopied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+                        contentDescription = "複製測量數值",
+                        tint = if (isCopied) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+
+                // Save to History Button
+                IconButton(
+                    onClick = {
+                        if (!isSaved) {
+                            viewModel.saveMeasurementRecord {
+                                isSaved = true
+                            }
+                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                        } else {
+                            onShowHistory()
+                        }
+                    },
+                    modifier = Modifier
+                        .size(34.dp)
+                        .background(
+                            if (isSaved) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.primary,
+                            CircleShape
+                        )
+                ) {
+                    Icon(
+                        if (isSaved) Icons.Rounded.BookmarkAdded else Icons.Rounded.BookmarkAdd,
+                        contentDescription = "儲存至紀錄",
+                        tint = if (isSaved) MaterialTheme.colorScheme.onTertiaryContainer else MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
         }
     }
 }
