@@ -53,7 +53,6 @@ data class Vulkan3DLineSegment(
  * 1. 3D Spatial Infinite / Planar Ground Grid Mesh with procedural depth falloff
  * 2. 3D Anti-Aliased Volumetric Line Ribbons & Measurement Segments (Billboard Quads)
  * 3. 3D Spatial Feature Point Cloud Particles with Gaussian alpha blending
- * 4. Objectron 3D Oriented Bounding Box wireframe meshes
  *
  * Provides native Vulkan 1.3 pipeline state caching, uniform buffer updates,
  * and seamless fallback synchronization with GLES/Canvas rasterizers.

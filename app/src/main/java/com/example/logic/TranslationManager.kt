@@ -143,8 +143,6 @@ object TranslationManager {
             "dynamic_color" to "M3 動態配色",
             "vulkan_graphics_title" to "Vulkan 3D 空間渲染架構",
             "vulkan_graphics_desc" to "硬體光柵化 3D 空間網格、多邊形與抗鋸齒線段",
-            "vulkan_ai_title" to "Vulkan AI 視覺推論加速",
-            "vulkan_ai_desc" to "TFLite GPU Delegate 加速 MobileSAM 與 Objectron 3D",
             "low_light_boost_title" to "Android 15 暗光即時增強",
             "low_light_boost_desc" to "在微光或昏暗環境下自動提升預覽亮度與 SNR 噪訊比",
             "select_lang" to "選擇語言 (Language)",

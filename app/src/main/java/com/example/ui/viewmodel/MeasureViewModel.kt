@@ -22,21 +22,10 @@ import com.example.data.db.MeasureDatabase
 import com.example.data.model.MeasureRecord
 import com.example.data.repository.MeasureRepository
 import com.example.logic.TranslationManager
-import com.example.logic.ai.ObjectronEngine
-import com.example.logic.ai.Objectron3DBox
-import com.example.logic.ai.MobileSamEngine
-import com.example.logic.ai.SegmentedObject
-import com.example.logic.ai.AiTileDetector
-import com.example.logic.ai.AiTilePreset
-import com.example.logic.ai.DetectedTile
-import com.example.logic.ai.TileEstimationResult
-import com.example.logic.ai.TilePatternType
 import com.example.logic.ar.*
 import com.example.logic.sensor.SensorCorrectionTelemetry
 import com.example.logic.sensor.SensorFusionCorrectionEngine
 import com.example.logic.vulkan.VulkanArGraphicsPipeline
-import com.example.logic.vulkan.VulkanAiInferenceBridge
-import com.example.logic.vulkan.VulkanAiMetrics
 import com.google.ar.core.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
@@ -756,26 +745,15 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         _toastMessage.tryEmit(if (enabled) "已啟用 Full HD/4K 超高畫質模式" else "已切換至標準畫質模式")
     }
 
-    // Vulkan 1.3 AR Hardware Accelerated Graphics & AI Inference Engine
+    // Vulkan 1.3 AR Hardware Accelerated Graphics Engine
     val vulkanGraphicsPipeline = VulkanArGraphicsPipeline(app)
-    val vulkanAiBridge = VulkanAiInferenceBridge(app)
 
     val isVulkanGraphicsEnabled = MutableStateFlow(prefs.getBoolean("vulkan_graphics_enabled", true))
-    val isVulkanAiEnabled = MutableStateFlow(prefs.getBoolean("vulkan_ai_enabled", true))
-
-    private val _vulkanAiMetrics = MutableStateFlow(vulkanAiBridge.metrics)
-    val vulkanAiMetrics: StateFlow<VulkanAiMetrics> = _vulkanAiMetrics.asStateFlow()
 
     fun setVulkanGraphicsEnabled(enabled: Boolean) {
         isVulkanGraphicsEnabled.value = enabled
         prefs.edit().putBoolean("vulkan_graphics_enabled", enabled).apply()
         _toastMessage.tryEmit(if (enabled) "🚀 已啟用 Vulkan 3D 空間網格與線段硬件加速渲染" else "已切換至 OpenGL ES 渲染管線")
-    }
-
-    fun setVulkanAiEnabled(enabled: Boolean) {
-        isVulkanAiEnabled.value = enabled
-        prefs.edit().putBoolean("vulkan_ai_enabled", enabled).apply()
-        _toastMessage.tryEmit(if (enabled) "⚡ 已啟用 Vulkan TFLite GPU 視覺推論加速 (MobileSAM / Objectron 3D)" else "已切換至標準 CPU 推論後端")
     }
 
     fun setSensorCorrectionEnabled(enabled: Boolean) {
@@ -980,277 +958,6 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             appendLine("• 對齊觸覺回饋: ${if (vibrateOnAlignment.value) "開啟" else "關閉"}")
             appendLine("報告產生時間: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())}")
         }
-    }
-
-    // AI Core Tile Recognition & One-Tap Measurement State
-    private val _isAiTileMode = MutableStateFlow(true)
-    val isAiTileMode: StateFlow<Boolean> = _isAiTileMode.asStateFlow()
-
-    private val _isAiTileAnalyzing = MutableStateFlow(false)
-    val isAiTileAnalyzing: StateFlow<Boolean> = _isAiTileAnalyzing.asStateFlow()
-
-    private val _detectedTiles = MutableStateFlow<List<DetectedTile>>(emptyList())
-    val detectedTiles: StateFlow<List<DetectedTile>> = _detectedTiles.asStateFlow()
-
-    private val _selectedTileForDetail = MutableStateFlow<DetectedTile?>(null)
-    val selectedTileForDetail: StateFlow<DetectedTile?> = _selectedTileForDetail.asStateFlow()
-
-    private val _tileTargetAreaM2 = MutableStateFlow(16.5) // Default 5 坪 ~ 16.5 m²
-    val tileTargetAreaM2: StateFlow<Double> = _tileTargetAreaM2.asStateFlow()
-
-    private val _tileWastagePercent = MutableStateFlow(10) // 10% 損耗備料
-    val tileWastagePercent: StateFlow<Int> = _tileWastagePercent.asStateFlow()
-
-    private val _activeTilePreset = MutableStateFlow(AiTilePreset.PRESET_60X60)
-    val activeTilePreset: StateFlow<AiTilePreset> = _activeTilePreset.asStateFlow()
-
-    private val _activeTilePattern = MutableStateFlow(TilePatternType.GRID)
-    val activeTilePattern: StateFlow<TilePatternType> = _activeTilePattern.asStateFlow()
-
-    fun setTilePreset(preset: AiTilePreset) {
-        _activeTilePreset.value = preset
-        triggerHapticFeedback()
-        _toastMessage.tryEmit("已切換磁磚規格：${preset.name} (${preset.widthCm.toInt()}×${preset.heightCm.toInt()} cm)")
-    }
-
-    fun setTilePatternType(pattern: TilePatternType) {
-        _activeTilePattern.value = pattern
-        triggerHapticFeedback()
-        _toastMessage.tryEmit("已切換鋪設工法：${pattern.label}")
-    }
-
-    fun setTileTargetAreaM2(area: Double) {
-        _tileTargetAreaM2.value = area.coerceAtLeast(0.1)
-    }
-
-    fun setTileWastagePercent(percent: Int) {
-        _tileWastagePercent.value = percent.coerceIn(0, 30)
-    }
-
-    fun selectTileForDetail(tile: DetectedTile?) {
-        _selectedTileForDetail.value = tile
-    }
-
-    fun toggleAiTileMode(bitmap: Bitmap? = null) {
-        val nextState = !_isAiTileMode.value
-        _isAiTileMode.value = nextState
-        triggerHapticFeedback()
-        if (nextState) {
-            triggerAiTileDetection(bitmap)
-            _toastMessage.tryEmit("已開啟 AI Core 磁磚自動識別")
-        } else {
-            _detectedTiles.value = emptyList()
-            _selectedTileForDetail.value = null
-            _toastMessage.tryEmit("已退出 AI 磁磚識別模式")
-        }
-    }
-
-    fun triggerAiTileDetection(bitmap: Bitmap? = null) {
-        viewModelScope.launch {
-            _isAiTileAnalyzing.value = true
-            try {
-                val center = _liveTargetPoint.value ?: Point3D(0.0, -0.4, -1.2, isArPrecision = true)
-                val tiles = if (bitmap != null) {
-                    val detected = AiTileDetector.analyzeTilesWithGemini(bitmap)
-                    detected.map { t ->
-                        if (t.worldCorners.isEmpty()) {
-                            t.copy(worldCorners = AiTileDetector.createTileCorners(center, t.estimatedWidthCm / 100.0, t.estimatedHeightCm / 100.0))
-                        } else t
-                    }
-                } else {
-                    emptyList()
-                }
-                _detectedTiles.value = tiles
-                if (tiles.isNotEmpty()) {
-                    triggerHapticFeedback()
-                    _toastMessage.tryEmit("已成功辨識 ${tiles.size} 處磁磚結構")
-                } else {
-                    _toastMessage.tryEmit("未偵測到磁磚接縫或格網，請將相機對準磁磚地面")
-                }
-            } catch (e: Exception) {
-                _detectedTiles.value = emptyList()
-            } finally {
-                _isAiTileAnalyzing.value = false
-            }
-        }
-    }
-
-    /**
-     * Continuous Computer Vision frame analyzer for real-time tile detection
-     */
-    fun processFrameForTiles(bitmap: Bitmap) {
-        if (_isAiTileAnalyzing.value) return
-        viewModelScope.launch(Dispatchers.Default) {
-            _isAiTileAnalyzing.value = true
-            try {
-                val center = _liveTargetPoint.value ?: Point3D(0.0, -0.4, -1.2, isArPrecision = true)
-                val tiles = AiTileDetector.detectTilesFromBitmap(bitmap, _activeTilePreset.value, center)
-                _detectedTiles.value = tiles
-            } catch (e: Exception) {
-                // Ignore transient frame analysis errors
-            } finally {
-                _isAiTileAnalyzing.value = false
-            }
-        }
-    }
-
-    /**
-     * One-Tap Tile Measurement: Instantly places the 4 corner 3D anchor points in AR space,
-     * computes the exact dimensions and area, and opens the tile spec calculation sheet.
-     */
-    fun measureTileOneTap(tile: DetectedTile) {
-        viewModelScope.launch {
-            saveUndoState()
-            capturedPoints.clear()
-
-            if (tile.worldCorners.size == 4) {
-                capturedPoints.addAll(tile.worldCorners)
-            } else {
-                val wMeters = tile.estimatedWidthCm / 100.0
-                val hMeters = tile.estimatedHeightCm / 100.0
-                val center = _liveTargetPoint.value ?: Point3D(0.0, -0.4, -1.2, isArPrecision = true)
-                capturedPoints.addAll(AiTileDetector.createTileCorners(center, wMeters, hMeters))
-            }
-            _autoDetectedType.value = "AREA"
-            _selectedTileForDetail.value = tile
-
-            triggerHapticFeedback()
-            val wStr = "${Math.round(tile.estimatedWidthCm)}"
-            val hStr = "${Math.round(tile.estimatedHeightCm)}"
-            _toastMessage.tryEmit("✨ 已自動鎖定並測量磁磚：${wStr}×${hStr} cm")
-        }
-    }
-
-    // AI 3D Bounding Box (MediaPipe Objectron) Estimation State
-    private val _objectron3DBox = MutableStateFlow<Objectron3DBox?>(null)
-    val objectron3DBox: StateFlow<Objectron3DBox?> = _objectron3DBox.asStateFlow()
-
-    private val _isObjectronMode = MutableStateFlow(false)
-    val isObjectronMode: StateFlow<Boolean> = _isObjectronMode.asStateFlow()
-
-    fun toggleObjectronMode() {
-        val nextState = !_isObjectronMode.value
-        _isObjectronMode.value = nextState
-        triggerHapticFeedback()
-        if (nextState) {
-            updateObjectron3DBox()
-            _toastMessage.tryEmit("已啟用 MediaPipe Objectron 3D AI 立體方框輔助")
-        } else {
-            _objectron3DBox.value = null
-            _toastMessage.tryEmit("已退出 Objectron 3D 模式")
-        }
-    }
-
-    fun updateObjectron3DBox() {
-        if (capturedPoints.isEmpty()) {
-            val liveTarget = _liveTargetPoint.value
-            if (liveTarget != null) {
-                // Generate instant 3D bounding box around live target using Vulkan GPU Delegate if enabled
-                _objectron3DBox.value = if (isVulkanAiEnabled.value) {
-                    val box = vulkanAiBridge.dispatchObjectron3DVulkan(
-                        centerPoint = liveTarget,
-                        widthMeters = 0.30,
-                        heightMeters = 0.20,
-                        depthMeters = 0.25
-                    )
-                    _vulkanAiMetrics.value = vulkanAiBridge.metrics
-                    box
-                } else {
-                    ObjectronEngine.estimateBoxFromPlane(
-                        centerPoint = liveTarget,
-                        widthMeters = 0.30,
-                        heightMeters = 0.20,
-                        depthMeters = 0.25,
-                        category = "Object"
-                    )
-                }
-            } else {
-                _objectron3DBox.value = null
-            }
-        } else {
-            _objectron3DBox.value = ObjectronEngine.fitBoxFromPoints(capturedPoints)
-        }
-    }
-
-    fun applyObjectronBoxCorners() {
-        val box = _objectron3DBox.value ?: return
-        saveUndoState()
-        capturedPoints.clear()
-        capturedPoints.addAll(box.corners)
-        _autoDetectedType.value = "AREA"
-        triggerHapticFeedback()
-        val volLiters = Math.round(box.volumeM3 * 1000.0)
-        _toastMessage.tryEmit("✨ 已鎖定 Objectron 3D 空間錨點（體積: ${volLiters} L）")
-    }
-
-    // MobileSAM / FastSAM On-Device Segmentation State
-    private val _isMobileSamMode = MutableStateFlow(false)
-    val isMobileSamMode: StateFlow<Boolean> = _isMobileSamMode.asStateFlow()
-
-    private val _segmentedObject = MutableStateFlow<SegmentedObject?>(null)
-    val segmentedObject: StateFlow<SegmentedObject?> = _segmentedObject.asStateFlow()
-
-    fun toggleMobileSamMode() {
-        val nextState = !_isMobileSamMode.value
-        _isMobileSamMode.value = nextState
-        triggerHapticFeedback()
-        if (nextState) {
-            _toastMessage.tryEmit("已啟用 MobileSAM 智慧一鍵物件邊緣分割")
-        } else {
-            _segmentedObject.value = null
-            _toastMessage.tryEmit("已退出 MobileSAM 模式")
-        }
-    }
-
-    fun triggerSamSegmentationAtTap(
-        screenTap: androidx.compose.ui.geometry.Offset,
-        screenW: Float,
-        screenH: Float
-    ) {
-        val refPoint = _liveTargetPoint.value ?: capturedPoints.lastOrNull()
-        val segResult = if (isVulkanAiEnabled.value) {
-            val res = vulkanAiBridge.dispatchMobileSamVulkan(
-                promptPoint = screenTap,
-                screenWidth = screenW,
-                screenHeight = screenH,
-                referencePoint = refPoint,
-                viewMatrix = _viewMatrix.value,
-                projectionMatrix = _projectionMatrix.value
-            )
-            _vulkanAiMetrics.value = vulkanAiBridge.metrics
-            res
-        } else {
-            MobileSamEngine.segmentAtPoint(
-                screenTap = screenTap,
-                screenWidth = screenW,
-                screenHeight = screenH,
-                reference3DPoint = refPoint,
-                viewMatrix = _viewMatrix.value,
-                projectionMatrix = _projectionMatrix.value
-            )
-        }
-        _segmentedObject.value = segResult
-        triggerHapticFeedback()
-        _toastMessage.tryEmit("✨ 已分割 ${segResult.label}（面積: ${"%.2f".format(segResult.areaM2)} m²）")
-    }
-
-    fun applySegmentedObjectCorners() {
-        val seg = _segmentedObject.value ?: return
-        saveUndoState()
-        capturedPoints.clear()
-        capturedPoints.addAll(seg.corners3D)
-        _autoDetectedType.value = "AREA"
-        triggerHapticFeedback()
-        _toastMessage.tryEmit("🎯 已鎖定 ${seg.label} 邊緣多邊形測量")
-    }
-
-    fun measureTileUnderReticle() {
-        val detected = _detectedTiles.value.firstOrNull()
-        if (detected == null) {
-            _toastMessage.tryEmit("尚未偵測到磁磚，請將相機對準磁磚地面")
-            return
-        }
-        measureTileOneTap(detected)
     }
 
     init {
@@ -1487,9 +1194,6 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                     _toastMessage.tryEmit("已設定線段 $lineNum 起點 ($charCode)，請瞄準終點")
                 }
                 updateAutoDetectedGeometry()
-                if (_isObjectronMode.value) {
-                    updateObjectron3DBox()
-                }
             }
         }
         return centerHit
@@ -1716,9 +1420,6 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         }
         _liveDistanceMeters.value = null
         _autoDetectedType.value = "DISTANCE"
-        if (_isObjectronMode.value) {
-            updateObjectron3DBox()
-        }
         triggerHapticFeedback()
     }
 

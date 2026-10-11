@@ -360,7 +360,7 @@ class ModernArGlView(
                     projectionMatrix = projMat,
                     capturedPoints = viewModel.getCapturedPointsSnapshot(),
                     liveTarget = viewModel.liveTargetPoint.value,
-                    boxCorners = viewModel.objectron3DBox.value?.corners
+                    boxCorners = null
                 )
             }
 

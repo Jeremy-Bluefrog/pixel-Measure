@@ -90,7 +90,6 @@ fun SettingsScreen(
     val multiSampleAveragingEnabled by viewModel.multiSampleAveragingEnabled.collectAsState()
     val coplanarProjectionEnabled by viewModel.coplanarProjectionEnabled.collectAsState()
     val isVulkanGraphicsEnabled by viewModel.isVulkanGraphicsEnabled.collectAsState()
-    val isVulkanAiEnabled by viewModel.isVulkanAiEnabled.collectAsState()
 
     // UI Styles
     val reticleStyle by viewModel.reticleStyle.collectAsState()
@@ -677,10 +676,10 @@ fun SettingsScreen(
                             Spacer(modifier = Modifier.height(8.dp))
 
                             val reticles = listOf(
-                                "DOUBLE_RING" to "雙環",
-                                "PRECISION_CROSSHAIR" to "十字",
-                                "TARGET_BOX" to "網格",
-                                "MINIMAL_DOT" to "微點"
+                                "DOUBLE_RING" to "地面圓盤",
+                                "PRECISION_CROSSHAIR" to "雙環圓盤",
+                                "TARGET_BOX" to "精確圓環",
+                                "MINIMAL_DOT" to "微型圓盤"
                             )
 
                             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
@@ -877,20 +876,6 @@ fun SettingsScreen(
                                         checked = isVulkanGraphicsEnabled,
                                         onCheckedChange = { viewModel.setVulkanGraphicsEnabled(it) },
                                         testTag = "switch_vulkan_graphics"
-                                    )
-
-                                    HorizontalDivider(
-                                        modifier = Modifier.padding(vertical = 8.dp),
-                                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                                    )
-
-                                    SettingSwitchRow(
-                                        icon = Icons.Rounded.Psychology,
-                                        title = "Vulkan TFLite GPU 視覺推論",
-                                        subtitle = "3D 物件辨識 GPU 加速推論",
-                                        checked = isVulkanAiEnabled,
-                                        onCheckedChange = { viewModel.setVulkanAiEnabled(it) },
-                                        testTag = "switch_vulkan_ai"
                                     )
                                 }
                             }

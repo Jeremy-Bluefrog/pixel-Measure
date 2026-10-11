@@ -11,10 +11,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import com.example.logic.ar.ArMath
-import com.example.logic.ai.ObjectronEngine
 import com.example.ui.viewmodel.MeasureViewModel
 import com.example.ui.viewmodel.Point3D
 import kotlin.math.*
@@ -28,11 +28,215 @@ private val DASH_20_10 = floatArrayOf(20f, 10f)
 private val DASH_12_12 = floatArrayOf(12f, 12f)
 private val DASH_24_12 = floatArrayOf(24f, 12f)
 
+private const val SAMPLES_COUNT = 32
+private val UNIT_COS_TABLE = FloatArray(SAMPLES_COUNT) { i ->
+    kotlin.math.cos(i * (2.0 * Math.PI / SAMPLES_COUNT)).toFloat()
+}
+private val UNIT_SIN_TABLE = FloatArray(SAMPLES_COUNT) { i ->
+    kotlin.math.sin(i * (2.0 * Math.PI / SAMPLES_COUNT)).toFloat()
+}
+
+/**
+ * Projects a 3D circle lying flat on the floor (horizontal XZ plane, constant Y)
+ * into a screen-space Path that accurately exhibits physical perspective foreshortening.
+ */
+private fun buildFloorParallelCirclePath(
+    path: Path,
+    centerX: Double,
+    centerY: Double,
+    centerZ: Double,
+    radiusMeters: Double,
+    viewMatrix: FloatArray,
+    projectionMatrix: FloatArray,
+    screenW: Int,
+    screenH: Int,
+    fallbackCenter: Offset
+): Boolean {
+    path.rewind()
+    if (viewMatrix.size < 16 || projectionMatrix.size < 16 || screenW <= 0 || screenH <= 0) {
+        val rPx = (radiusMeters * 500.0).toFloat().coerceIn(16f, 60f)
+        path.addOval(
+            androidx.compose.ui.geometry.Rect(
+                fallbackCenter.x - rPx,
+                fallbackCenter.y - rPx * 0.50f,
+                fallbackCenter.x + rPx,
+                fallbackCenter.y + rPx * 0.50f
+            )
+        )
+        return true
+    }
+
+    var allProjected = true
+    for (i in 0 until SAMPLES_COUNT) {
+        val wx = centerX + radiusMeters * UNIT_COS_TABLE[i]
+        val wy = centerY // Horizontal ground plane (parallel to floor)
+        val wz = centerZ + radiusMeters * UNIT_SIN_TABLE[i]
+        val proj = ArMath.projectWorldToScreen(Point3D(wx, wy, wz), viewMatrix, projectionMatrix, screenW, screenH)
+        if (proj == null) {
+            allProjected = false
+            break
+        }
+        if (i == 0) {
+            path.moveTo(proj.first, proj.second)
+        } else {
+            path.lineTo(proj.first, proj.second)
+        }
+    }
+
+    if (allProjected) {
+        path.close()
+        return true
+    }
+
+    val rPx = (radiusMeters * 500.0).toFloat().coerceIn(16f, 60f)
+    path.rewind()
+    path.addOval(
+        androidx.compose.ui.geometry.Rect(
+            fallbackCenter.x - rPx,
+            fallbackCenter.y - rPx * 0.50f,
+            fallbackCenter.x + rPx,
+            fallbackCenter.y + rPx * 0.50f
+        )
+    )
+    return true
+}
+
+/**
+ * Draws a high-precision 3D circular measurement anchor disc lying parallel to the floor (ground plane).
+ * Projected via 3D camera view and projection matrices to accurately reflect real-world ground perspective.
+ */
+private fun DrawScope.drawFloorParallelAnchorDisc(
+    center3D: Point3D,
+    screenCenter: Offset,
+    viewMatrix: FloatArray,
+    projectionMatrix: FloatArray,
+    screenW: Int,
+    screenH: Int,
+    primaryColor: Color,
+    accentColor: Color,
+    isTarget: Boolean = false,
+    isSnapped: Boolean = false,
+    pulseScale: Float = 1.0f,
+    outerPath: Path,
+    innerPath: Path,
+    corePath: Path,
+    shadowPath: Path,
+    auraPath: Path
+) {
+    val vz = if (viewMatrix.size >= 16) {
+        -(viewMatrix[2] * center3D.x.toFloat() +
+          viewMatrix[6] * center3D.y.toFloat() +
+          viewMatrix[10] * center3D.z.toFloat() +
+          viewMatrix[14])
+    } else 1.0f
+    val depth = kotlin.math.abs(vz).coerceIn(0.25f, 10.0f)
+    val baseRadiusM = (0.038 * kotlin.math.sqrt(depth.toDouble())).coerceIn(0.022, 0.12)
+    val currentRadiusM = baseRadiusM * (if (isTarget) pulseScale.toDouble() else 1.0)
+    val innerRadiusM = currentRadiusM * 0.54
+    val coreRadiusM = currentRadiusM * 0.20
+    val shadowRadiusM = currentRadiusM * 1.10
+    val auraRadiusM = currentRadiusM * 1.35
+
+    val hasOuter = buildFloorParallelCirclePath(outerPath, center3D.x, center3D.y, center3D.z, currentRadiusM, viewMatrix, projectionMatrix, screenW, screenH, screenCenter)
+    val hasInner = buildFloorParallelCirclePath(innerPath, center3D.x, center3D.y, center3D.z, innerRadiusM, viewMatrix, projectionMatrix, screenW, screenH, screenCenter)
+    val hasCore = buildFloorParallelCirclePath(corePath, center3D.x, center3D.y, center3D.z, coreRadiusM, viewMatrix, projectionMatrix, screenW, screenH, screenCenter)
+    val hasShadow = buildFloorParallelCirclePath(shadowPath, center3D.x, center3D.y, center3D.z, shadowRadiusM, viewMatrix, projectionMatrix, screenW, screenH, screenCenter)
+
+    val activeColor = if (isSnapped) accentColor else primaryColor
+
+    // 1. Floor Drop Shadow (Soft contact shadow on ground)
+    if (hasShadow) {
+        drawPath(
+            path = shadowPath,
+            color = Color.Black.copy(alpha = 0.28f),
+            style = Stroke(width = 3.2.dp.toPx(), cap = StrokeCap.Round)
+        )
+    }
+
+    // 2. Pulse / Snapping Halo Aura on the floor
+    if (isSnapped || isTarget) {
+        val hasAura = buildFloorParallelCirclePath(auraPath, center3D.x, center3D.y, center3D.z, auraRadiusM, viewMatrix, projectionMatrix, screenW, screenH, screenCenter)
+        if (hasAura) {
+            drawPath(
+                path = auraPath,
+                color = activeColor.copy(alpha = if (isSnapped) 0.55f else 0.25f * (2f - pulseScale).coerceIn(0f, 1f)),
+                style = Stroke(width = if (isSnapped) 2.8.dp.toPx() else 1.8.dp.toPx())
+            )
+        }
+    }
+
+    // 3. Ground Disc Translucent Base Fill
+    if (hasOuter) {
+        drawPath(
+            path = outerPath,
+            color = activeColor.copy(alpha = if (isSnapped) 0.38f else if (isTarget) 0.22f else 0.30f),
+            style = Fill
+        )
+        // 4. Outer Ground Perimeter Ring
+        drawPath(
+            path = outerPath,
+            color = activeColor.copy(alpha = 0.95f),
+            style = Stroke(width = if (isSnapped) 2.8.dp.toPx() else 2.2.dp.toPx(), cap = StrokeCap.Round)
+        )
+    }
+
+    // 5. 4 Floor-Parallel Cardinal Alignment Cross Ticks
+    val tickAngles = floatArrayOf(0f, 90f, 180f, 270f)
+    for (angleDeg in tickAngles) {
+        val rad = Math.toRadians(angleDeg.toDouble())
+        val cosA = kotlin.math.cos(rad)
+        val sinA = kotlin.math.sin(rad)
+        val pInner = Point3D(center3D.x + innerRadiusM * cosA, center3D.y, center3D.z + innerRadiusM * sinA)
+        val pOuter = Point3D(center3D.x + currentRadiusM * cosA, center3D.y, center3D.z + currentRadiusM * sinA)
+        val proj1 = ArMath.projectWorldToScreen(pInner, viewMatrix, projectionMatrix, screenW, screenH)
+        val proj2 = ArMath.projectWorldToScreen(pOuter, viewMatrix, projectionMatrix, screenW, screenH)
+        if (proj1 != null && proj2 != null) {
+            drawLine(
+                color = Color.White.copy(alpha = 0.85f),
+                start = Offset(proj1.first, proj1.second),
+                end = Offset(proj2.first, proj2.second),
+                strokeWidth = 1.6.dp.toPx(),
+                cap = StrokeCap.Round
+            )
+        }
+    }
+
+    // 6. Middle Concentric Ring on the floor
+    if (hasInner) {
+        drawPath(
+            path = innerPath,
+            color = Color.White.copy(alpha = 0.90f),
+            style = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round)
+        )
+    }
+
+    // 7. Center Pinpoint Core on the floor
+    if (hasCore) {
+        drawPath(
+            path = corePath,
+            color = Color.White,
+            style = Fill
+        )
+        drawPath(
+            path = corePath,
+            color = activeColor,
+            style = Stroke(width = 1.2.dp.toPx())
+        )
+    }
+
+    // Core Center Dot
+    drawCircle(
+        color = activeColor,
+        center = screenCenter,
+        radius = 2.4.dp.toPx()
+    )
+}
+
 /**
  * 專業硬體加速 3D AR 空間測量繪製畫布 (Hardware-Accelerated AR Measurement Canvas Overlay)
  *
  * 核心渲染能力：
- * 1. 支援六大測量模式幾何繪製：直線距離、封閉多邊形面積、空間垂準高度、空間夾角弧形、3D 包絡方框與 MobileSAM 分割輪廓。
+ * 1. 支援多元測量模式幾何繪製：直線距離、封閉多邊形面積、空間垂準高度、圓形直徑與空間夾角弧形。
  * 2. 支援四大準心風格 (DOUBLE_RING, PRECISION_CROSSHAIR, MINIMAL_DOT, HOLOGRAPHIC_RADAR) 與磁吸鎖定回饋。
  * 3. 支援 3D 透視輔助網格 (PERSPECTIVE_GRID, DOT_MATRIX, OFF) 與特徵點雲空間視覺化。
  * 4. 支援字體大小 (COMPACT, STANDARD, LARGE)、標籤透明度 (SOLID, GLASS, CLEAR) 與線寬自適應。
@@ -42,7 +246,6 @@ private val DASH_24_12 = floatArrayOf(24f, 12f)
 fun ArMeasurementCanvasOverlay(
     viewModel: MeasureViewModel,
     pings: List<Pair<Offset, Animatable<Float, AnimationVector1D>>>,
-    revealedTileIds: Map<String, Boolean>,
     dashPhase: State<Float>,
     reticlePulseScale: State<Float>,
     snapScaleAnimated: State<Float>,
@@ -70,11 +273,6 @@ fun ArMeasurementCanvasOverlay(
     val subMode by viewModel.cameraSubMode.collectAsState()
     val autoDetectedType by viewModel.autoDetectedType.collectAsState()
     val selectedUnit by viewModel.selectedUnit.collectAsState()
-    val isObjectronMode by viewModel.isObjectronMode.collectAsState()
-    val objectron3DBox by viewModel.objectron3DBox.collectAsState()
-    val isMobileSamMode by viewModel.isMobileSamMode.collectAsState()
-    val segmentedObject by viewModel.segmentedObject.collectAsState()
-    val detectedTiles by viewModel.detectedTiles.collectAsState()
     val planesCount by viewModel.arPlanesCount.collectAsState()
     val sensorTelemetry by viewModel.sensorTelemetry.collectAsState()
     val lineThickness by viewModel.lineThickness.collectAsState()
@@ -126,14 +324,17 @@ fun ArMeasurementCanvasOverlay(
     }
 
     // Reusable Path caches
-    val samCachedPath = remember { Path() }
     val areaCachedPath = remember { Path() }
     val haloCachedPath = remember { Path() }
     val baseCachedPath = remember { Path() }
     val innerCachedPath = remember { Path() }
     val reticleCachedPath = remember { Path() }
     val floorInnerReticleCachedPath = remember { Path() }
-    val bracketBatchCachedPath = remember { Path() }
+    val floorOuterPath = remember { Path() }
+    val floorInnerPath = remember { Path() }
+    val floorCorePath = remember { Path() }
+    val floorShadowPath = remember { Path() }
+    val floorAuraPath = remember { Path() }
 
     // Persistent 2D smooth reticle position holder
     val reticlePosHolder = remember { floatArrayOf(-1000f, -1000f) }
@@ -753,18 +954,6 @@ fun ArMeasurementCanvasOverlay(
                         cap = StrokeCap.Round
                     )
 
-                    // Solid endpoint cap
-                    drawCircle(
-                        color = Color.White,
-                        center = currentReticlePos,
-                        radius = 4.dp.toPx()
-                    )
-                    drawCircle(
-                        color = colorSecondary,
-                        center = currentReticlePos,
-                        radius = 2.dp.toPx()
-                    )
-
                     // Area Mode: Live rubber-band closing dashed line from reticle to first point
                     if (isAreaMode && projectedPoints.size >= 2) {
                         val firstPt = projectedPoints.first()
@@ -838,428 +1027,64 @@ fun ArMeasurementCanvasOverlay(
         }
 
         // -------------------------------------------------------------
-        // 5. MediaPipe Objectron 3D Bounding Box Wireframe
-        // -------------------------------------------------------------
-        if (isObjectronMode && objectron3DBox != null) {
-            val box = objectron3DBox!!
-            val boxScreenCorners = box.corners.map { cornerPt ->
-                ArMath.projectWorldToScreen(cornerPt, viewMatrix, projectionMatrix, screenW, screenH)
-            }
-
-            val boxCyan = colorPrimary
-            val boxAmber = colorTertiary
-
-            // 12 Wireframe Edges
-            ObjectronEngine.WIREFRAME_EDGES.forEach { (i1, i2) ->
-                val p1 = boxScreenCorners.getOrNull(i1)
-                val p2 = boxScreenCorners.getOrNull(i2)
-                if (p1 != null && p2 != null) {
-                    val edgeColor = when {
-                        i1 < 4 && i2 < 4 -> boxCyan
-                        i1 >= 4 && i2 >= 4 -> boxAmber
-                        else -> Color.White.copy(alpha = 0.85f)
-                    }
-                    drawLine(
-                        color = edgeColor,
-                        start = Offset(p1.first, p1.second),
-                        end = Offset(p2.first, p2.second),
-                        strokeWidth = 2.5.dp.toPx(),
-                        cap = StrokeCap.Round
-                    )
-                }
-            }
-
-            // 8 Vertex Keypoints
-            boxScreenCorners.forEachIndexed { vIdx, proj ->
-                if (proj != null) {
-                    val vOffset = Offset(proj.first, proj.second)
-                    val isTopVertex = vIdx >= 4
-                    val vColor = if (isTopVertex) boxAmber else boxCyan
-
-                    drawCircle(
-                        color = Color.Black.copy(alpha = 0.5f),
-                        center = Offset(vOffset.x, vOffset.y + 1.5f),
-                        radius = 5.dp.toPx()
-                    )
-                    drawCircle(
-                        color = Color.White,
-                        center = vOffset,
-                        radius = 4.5.dp.toPx()
-                    )
-                    drawCircle(
-                        color = vColor,
-                        center = vOffset,
-                        radius = 3.dp.toPx()
-                    )
-                }
-            }
-
-            // Center Ground Projection Reticle & Volume Badge
-            val centerProj = ArMath.projectWorldToScreen(box.center, viewMatrix, projectionMatrix, screenW, screenH)
-            if (centerProj != null) {
-                val cOffset = Offset(centerProj.first, centerProj.second)
-                drawCircle(
-                    color = boxCyan.copy(alpha = 0.35f * reticlePulseScale.value),
-                    center = cOffset,
-                    radius = (16.dp * reticlePulseScale.value).toPx(),
-                    style = Stroke(width = 1.5.dp.toPx())
-                )
-
-                val volM3 = box.volumeM3
-                val volText = "體積 %.3f m³".format(java.util.Locale.US, volM3)
-                drawContext.canvas.nativeCanvas.apply {
-                    val textWidth = badgeTextPaint.measureText(volText)
-                    val textHeight = badgeTextPaint.textSize
-                    val padH = 28f
-                    val padV = 16f
-                    val left = cOffset.x - textWidth / 2f - padH
-                    val top = cOffset.y - textHeight / 2f - padV
-                    val right = cOffset.x + textWidth / 2f + padH
-                    val bottom = cOffset.y + textHeight / 2f + padV
-                    val radius = 34f
-
-                    badgeBgPaint.color = 0x66000000
-                    drawRoundRect(left + 2f, top + 4f, right + 2f, bottom + 4f, radius, radius, badgeBgPaint)
-                    badgeBgPaint.color = Color(boxAmber.red, boxAmber.green, boxAmber.blue, badgeAlpha).toArgb()
-                    drawRoundRect(left, top, right, bottom, radius, radius, badgeBgPaint)
-                    badgeBorderPaint.color = Color.White.copy(alpha = 0.85f).toArgb()
-                    drawRoundRect(left, top, right, bottom, radius, radius, badgeBorderPaint)
-                    badgeTextPaint.color = Color.Black.toArgb()
-                    drawText(volText, cOffset.x, cOffset.y + textHeight * 0.35f, badgeTextPaint)
-                }
-            }
-        }
-
-        // -------------------------------------------------------------
-        // 6. MobileSAM Segment Anything Mask & Boundary
-        // -------------------------------------------------------------
-        if (isMobileSamMode && segmentedObject != null) {
-            val seg = segmentedObject!!
-            if (seg.contour2D.size >= 3) {
-                val samPath = samCachedPath.apply {
-                    reset()
-                    moveTo(seg.contour2D[0].x, seg.contour2D[0].y)
-                    for (i in 1 until seg.contour2D.size) {
-                        lineTo(seg.contour2D[i].x, seg.contour2D[i].y)
-                    }
-                    close()
-                }
-                val samEmerald = colorPrimary
-                val samCyan = colorSecondary
-
-                // Translucent radial gradient fill mask
-                drawPath(
-                    path = samPath,
-                    brush = Brush.radialGradient(
-                        colors = listOf(samEmerald.copy(alpha = 0.35f), samCyan.copy(alpha = 0.12f)),
-                        center = seg.promptPoint,
-                        radius = 220.dp.toPx()
-                    )
-                )
-
-                // Glowing neon border stroke with dashes
-                drawPath(
-                    path = samPath,
-                    color = samEmerald,
-                    style = Stroke(
-                        width = 3.dp.toPx(),
-                        cap = StrokeCap.Round,
-                        join = StrokeJoin.Round,
-                        pathEffect = PathEffect.dashPathEffect(DASH_24_12, 0f)
-                    )
-                )
-
-                // Vertex pinpoints
-                seg.contour2D.forEach { pt ->
-                    drawCircle(color = Color.White, center = pt, radius = 4.dp.toPx())
-                    drawCircle(color = samEmerald, center = pt, radius = 2.5.dp.toPx())
-                }
-
-                // Prompt point radar beacon
-                drawCircle(
-                    color = Color.White,
-                    center = seg.promptPoint,
-                    radius = 5.dp.toPx()
-                )
-                drawCircle(
-                    color = samEmerald,
-                    center = seg.promptPoint,
-                    radius = (14.dp * reticlePulseScale.value).toPx(),
-                    style = Stroke(width = 2.dp.toPx())
-                )
-            }
-        }
-
-        // -------------------------------------------------------------
-        // 7. AI Detected Tiles AR Bounding Frame
-        // -------------------------------------------------------------
-        if (detectedTiles.isNotEmpty()) {
-            val tileGold = colorPrimary
-            val tileCyan = colorSecondary
-
-            detectedTiles.forEach { tile ->
-                val leftPx = tile.leftNorm * screenW
-                val topPx = tile.topNorm * screenH
-                val rightPx = tile.rightNorm * screenW
-                val bottomPx = tile.bottomNorm * screenH
-
-                val tWidth = rightPx - leftPx
-                val tHeight = bottomPx - topPx
-                val isRevealed = revealedTileIds[tile.id] == true
-
-                if (tWidth > 30f && tHeight > 30f) {
-                    if (isRevealed) {
-                        drawRoundRect(
-                            color = tileGold.copy(alpha = 0.16f),
-                            topLeft = Offset(leftPx, topPx),
-                            size = Size(tWidth, tHeight),
-                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(16f, 16f)
-                        )
-                        drawRoundRect(
-                            color = tileGold,
-                            topLeft = Offset(leftPx, topPx),
-                            size = Size(tWidth, tHeight),
-                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(16f, 16f),
-                            style = Stroke(
-                                width = 3.dp.toPx(),
-                                pathEffect = PathEffect.dashPathEffect(DASH_20_10, 0f)
-                            )
-                        )
-                    } else {
-                        drawRoundRect(
-                            color = Color.White.copy(alpha = 0.28f),
-                            topLeft = Offset(leftPx, topPx),
-                            size = Size(tWidth, tHeight),
-                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(16f, 16f),
-                            style = Stroke(
-                                width = 1.5.dp.toPx(),
-                                pathEffect = PathEffect.dashPathEffect(DASH_12_12, 0f)
-                            )
-                        )
-                    }
-
-                    // Batched Corner L-Brackets
-                    val bracketLen = minOf(tWidth, tHeight) * 0.20f
-                    val bracketColor = if (isRevealed) tileCyan else Color.White.copy(alpha = 0.65f)
-                    val bracketStroke = if (isRevealed) 3.5.dp.toPx() else 2.dp.toPx()
-
-                    bracketBatchCachedPath.apply {
-                        reset()
-                        // Top-Left
-                        moveTo(leftPx, topPx + bracketLen)
-                        lineTo(leftPx, topPx)
-                        lineTo(leftPx + bracketLen, topPx)
-                        // Top-Right
-                        moveTo(rightPx - bracketLen, topPx)
-                        lineTo(rightPx, topPx)
-                        lineTo(rightPx, topPx + bracketLen)
-                        // Bottom-Left
-                        moveTo(leftPx, bottomPx - bracketLen)
-                        lineTo(leftPx, bottomPx)
-                        lineTo(leftPx + bracketLen, bottomPx)
-                        // Bottom-Right
-                        moveTo(rightPx - bracketLen, bottomPx)
-                        lineTo(rightPx, bottomPx)
-                        lineTo(rightPx, bottomPx - bracketLen)
-                    }
-                    drawPath(
-                        path = bracketBatchCachedPath,
-                        color = bracketColor,
-                        style = Stroke(width = bracketStroke, cap = StrokeCap.Round)
-                    )
-                }
-            }
-        }
-
-        // -------------------------------------------------------------
-        // 8. High-Visibility Billboard Anchor Pin Node Markers
+        // 5. Floor-Parallel Circular Measurement Anchors (地面平行圓形原點)
         // -------------------------------------------------------------
         pointsSnapshot.forEachIndexed { index, pt3d ->
             val proj = projectedPoints.getOrNull(index)
             if (proj != null) {
                 val offset = Offset(proj.first, proj.second)
-                val isStartNode = index == 0
-                val isLastNode = index == pointsSnapshot.size - 1 && pointsSnapshot.size > 1
-                val nodeColor = if (isStartNode) colorPrimary else if (isLastNode) colorSecondary else colorTertiary
-
-                // Luminous pulse aura around active/latest node
-                if (isLastNode || isStartNode) {
-                    drawCircle(
-                        color = nodeColor.copy(alpha = 0.22f * (2f - reticlePulseScale.value)),
-                        center = offset,
-                        radius = (14.dp * reticlePulseScale.value).toPx(),
-                        style = Stroke(width = 2.dp.toPx())
-                    )
-                }
-
-                // Outer ambient shadow
-                drawCircle(
-                    color = Color.Black.copy(alpha = 0.5f),
-                    center = Offset(offset.x + 1f, offset.y + 1.5f),
-                    radius = 9.dp.toPx()
+                drawFloorParallelAnchorDisc(
+                    center3D = pt3d,
+                    screenCenter = offset,
+                    viewMatrix = viewMatrix,
+                    projectionMatrix = projectionMatrix,
+                    screenW = screenW,
+                    screenH = screenH,
+                    primaryColor = colorPrimary,
+                    accentColor = colorTertiary,
+                    isTarget = false,
+                    isSnapped = false,
+                    outerPath = floorOuterPath,
+                    innerPath = floorInnerPath,
+                    corePath = floorCorePath,
+                    shadowPath = floorShadowPath,
+                    auraPath = floorAuraPath
                 )
-
-                // Outer colored anchor pin ring
-                drawCircle(
-                    color = nodeColor,
-                    center = offset,
-                    radius = 8.dp.toPx()
-                )
-
-                // Inner white contrast disc
-                drawCircle(
-                    color = Color.White,
-                    center = offset,
-                    radius = 5.5.dp.toPx()
-                )
-
-                // Core pinpoint center dot
-                drawCircle(
-                    color = nodeColor,
-                    center = offset,
-                    radius = 3.5.dp.toPx()
-                )
-
-                // Floating Node Label Letter (A, B, C, D...)
-                val labelChar = ('A'.code + index).toChar().toString()
-                drawContext.canvas.nativeCanvas.apply {
-                    val labelBgRadius = 16f
-                    val labelCenterY = offset.y - 18.dp.toPx()
-                    badgeBgPaint.color = 0xDD000000.toInt()
-                    drawCircle(offset.x, labelCenterY, labelBgRadius, badgeBgPaint)
-                    badgeBorderPaint.color = nodeColor.toArgb()
-                    drawCircle(offset.x, labelCenterY, labelBgRadius, badgeBorderPaint)
-                    drawText(labelChar, offset.x, labelCenterY + 8f, nodeLabelPaint)
-                }
             }
         }
 
         // -------------------------------------------------------------
-        // 9. Modern Dynamic 3D Target Reticle (根據 reticleStyle 繪製)
+        // 9. Floor-Parallel Active Target Reticle (地面平行圓形準星定位點)
         // -------------------------------------------------------------
-        val reticleCenter = currentReticlePos
-        val baseRadius = 16.dp.toPx()
-        val currentRadius = baseRadius * snapScaleAnimated.value * reticlePulseScale.value
-
-        // Snapping outer aura
-        if (isSnapped) {
-            drawCircle(
-                color = colorTertiary.copy(alpha = snapGlowAlphaAnimated.value * 0.45f),
-                center = reticleCenter,
-                radius = currentRadius * 1.8f
-            )
+        val activeTarget3D = liveTargetPoint ?: run {
+            val groundY = pointsSnapshot.firstOrNull()?.y ?: -0.45
+            Point3D(0.0, groundY, -1.2)
         }
 
-        when (reticleStyle) {
-            "MINIMAL_DOT" -> {
-                // Minimalist glowing dot
-                drawCircle(
-                    color = Color.Black.copy(alpha = 0.45f),
-                    center = Offset(reticleCenter.x + 0.5f, reticleCenter.y + 1f),
-                    radius = 6.dp.toPx()
-                )
-                drawCircle(
-                    color = Color.White,
-                    center = reticleCenter,
-                    radius = 5.dp.toPx()
-                )
-                drawCircle(
-                    color = if (isSnapped) colorTertiary else colorPrimary,
-                    center = reticleCenter,
-                    radius = 3.dp.toPx()
-                )
-                if (isSnapped) {
-                    drawCircle(
-                        color = colorTertiary,
-                        center = reticleCenter,
-                        radius = 12.dp.toPx(),
-                        style = Stroke(width = 1.5.dp.toPx())
-                    )
-                }
-            }
-
-            "PRECISION_CROSSHAIR" -> {
-                // High precision crosshair with distance ticks
-                val crossColor = if (isSnapped) colorTertiary else colorPrimary
-                val armLen = 24.dp.toPx()
-                val gap = 6.dp.toPx()
-                val strokeW = 2.dp.toPx()
-
-                // 4 Crosshair Arms
-                drawLine(crossColor, Offset(reticleCenter.x - armLen, reticleCenter.y), Offset(reticleCenter.x - gap, reticleCenter.y), strokeW, StrokeCap.Round)
-                drawLine(crossColor, Offset(reticleCenter.x + gap, reticleCenter.y), Offset(reticleCenter.x + armLen, reticleCenter.y), strokeW, StrokeCap.Round)
-                drawLine(crossColor, Offset(reticleCenter.x, reticleCenter.y - armLen), Offset(reticleCenter.x, reticleCenter.y - gap), strokeW, StrokeCap.Round)
-                drawLine(crossColor, Offset(reticleCenter.x, reticleCenter.y + gap), Offset(reticleCenter.x, reticleCenter.y + armLen), strokeW, StrokeCap.Round)
-
-                // Sub-ticks
-                val subLen = 3.5.dp.toPx()
-                val subPos = 14.dp.toPx()
-                drawLine(crossColor.copy(alpha = 0.7f), Offset(reticleCenter.x - subPos, reticleCenter.y - subLen), Offset(reticleCenter.x - subPos, reticleCenter.y + subLen), 1.2.dp.toPx())
-                drawLine(crossColor.copy(alpha = 0.7f), Offset(reticleCenter.x + subPos, reticleCenter.y - subLen), Offset(reticleCenter.x + subPos, reticleCenter.y + subLen), 1.2.dp.toPx())
-                drawLine(crossColor.copy(alpha = 0.7f), Offset(reticleCenter.x - subLen, reticleCenter.y - subPos), Offset(reticleCenter.x + subLen, reticleCenter.y - subPos), 1.2.dp.toPx())
-                drawLine(crossColor.copy(alpha = 0.7f), Offset(reticleCenter.x - subLen, reticleCenter.y + subPos), Offset(reticleCenter.x + subLen, reticleCenter.y + subPos), 1.2.dp.toPx())
-
-                // Center aperture
-                drawCircle(color = Color.White, center = reticleCenter, radius = 2.5.dp.toPx())
-            }
-
-            "HOLOGRAPHIC_RADAR" -> {
-                // Holographic radar rotating rings
-                val radarColor = if (isSnapped) colorTertiary else colorPrimary
-                // Outer dashed ring
-                drawCircle(
-                    color = radarColor.copy(alpha = 0.65f),
-                    center = reticleCenter,
-                    radius = currentRadius * 1.3f,
-                    style = Stroke(width = 1.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(DASH_10_6, dashPhase.value))
-                )
-                // Inner solid ring
-                drawCircle(
-                    color = Color.White.copy(alpha = 0.85f),
-                    center = reticleCenter,
-                    radius = currentRadius * 0.75f,
-                    style = Stroke(width = 1.5.dp.toPx())
-                )
-                // 4 Cardinal tick pips
-                for (angle in 0 until 360 step 90) {
-                    val rad = Math.toRadians((angle + dashPhase.value * 4).toDouble())
-                    val pStart = Offset(reticleCenter.x + (cos(rad) * currentRadius * 0.9f).toFloat(), reticleCenter.y + (sin(rad) * currentRadius * 0.9f).toFloat())
-                    val pEnd = Offset(reticleCenter.x + (cos(rad) * currentRadius * 1.35f).toFloat(), reticleCenter.y + (sin(rad) * currentRadius * 1.35f).toFloat())
-                    drawLine(radarColor, pStart, pEnd, 2.dp.toPx(), StrokeCap.Round)
-                }
-                // Center core
-                drawCircle(color = Color.White, center = reticleCenter, radius = 3.dp.toPx())
-                drawCircle(color = radarColor, center = reticleCenter, radius = 1.8.dp.toPx())
-            }
-
-            else -> { // "DOUBLE_RING" (Default)
-                // Dual concentric rings with shadow
-                drawCircle(
-                    color = Color.Black.copy(alpha = 0.35f),
-                    center = Offset(reticleCenter.x + 1f, reticleCenter.y + 1.5f),
-                    radius = currentRadius,
-                    style = Stroke(width = 3.dp.toPx())
-                )
-                drawCircle(
-                    color = if (isSnapped) colorTertiary else colorPrimary,
-                    center = reticleCenter,
-                    radius = currentRadius,
-                    style = Stroke(width = if (isSnapped) 2.8.dp.toPx() else 2.0.dp.toPx())
-                )
-                drawCircle(
-                    color = Color.White.copy(alpha = 0.85f),
-                    center = reticleCenter,
-                    radius = currentRadius * 0.5f,
-                    style = Stroke(width = 1.5.dp.toPx())
-                )
-                drawCircle(color = Color.White, center = reticleCenter, radius = 3.5.dp.toPx())
-                drawCircle(color = if (isSnapped) colorTertiary else colorPrimary, center = reticleCenter, radius = 2.0.dp.toPx())
-            }
-        }
+        drawFloorParallelAnchorDisc(
+            center3D = activeTarget3D,
+            screenCenter = currentReticlePos,
+            viewMatrix = viewMatrix,
+            projectionMatrix = projectionMatrix,
+            screenW = screenW,
+            screenH = screenH,
+            primaryColor = colorPrimary,
+            accentColor = colorTertiary,
+            isTarget = true,
+            isSnapped = isSnapped,
+            pulseScale = reticlePulseScale.value * snapScaleAnimated.value,
+            outerPath = floorOuterPath,
+            innerPath = floorInnerPath,
+            corePath = floorCorePath,
+            shadowPath = floorShadowPath,
+            auraPath = floorAuraPath
+        )
 
         // Multi-Sample Burst Averaging Dynamic Progress Arc
+        val reticleCenter = currentReticlePos
+        val reticleRadiusPx = (24f * snapScaleAnimated.value * reticlePulseScale.value).dp.toPx()
         if (sensorTelemetry.multiSampleProgress > 0f) {
-            val arcRadius = currentRadius + 6.dp.toPx()
+            val arcRadius = reticleRadiusPx + 6.dp.toPx()
             drawArc(
                 color = if (sensorTelemetry.isMultiSampleLocked) colorTertiary else colorPrimary,
                 startAngle = -90f,

@@ -357,7 +357,7 @@ fun MainScreen(viewModel: MeasureViewModel) {
                                 2 -> {
                                     SpiritLevelComponent(
                                         viewModel = viewModel,
-                                        bottomPadding = 0.dp
+                                        bottomPadding = if (isCompact) innerPadding.calculateBottomPadding() else 16.dp
                                     )
                                 }
                             }

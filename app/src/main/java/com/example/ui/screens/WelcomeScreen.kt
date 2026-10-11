@@ -206,10 +206,10 @@ fun WelcomeScreen(
                         )
 
                         CleanFeatureRow(
-                            icon = Icons.Rounded.ViewModule,
+                            icon = Icons.Rounded.SquareFoot,
                             iconColor = MaterialTheme.colorScheme.tertiary,
-                            title = "智慧地磚與磁磚網格",
-                            description = "自動辨識磁磚紋理，計算單塊規格與整區鋪設數量。"
+                            title = "水平儀與傾角測量",
+                            description = "結合重力與陀螺儀即時感應，精準測量物體表面水平與垂準角度。"
                         )
                     }
                 }

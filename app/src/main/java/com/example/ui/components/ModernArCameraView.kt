@@ -11,105 +11,70 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.view.TextureView
-import com.example.ui.viewmodel.HapticType
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.rounded.*
+import androidx.compose.material.icons.rounded.CameraAlt
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
-import androidx.compose.ui.draw.BlurredEdgeTreatment
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.*
-import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import com.example.logic.ShareUtility
-import com.example.logic.ai.DetectedTile
-import com.example.logic.ai.Objectron3DBox
-import com.example.logic.ai.ObjectronEngine
-import com.example.logic.ai.SegmentedObject
-import com.example.logic.ar.ArMath
-import com.example.logic.ar.ArTrackingStability
 import com.example.logic.ar.ModernArGlView
 import com.example.logic.ar.StabilityLevel
+import com.example.logic.camera.ArVideoRecorder
 import com.example.logic.camera.HighSpeedCamera2Manager
-import com.example.ui.components.TileDetailBottomSheet
+import com.example.ui.viewmodel.HapticType
 import com.example.ui.viewmodel.MeasureViewModel
-import com.example.ui.viewmodel.Point3D
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
-import com.google.accompanist.permissions.shouldShowRationale
-import com.google.ar.core.TrackingFailureReason
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
-import com.google.ar.core.TrackingState
 import kotlinx.coroutines.launch
-import java.text.DecimalFormat
-import kotlin.math.*
+import kotlinx.coroutines.withContext
 
 @OptIn(
     ExperimentalPermissionsApi::class,
     ExperimentalMaterial3Api::class
 )
-@androidx.annotation.OptIn(androidx.camera.camera2.interop.ExperimentalCamera2Interop::class)
 @Composable
 fun ModernArCameraView(
     viewModel: MeasureViewModel,
     onShowHistoryClick: () -> Unit,
     onShowSettingsClick: () -> Unit,
-    bottomPadding: androidx.compose.ui.unit.Dp = 0.dp
+    bottomPadding: Dp = 0.dp
 ) {
     val context = LocalContext.current
     val localView = LocalView.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val coroutineScope = rememberCoroutineScope()
-    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val haptic = LocalHapticFeedback.current
 
     val cameraPermissionState = rememberPermissionState(Manifest.permission.CAMERA)
 
-    // Observe ViewModel states
-    val trackingState by viewModel.arTrackingState.collectAsState()
-    val trackingFailureReason by viewModel.trackingFailureReason.collectAsState()
+    // ViewModel States
     val trackingStability by viewModel.trackingStability.collectAsState()
-    val isDepthAvailable by viewModel.isDepthAvailable.collectAsState()
     val planesCount by viewModel.arPlanesCount.collectAsState()
     val subMode by viewModel.cameraSubMode.collectAsState()
     val autoDetectedType by viewModel.autoDetectedType.collectAsState()
@@ -117,63 +82,46 @@ fun ModernArCameraView(
     val isSnapped by viewModel.isSnapped.collectAsState()
     val isTorchOn by viewModel.isTorchOn.collectAsState()
     val torchBrightness by viewModel.torchBrightness.collectAsState()
-    var showTorchBrightnessMenu by remember { mutableStateOf(false) }
-    val showPointCloud by viewModel.showPointCloud.collectAsState()
+    val isMeasurementAvailable by viewModel.isMeasurementAvailable.collectAsState()
+    val isTakingPhoto by viewModel.isTakingPhoto.collectAsState()
+
     val capturedPoints = viewModel.capturedPoints
     val hasCapturedPoints by remember { derivedStateOf { capturedPoints.isNotEmpty() } }
     val isWaitingForSecondPoint by remember { derivedStateOf { capturedPoints.size % 2 == 1 } }
-    val sensorCorrectionEnabled by viewModel.sensorCorrectionEnabled.collectAsState()
-    val highFpsModeEnabled by viewModel.highFpsModeEnabled.collectAsState()
-    val isObjectronMode by viewModel.isObjectronMode.collectAsState()
-    val objectron3DBox by viewModel.objectron3DBox.collectAsState()
-    val isMobileSamMode by viewModel.isMobileSamMode.collectAsState()
-    val segmentedObject by viewModel.segmentedObject.collectAsState()
-    val isAiTileMode by viewModel.isAiTileMode.collectAsState()
-    val isAiTileAnalyzing by viewModel.isAiTileAnalyzing.collectAsState()
-    val detectedTiles by viewModel.detectedTiles.collectAsState()
-    val activeTilePreset by viewModel.activeTilePreset.collectAsState()
-    val selectedTileForDetail by viewModel.selectedTileForDetail.collectAsState()
-    var showTileDetailSheet by remember { mutableStateOf(false) }
-    val revealedTileIds = remember { mutableStateMapOf<String, Boolean>() }
-    var textureViewRef by remember { mutableStateOf<TextureView?>(null) }
-    var modernArGlViewRef by remember { mutableStateOf<com.example.logic.ar.ModernArGlView?>(null) }
-    val isTakingPhoto by viewModel.isTakingPhoto.collectAsState()
 
-    // Camera Quality, Aspect Ratio & Lens Cleanliness States
+    var textureViewRef by remember { mutableStateOf<TextureView?>(null) }
+    var modernArGlViewRef by remember { mutableStateOf<ModernArGlView?>(null) }
+
     val cameraAspectRatio by viewModel.cameraAspectRatio.collectAsState()
     val useDisplayP3ColorSpace by viewModel.useDisplayP3ColorSpace.collectAsState()
     val isLensDirtWarningEnabled by viewModel.isLensDirtWarningEnabled.collectAsState()
     val isLensSmudged by viewModel.isLensSmudged.collectAsState()
-    val dismissedLowLight by viewModel.dismissedLowLight.collectAsState()
     val simulatedAlert by viewModel.simulatedAlert.collectAsState()
     val uiButtonScale by viewModel.uiButtonScale.collectAsState()
+    val sensorTelemetry by viewModel.sensorTelemetry.collectAsState()
 
-    // AR Measurement Video Recorder (Tap photo, Long-press video recording)
-    val videoRecorder = remember { com.example.logic.camera.ArVideoRecorder(context) }
+    // Video Recorder
+    val videoRecorder = remember { ArVideoRecorder(context) }
     val isRecordingVideo by videoRecorder.isRecording.collectAsState()
     val recordingSeconds by videoRecorder.recordingSeconds.collectAsState()
 
     // Real-time background frame analyzer: throttled & offloaded to Dispatchers.Default
-    LaunchedEffect(isAiTileMode, isLensDirtWarningEnabled) {
-        if (!isAiTileMode && !isLensDirtWarningEnabled) return@LaunchedEffect
+    LaunchedEffect(isLensDirtWarningEnabled) {
+        if (!isLensDirtWarningEnabled) return@LaunchedEffect
         withContext(Dispatchers.Default) {
             val downscaledBmp = Bitmap.createBitmap(160, 160, Bitmap.Config.ARGB_8888)
             while (isActive) {
-                val delayMs = if (isAiTileMode) 1200L else 2600L
-                delay(delayMs)
+                delay(2600L)
                 val currentTv = textureViewRef
                 if (currentTv != null && currentTv.isAvailable) {
                     try {
                         withContext(Dispatchers.Main) {
                             currentTv.getBitmap(downscaledBmp)
                         }
-                        if (isAiTileMode) {
-                            viewModel.processFrameForTiles(downscaledBmp)
-                        }
                         if (isLensDirtWarningEnabled) {
                             viewModel.analyzeLensCleanliness(downscaledBmp)
                         }
-                    } catch (e: Throwable) {
+                    } catch (_: Throwable) {
                         // Ignore transient frame capture errors
                     }
                 }
@@ -184,7 +132,7 @@ fun ModernArCameraView(
     // Touch ripple visual pings
     val pings = remember { mutableStateListOf<Pair<Offset, Animatable<Float, AnimationVector1D>>>() }
 
-    // Dialogs & Guidance Overlay
+    // Dialogs Visibility
     var showHelpDialog by remember { mutableStateOf(false) }
     var showSensorStatusDialog by remember { mutableStateOf(false) }
     var showStabilityDiagnosticsDialog by remember { mutableStateOf(false) }
@@ -192,11 +140,11 @@ fun ModernArCameraView(
     var showLowLightDialog by remember { mutableStateOf(false) }
     var showMotionDialog by remember { mutableStateOf(false) }
     var showFeatureDialog by remember { mutableStateOf(false) }
-    var showAiToolsMenu by remember { mutableStateOf(false) }
 
     val isArOverlayOpen by remember {
         derivedStateOf {
-            showHelpDialog || showSensorStatusDialog || showStabilityDiagnosticsDialog || showLensCleaningDialog || showLowLightDialog || showMotionDialog || showFeatureDialog || showTileDetailSheet || selectedTileForDetail != null
+            showHelpDialog || showSensorStatusDialog || showStabilityDiagnosticsDialog ||
+                showLensCleaningDialog || showLowLightDialog || showMotionDialog || showFeatureDialog
         }
     }
     val arOverlayBlurRadius by animateFloatAsState(
@@ -239,21 +187,21 @@ fun ModernArCameraView(
         }
     }
 
-    // Modern Refined Haptic Feedback Handler (Cross-Android version compatible)
+    // Modern Refined Haptic Feedback Handler
     LaunchedEffect(Unit) {
         viewModel.hapticEvent.collect { type ->
-            val vibrator = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
                 vibratorManager?.defaultVibrator
             } else {
                 @Suppress("DEPRECATION")
-                context.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+                context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
             }
 
             var didVibrate = false
             if (vibrator?.hasVibrator() == true) {
                 try {
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         val effectId = when (type) {
                             HapticType.SNAP -> VibrationEffect.EFFECT_TICK
                             HapticType.CLICK -> VibrationEffect.EFFECT_CLICK
@@ -262,7 +210,7 @@ fun ModernArCameraView(
                         }
                         vibrator.vibrate(VibrationEffect.createPredefined(effectId))
                         didVibrate = true
-                    } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         val duration = when (type) {
                             HapticType.SNAP -> 10L
                             HapticType.CLICK -> 20L
@@ -272,7 +220,7 @@ fun ModernArCameraView(
                         vibrator.vibrate(VibrationEffect.createOneShot(duration, VibrationEffect.DEFAULT_AMPLITUDE))
                         didVibrate = true
                     }
-                } catch (e: Throwable) {
+                } catch (_: Throwable) {
                     didVibrate = false
                 }
             }
@@ -317,7 +265,6 @@ fun ModernArCameraView(
         label = "planeLockedParticle"
     )
 
-    // Redesigned Reactive Spring Animations for Target Snapping & Lock (Ultra-Smooth & Responsive)
     val snapScaleAnimated = animateFloatAsState(
         targetValue = if (isSnapped) 1.20f else 1.0f,
         animationSpec = spring(
@@ -332,66 +279,8 @@ fun ModernArCameraView(
         label = "snapGlowAlphaAnimated"
     )
 
-    val isDark = androidx.compose.foundation.isSystemInDarkTheme()
-
-    val colorPrimary = MaterialTheme.colorScheme.primary
-    val colorOnPrimary = MaterialTheme.colorScheme.onPrimary
-    val colorPrimaryContainer = MaterialTheme.colorScheme.primaryContainer
-    val colorOnPrimaryContainer = MaterialTheme.colorScheme.onPrimaryContainer
-    val colorSecondary = MaterialTheme.colorScheme.secondary
-    val colorOnSecondary = MaterialTheme.colorScheme.onSecondary
-    val colorTertiary = MaterialTheme.colorScheme.tertiary
-    val colorOnTertiary = MaterialTheme.colorScheme.onTertiary
-    val colorSurface = MaterialTheme.colorScheme.surface
-    val colorSurfaceContainer = MaterialTheme.colorScheme.surfaceContainer
-    val colorSurfaceContainerHigh = MaterialTheme.colorScheme.surfaceContainerHigh
-    val colorSurfaceContainerHighest = MaterialTheme.colorScheme.surfaceContainerHighest
-    val colorOnSurface = MaterialTheme.colorScheme.onSurface
-    val colorSurfaceVariant = MaterialTheme.colorScheme.surfaceVariant
-    val colorOnSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
-    val colorOutline = MaterialTheme.colorScheme.outline
-    val colorOutlineVariant = MaterialTheme.colorScheme.outlineVariant
-    val colorError = MaterialTheme.colorScheme.error
-    val colorOnError = MaterialTheme.colorScheme.onError
-
-    // Cached paints for ultra-low latency hardware canvas badge rendering
-    val badgeBgPaint = remember {
-        android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            style = android.graphics.Paint.Style.FILL
-        }
-    }
-    val badgeBorderPaint = remember {
-        android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            style = android.graphics.Paint.Style.STROKE
-            strokeWidth = 3f
-        }
-    }
-    val badgeTextPaint = remember {
-        android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            textSize = 38f
-            typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
-            textAlign = android.graphics.Paint.Align.CENTER
-        }
-    }
-
-    // Reusable Path caches to prevent per-frame GC allocations in Canvas
-    val samCachedPath = remember { Path() }
-    val wallCachedPath = remember { Path() }
-
-    val isMeasurementAvailable by viewModel.isMeasurementAvailable.collectAsState()
-    val sensorTelemetry by viewModel.sensorTelemetry.collectAsState()
-
-    val addFabContainerColor by animateColorAsState(
-        targetValue = if (isMeasurementAvailable) colorPrimary else MaterialTheme.colorScheme.surfaceContainerHighest,
-        animationSpec = tween(240, easing = FastOutSlowInEasing),
-        label = "addFabContainerColor"
-    )
-
-    val addFabIconColor by animateColorAsState(
-        targetValue = if (isMeasurementAvailable) colorOnPrimary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-        animationSpec = tween(240, easing = FastOutSlowInEasing),
-        label = "addFabIconColor"
-    )
+    // Shutter Flash State
+    var isShutterFlash by remember { mutableStateOf(false) }
 
     if (!cameraPermissionState.status.isGranted) {
         // Permission Request UI
@@ -408,14 +297,14 @@ fun ModernArCameraView(
             ) {
                 Surface(
                     shape = CircleShape,
-                    color = colorPrimary.copy(alpha = 0.12f),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
                     modifier = Modifier.size(96.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             Icons.Rounded.CameraAlt,
                             contentDescription = null,
-                            tint = colorPrimary,
+                            tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(48.dp)
                         )
                     }
@@ -425,7 +314,7 @@ fun ModernArCameraView(
                     text = viewModel.getString("perm_camera_title"),
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
-                    color = colorOnSurface,
+                    color = MaterialTheme.colorScheme.onSurface,
                     textAlign = TextAlign.Center
                 )
                 Spacer(modifier = Modifier.height(12.dp))
@@ -456,7 +345,7 @@ fun ModernArCameraView(
                 .fillMaxSize()
                 .hardwareBackdropBlur(isArOverlayOpen, arOverlayBlurRadius)
         ) {
-            // 1. OpenGL ARCore 60 FPS View with Point Cloud
+            // 1. OpenGL ARCore View or High-Speed Camera2 View
             val session = remember(cameraPermissionState.status.isGranted) {
                 viewModel.modernArEngine.createSession()
             }
@@ -490,7 +379,6 @@ fun ModernArCameraView(
                             detectTapGestures { offset ->
                                 haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
 
-                                // Trigger tactile ping ripple
                                 val pingAnim = Animatable(0f)
                                 val pingPair = offset to pingAnim
                                 pings.add(pingPair)
@@ -499,22 +387,11 @@ fun ModernArCameraView(
                                     pings.remove(pingPair)
                                 }
 
-                                if (isMobileSamMode) {
-                                    val screenW = localView.width.takeIf { it > 0 }?.toFloat() ?: 1080f
-                                    val screenH = localView.height.takeIf { it > 0 }?.toFloat() ?: 1920f
-                                    viewModel.triggerSamSegmentationAtTap(offset, screenW, screenH)
-                                } else {
-                                    // Request hit-test at tap coordinates
-                                    viewModel.requestHitTest(offset.x, offset.y)
-                                }
+                                viewModel.requestHitTest(offset.x, offset.y)
                             }
                         }
                 )
             } else {
-                // High-Performance Camera2 High-Speed / 60 FPS Direct Hardware Surface Composition
-                // Step 1: ConstrainedHighSpeedCaptureSession (dedicated 60Hz HAL pipeline)
-                // Step 2: Optimal resolution downscaling (1080p/720p) to satisfy HAL bandwidth limits
-                // Step 3: Scene mode disabled & 16.6ms exposure clamp to prevent 30 FPS drop in dim conditions
                 AndroidView(
                     factory = { ctx ->
                         val textureView = TextureView(ctx).apply {
@@ -530,18 +407,14 @@ fun ModernArCameraView(
                                     android.util.Log.i("CameraView", "Session ready. HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
                                 }
                             }
-
                             override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
-
                             override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
                                 camera2Manager.closeCamera()
                                 return true
                             }
-
                             override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
                         }
 
-                        // If SurfaceTexture is already available immediately on creation/reattachment
                         if (textureView.isAvailable) {
                             camera2Manager.openCameraAndStartSession(textureView) { isHighSpeed, size ->
                                 android.util.Log.i("CameraView", "Session ready (immediate). HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
@@ -550,7 +423,7 @@ fun ModernArCameraView(
 
                         textureView
                     },
-                    onRelease = { view ->
+                    onRelease = { _ ->
                         viewModel.closeHighSpeedCamera()
                         textureViewRef = null
                     },
@@ -566,14 +439,7 @@ fun ModernArCameraView(
                                     pingAnim.animateTo(1f, animationSpec = tween(600, easing = LinearOutSlowInEasing))
                                     pings.remove(pingPair)
                                 }
-
-                                if (isMobileSamMode) {
-                                    val screenW = localView.width.takeIf { it > 0 }?.toFloat() ?: 1080f
-                                    val screenH = localView.height.takeIf { it > 0 }?.toFloat() ?: 1920f
-                                    viewModel.triggerSamSegmentationAtTap(offset, screenW, screenH)
-                                } else {
-                                    viewModel.requestHitTest(offset.x, offset.y)
-                                }
+                                viewModel.requestHitTest(offset.x, offset.y)
                             }
                         }
                 )
@@ -583,7 +449,6 @@ fun ModernArCameraView(
             ArMeasurementCanvasOverlay(
                 viewModel = viewModel,
                 pings = pings,
-                revealedTileIds = revealedTileIds,
                 dashPhase = dashPhase,
                 reticlePulseScale = reticlePulseScale,
                 snapScaleAnimated = snapScaleAnimated,
@@ -591,899 +456,71 @@ fun ModernArCameraView(
                 planeLockedParticleAnim = planeLockedParticleAnim
             )
 
-            // 3. Dynamic Floating Measurement & Node Badges Overlay
-            Box(modifier = Modifier.fillMaxSize()) {
-                val screenW = localView.width.takeIf { it > 0 } ?: 1080
-                val screenH = localView.height.takeIf { it > 0 } ?: 1920
-
-                // 3E. AI Tile Pill Button with Blur Effect & Length/Width Reveal (藥丸狀模糊按鈕，點擊顯示長寬)
-                // 只有在真正偵測到磁磚時才顯示
-                if (detectedTiles.isNotEmpty()) {
-                    val tilesToDisplay = detectedTiles
-
-                    tilesToDisplay.forEach { tile ->
-                        val leftPx = tile.leftNorm * screenW
-                        val topPx = tile.topNorm * screenH
-                        val rightPx = tile.rightNorm * screenW
-                        val bottomPx = tile.bottomNorm * screenH
-
-                        val centerX = (leftPx + rightPx) / 2f
-                        val centerY = (topPx + bottomPx) / 2f
-
-                        val widthCmVal = tile.estimatedWidthCm
-                        val heightCmVal = tile.estimatedHeightCm
-
-                        val wMeters = widthCmVal / 100.0
-                        val hMeters = heightCmVal / 100.0
-
-                        val widthFormatted = viewModel.formatLength(wMeters, selectedUnit)
-                        val heightFormatted = viewModel.formatLength(hMeters, selectedUnit)
-                        val isRevealed = revealedTileIds[tile.id] == true
-
-                        // Top & Left Edge dimension badges are shown only after user taps the pill button
-                        if (isRevealed) {
-                            // 1. Top Edge Badge: 長 (Length)
-                            Surface(
-                                color = colorSurfaceContainerHighest.copy(alpha = 0.92f),
-                                shape = RoundedCornerShape(12.dp),
-                                border = BorderStroke(1.dp, colorPrimary),
-                                shadowElevation = 6.dp,
-                                modifier = Modifier.offset {
-                                    androidx.compose.ui.unit.IntOffset(
-                                        (centerX - 48.dp.toPx()).toInt(),
-                                        (topPx - 34.dp.toPx()).toInt().coerceAtLeast(60)
-                                    )
-                                }
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Rounded.Straighten,
-                                        contentDescription = null,
-                                        tint = colorPrimary,
-                                        modifier = Modifier.size(13.dp)
-                                    )
-                                    Text(
-                                        text = "長 $widthFormatted",
-                                        color = colorOnSurface,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.ExtraBold
-                                    )
-                                }
-                            }
-
-                            // 2. Left Edge Badge: 寬 (Width)
-                            Surface(
-                                color = colorSurfaceContainerHighest.copy(alpha = 0.92f),
-                                shape = RoundedCornerShape(12.dp),
-                                border = BorderStroke(1.dp, colorSecondary),
-                                shadowElevation = 6.dp,
-                                modifier = Modifier.offset {
-                                    androidx.compose.ui.unit.IntOffset(
-                                        (leftPx - 80.dp.toPx()).toInt().coerceAtLeast(10),
-                                        (centerY - 15.dp.toPx()).toInt()
-                                    )
-                                }
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Rounded.Height,
-                                        contentDescription = null,
-                                        tint = colorSecondary,
-                                        modifier = Modifier.size(13.dp)
-                                    )
-                                    Text(
-                                        text = "高 $heightFormatted",
-                                        color = colorOnSurface,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.ExtraBold
-                                    )
-                                }
-                            }
-                        }
-
-                        // 3. Centered Pill Button with Blur Effect (藥丸狀模糊按鈕)
-                        Box(
-                            modifier = Modifier
-                                .offset {
-                                    androidx.compose.ui.unit.IntOffset(
-                                        (centerX - if (isRevealed) 110.dp.toPx() else 85.dp.toPx()).toInt(),
-                                        (centerY - 22.dp.toPx()).toInt()
-                                    )
-                                }
-                                .wrapContentSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            // Frosted Glass Backdrop Layer
-                            Box(
-                                modifier = Modifier
-                                    .matchParentSize()
-                                    .clip(RoundedCornerShape(50))
-                                    .background(
-                                        brush = Brush.verticalGradient(
-                                            colors = listOf(
-                                                Color.White.copy(alpha = 0.35f),
-                                                colorSurfaceContainerHighest.copy(alpha = 0.60f)
-                                            )
-                                        )
-                                    )
-                            )
-
-                            // Interactive Pill Button Surface
-                            Surface(
-                                onClick = {
-                                    val nowRevealed = !(revealedTileIds[tile.id] ?: false)
-                                    revealedTileIds[tile.id] = nowRevealed
-                                    viewModel.triggerHapticFeedback()
-                                    if (nowRevealed) {
-                                        viewModel.selectTileForDetail(tile)
-                                    }
-                                },
-                                shape = RoundedCornerShape(50),
-                                color = if (isRevealed) colorPrimaryContainer.copy(alpha = 0.92f) else colorSurfaceContainerHighest.copy(alpha = 0.85f),
-                                contentColor = if (isRevealed) colorOnPrimaryContainer else colorOnSurface,
-                                border = BorderStroke(
-                                    1.5.dp,
-                                    if (isRevealed) colorPrimary else colorOutlineVariant.copy(alpha = 0.8f)
-                                ),
-                                shadowElevation = 10.dp,
-                                modifier = Modifier.testTag("tile_pill_button_${tile.id}")
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .padding(horizontal = 16.dp, vertical = 9.dp)
-                                        .animateContentSize(spring(dampingRatio = 0.8f, stiffness = 400f)),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    if (!isRevealed) {
-                                        // Before press: Pill button prompting to reveal dimensions
-                                        Icon(
-                                            imageVector = Icons.Rounded.GridOn,
-                                            contentDescription = "磁磚",
-                                            tint = colorPrimary,
-                                            modifier = Modifier.size(17.dp)
-                                        )
-                                        Text(
-                                            text = "磁磚 (點擊顯示長寬)",
-                                            color = colorOnSurface,
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    } else {
-                                        // Pressed: Shows length and height!
-                                        Icon(
-                                            imageVector = Icons.Rounded.Straighten,
-                                            contentDescription = "尺寸",
-                                            tint = colorPrimary,
-                                            modifier = Modifier.size(17.dp)
-                                        )
-                                        Text(
-                                            text = "長 $widthFormatted × 高 $heightFormatted",
-                                            color = colorOnPrimaryContainer,
-                                            fontSize = 13.5.sp,
-                                            fontWeight = FontWeight.ExtraBold
-                                        )
-                                        // Quick apply / lock measurement
-                                        IconButton(
-                                            onClick = {
-                                                viewModel.measureTileOneTap(tile)
-                                            },
-                                            modifier = Modifier.size(22.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.CheckCircle,
-                                                contentDescription = "鎖定測量",
-                                                tint = colorPrimary,
-                                                modifier = Modifier.size(17.dp)
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 5. Clean Minimal Top Bar (Pure Full-Screen Camera Viewport)
-            if (!isTakingPhoto) {
-                Box(
+            // 3. Tracking Stability Warning Banner
+            if (trackingStability.level == StabilityLevel.POOR) {
+                ActiveTrackingStabilityWarningBanner(
+                    stability = trackingStability,
+                    onActionClick = { showStabilityDiagnosticsDialog = true },
                     modifier = Modifier
-                        .fillMaxWidth()
                         .align(Alignment.TopCenter)
-                ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
                         .statusBarsPadding()
-                        .padding(horizontal = 14.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Left: Quick SubMode Selector & Unit Selector
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        // 1. SubMode Selector Pill
-                        var showSubModeMenu by remember { mutableStateOf(false) }
-                        val subModeLabel = when (subMode) {
-                            1 -> "面積"
-                            2 -> "高度"
-                            5 -> "角度"
-                            else -> if (autoDetectedType == "HEIGHT") "自動 (高度)" else if (autoDetectedType == "AREA") "自動 (面積)" else "自動"
-                        }
-
-                        Box {
-                            Surface(
-                                onClick = { showSubModeMenu = true },
-                                shape = RoundedCornerShape(12.dp),
-                                color = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f),
-                                contentColor = colorOnSurface,
-                                border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f)),
-                                shadowElevation = 2.dp,
-                                modifier = Modifier.testTag("submode_selector_button")
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
-                                ) {
-                                    Icon(
-                                        when (subMode) {
-                                            1 -> Icons.Rounded.SquareFoot
-                                            2 -> Icons.Rounded.Height
-                                            5 -> Icons.Rounded.Architecture
-                                            else -> Icons.Rounded.AutoAwesome
-                                        },
-                                        contentDescription = null,
-                                        tint = colorPrimary,
-                                        modifier = Modifier.size(15.dp)
-                                    )
-                                    Text(
-                                        text = subModeLabel,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = colorOnSurface
-                                    )
-                                    Icon(
-                                        Icons.Rounded.ArrowDropDown,
-                                        contentDescription = null,
-                                        tint = colorOnSurfaceVariant,
-                                        modifier = Modifier.size(15.dp)
-                                    )
-                                }
-                            }
-
-                            DropdownMenu(
-                                expanded = showSubModeMenu,
-                                onDismissRequest = { showSubModeMenu = false },
-                                modifier = Modifier.background(colorSurfaceContainer)
-                            ) {
-                                listOf(
-                                    0 to ("智慧自動 (Auto)" to Icons.Rounded.AutoAwesome),
-                                    -1 to ("直線距離 (Distance)" to Icons.Rounded.Straighten),
-                                    1 to ("封閉面積 (Area)" to Icons.Rounded.SquareFoot),
-                                    2 to ("垂直高度 (Height)" to Icons.Rounded.Height),
-                                    5 to ("空間夾角 (Angle)" to Icons.Rounded.Architecture)
-                                ).forEach { (modeId, info) ->
-                                    val (label, icon) = info
-                                    val isSelected = (modeId == 0 && subMode == 0) || (modeId == subMode) || (modeId == -1 && subMode == 0 && autoDetectedType == "DISTANCE")
-                                    DropdownMenuItem(
-                                        text = {
-                                            Text(
-                                                label,
-                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                                color = if (isSelected) colorPrimary else colorOnSurface
-                                            )
-                                        },
-                                        leadingIcon = {
-                                            Icon(icon, null, tint = if (isSelected) colorPrimary else colorOnSurfaceVariant)
-                                        },
-                                        onClick = {
-                                            if (modeId == -1) {
-                                                viewModel.setCameraSubMode(0)
-                                            } else {
-                                                viewModel.setCameraSubMode(modeId)
-                                            }
-                                            showSubModeMenu = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-
-                        // 2. Unit Quick Selector Pill
-                        var showUnitMenu by remember { mutableStateOf(false) }
-                        Box {
-                            Surface(
-                                onClick = { showUnitMenu = true },
-                                shape = RoundedCornerShape(12.dp),
-                                color = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f),
-                                contentColor = colorPrimary,
-                                border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f)),
-                                shadowElevation = 2.dp,
-                                modifier = Modifier.testTag("unit_selector_button")
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(2.dp)
-                                ) {
-                                    Text(
-                                        text = selectedUnit.uppercase(),
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.ExtraBold,
-                                        color = colorPrimary
-                                    )
-                                    Icon(
-                                        Icons.Rounded.ArrowDropDown,
-                                        contentDescription = null,
-                                        tint = colorPrimary,
-                                        modifier = Modifier.size(15.dp)
-                                    )
-                                }
-                            }
-
-                            DropdownMenu(
-                                expanded = showUnitMenu,
-                                onDismissRequest = { showUnitMenu = false },
-                                modifier = Modifier.background(colorSurfaceContainer)
-                            ) {
-                                listOf("cm" to "公分 (cm)", "m" to "公尺 (m)", "in" to "英吋 (in)", "ft" to "英呎 (ft)", "yd" to "碼 (yd)").forEach { (unitCode, label) ->
-                                    DropdownMenuItem(
-                                        text = {
-                                            Text(
-                                                label,
-                                                fontWeight = if (selectedUnit == unitCode) FontWeight.Bold else FontWeight.Normal,
-                                                color = if (selectedUnit == unitCode) colorPrimary else colorOnSurface
-                                            )
-                                        },
-                                        onClick = {
-                                            viewModel.setSelectedUnit(unitCode)
-                                            showUnitMenu = false
-                                        },
-                                        leadingIcon = if (selectedUnit == unitCode) {
-                                            { Icon(Icons.Rounded.Check, null, tint = colorPrimary) }
-                                        } else null
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.weight(1f))
-
-                    // Right: Clean quick actions with AI tool menu
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-
-
-                    // Unified AI Smart Tools Anchor & Dropdown Menu
-                    Box {
-                        val isAnyAiActive = isMobileSamMode || isObjectronMode || isAiTileMode
-                        IconButton(
-                            onClick = { showAiToolsMenu = true },
-                            modifier = Modifier
-                                .size(38.dp)
-                                .background(
-                                    if (isAnyAiActive) colorPrimary else MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f),
-                                    CircleShape
-                                )
-                                .border(
-                                    width = 0.8.dp,
-                                    color = if (isAnyAiActive) Color.Transparent else MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f),
-                                    shape = CircleShape
-                                )
-                                .shadow(if (isAnyAiActive) 5.dp else 2.dp, CircleShape)
-                                .testTag("ai_tools_menu_button")
-                        ) {
-                            Icon(
-                                Icons.Rounded.AutoAwesome,
-                                contentDescription = "AI 智慧工具",
-                                tint = if (isAnyAiActive) colorOnPrimary else colorOnSurface,
-                                modifier = Modifier.size(19.dp)
-                            )
-                        }
-
-                        DropdownMenu(
-                            expanded = showAiToolsMenu,
-                            onDismissRequest = { showAiToolsMenu = false },
-                            modifier = Modifier.background(colorSurfaceContainer)
-                        ) {
-                            DropdownMenuItem(
-                                text = {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Text(
-                                            "磁磚規格: ${activeTilePreset.widthCm.toInt()}×${activeTilePreset.heightCm.toInt()} cm",
-                                            color = colorPrimary,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        Text("● 自動偵測中", color = colorPrimary, fontSize = 11.sp)
-                                    }
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Rounded.GridOn,
-                                        contentDescription = null,
-                                        tint = colorPrimary
-                                    )
-                                },
-                                onClick = {
-                                    // Cycle through tile presets: 60x60 -> 30x60 -> 80x80 -> 120x60 -> 30x30
-                                    val nextPreset = when (activeTilePreset) {
-                                        com.example.logic.ai.AiTilePreset.PRESET_60X60 -> com.example.logic.ai.AiTilePreset.PRESET_30X60
-                                        com.example.logic.ai.AiTilePreset.PRESET_30X60 -> com.example.logic.ai.AiTilePreset.PRESET_80X80
-                                        com.example.logic.ai.AiTilePreset.PRESET_80X80 -> com.example.logic.ai.AiTilePreset.PRESET_60X120
-                                        com.example.logic.ai.AiTilePreset.PRESET_60X120 -> com.example.logic.ai.AiTilePreset.PRESET_30X30
-                                        else -> com.example.logic.ai.AiTilePreset.PRESET_60X60
-                                    }
-                                    viewModel.setTilePreset(nextPreset)
-                                    val currentTv = textureViewRef
-                                    if (currentTv != null && currentTv.isAvailable) {
-                                        val bmp = currentTv.bitmap
-                                        if (bmp != null) viewModel.processFrameForTiles(bmp)
-                                    }
-                                    showAiToolsMenu = false
-                                }
-                            )
-
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        "立即分析畫面磁磚",
-                                        color = colorOnSurface,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Rounded.CenterFocusStrong,
-                                        contentDescription = null,
-                                        tint = colorPrimary
-                                    )
-                                },
-                                onClick = {
-                                    val currentTv = textureViewRef
-                                    val bmp = if (currentTv != null && currentTv.isAvailable) currentTv.bitmap else null
-                                    viewModel.triggerAiTileDetection(bmp)
-                                    showAiToolsMenu = false
-                                }
-                            )
-
-                            DropdownMenuItem(
-                                text = {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Text(
-                                            "MobileSAM 邊界輪廓",
-                                            color = if (isMobileSamMode) colorTertiary else colorOnSurface,
-                                            fontWeight = if (isMobileSamMode) FontWeight.Bold else FontWeight.Normal
-                                        )
-                                        if (isMobileSamMode) {
-                                            Text("● 開啟", color = colorTertiary, fontSize = 11.sp)
-                                        }
-                                    }
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Rounded.AutoAwesomeMosaic,
-                                        contentDescription = null,
-                                        tint = if (isMobileSamMode) colorTertiary else colorOnSurfaceVariant
-                                    )
-                                },
-                                onClick = {
-                                    viewModel.toggleMobileSamMode()
-                                    showAiToolsMenu = false
-                                }
-                            )
-
-                            DropdownMenuItem(
-                                text = {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Text(
-                                            "Objectron 3D 包絡方框",
-                                            color = if (isObjectronMode) colorSecondary else colorOnSurface,
-                                            fontWeight = if (isObjectronMode) FontWeight.Bold else FontWeight.Normal
-                                        )
-                                        if (isObjectronMode) {
-                                            Text("● 開啟", color = colorSecondary, fontSize = 11.sp)
-                                        }
-                                    }
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Rounded.ViewInAr,
-                                        contentDescription = null,
-                                        tint = if (isObjectronMode) colorSecondary else colorOnSurfaceVariant
-                                    )
-                                },
-                                onClick = {
-                                    viewModel.toggleObjectronMode()
-                                    showAiToolsMenu = false
-                                }
-                            )
-
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        "歡迎導覽與功能指南",
-                                        color = colorOnSurface,
-                                        fontWeight = FontWeight.Normal
-                                    )
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Rounded.AutoAwesome,
-                                        contentDescription = null,
-                                        tint = colorPrimary
-                                    )
-                                },
-                                onClick = {
-                                    viewModel.openWelcomeScreen()
-                                    showAiToolsMenu = false
-                                }
-                            )
-                        }
-                    }
-
-                    // Flashlight / Torch with multi-level brightness adjustment
-                    Box {
-                        IconButton(
-                            onClick = {
-                                if (!isTorchOn) {
-                                    viewModel.toggleTorch(context)
-                                } else {
-                                    // If already on, click opens brightness selector or toggles
-                                    showTorchBrightnessMenu = !showTorchBrightnessMenu
-                                }
-                            },
-                            modifier = Modifier
-                                .size(38.dp)
-                                .background(
-                                    if (isTorchOn) colorPrimary else MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f),
-                                    CircleShape
-                                )
-                                .border(
-                                    width = 0.8.dp,
-                                    color = if (isTorchOn) Color.Transparent else MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f),
-                                    shape = CircleShape
-                                )
-                                .shadow(if (isTorchOn) 5.dp else 2.dp, CircleShape)
-                                .testTag("flashlight_toggle_button")
-                        ) {
-                            Icon(
-                                if (isTorchOn) Icons.Rounded.FlashlightOn else Icons.Rounded.FlashlightOff,
-                                contentDescription = "手電筒補光",
-                                tint = if (isTorchOn) colorOnPrimary else colorOnSurface,
-                                modifier = Modifier.size(19.dp)
-                            )
-                        }
-
-                        // Torch Brightness Popup Panel
-                        DropdownMenu(
-                            expanded = showTorchBrightnessMenu,
-                            onDismissRequest = { showTorchBrightnessMenu = false },
-                            modifier = Modifier
-                                .background(colorSurfaceContainer)
-                                .widthIn(min = 220.dp)
-                                .padding(horizontal = 8.dp, vertical = 6.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Rounded.LightMode,
-                                            contentDescription = null,
-                                            tint = colorPrimary,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Text(
-                                            "手電筒亮度",
-                                            color = colorOnSurface,
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                    Text(
-                                        "${(torchBrightness * 100).toInt()}%",
-                                        color = colorPrimary,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-
-                                // Brightness Slider (20% ~ 100%)
-                                Slider(
-                                    value = torchBrightness,
-                                    onValueChange = { newVal ->
-                                        viewModel.setTorchBrightness(context, newVal)
-                                    },
-                                    valueRange = 0.2f..1.0f,
-                                    steps = 3, // 20%, 40%, 60%, 80%, 100%
-                                    colors = SliderDefaults.colors(
-                                        thumbColor = colorPrimary,
-                                        activeTrackColor = colorPrimary,
-                                        inactiveTrackColor = colorSurfaceVariant
-                                    ),
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-
-                                // Preset Level Chips
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    listOf(
-                                        0.25f to "25%",
-                                        0.50f to "50%",
-                                        0.75f to "75%",
-                                        1.00f to "100%"
-                                    ).forEach { (level, label) ->
-                                        val isSelected = kotlin.math.abs(torchBrightness - level) < 0.12f
-                                        Surface(
-                                            color = if (isSelected) colorPrimary else colorSurfaceVariant,
-                                            shape = RoundedCornerShape(8.dp),
-                                            modifier = Modifier
-                                                .clickable {
-                                                    viewModel.setTorchBrightness(context, level)
-                                                }
-                                        ) {
-                                            Text(
-                                                text = label,
-                                                color = if (isSelected) colorOnPrimary else colorOnSurfaceVariant,
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.SemiBold,
-                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                            )
-                                        }
-                                    }
-                                }
-
-                                HorizontalDivider(
-                                    color = colorOutlineVariant.copy(alpha = 0.5f),
-                                    modifier = Modifier.padding(vertical = 4.dp)
-                                )
-
-                                // Turn off button inside menu
-                                Button(
-                                    onClick = {
-                                        viewModel.turnOffTorch(context)
-                                        showTorchBrightnessMenu = false
-                                    },
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = colorError,
-                                        contentColor = colorOnError
-                                    ),
-                                    shape = RoundedCornerShape(10.dp),
-                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Icon(Icons.Rounded.FlashlightOff, null, Modifier.size(16.dp))
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("關閉手電筒", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                        }
-                    }
-
-
-                    // History
-                    IconButton(
-                        onClick = onShowHistoryClick,
-                        modifier = Modifier
-                            .size(38.dp)
-                            .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f), CircleShape)
-                            .border(
-                                width = 0.8.dp,
-                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f),
-                                shape = CircleShape
-                            )
-                            .shadow(2.dp, CircleShape)
-                    ) {
-                        Icon(
-                            Icons.Rounded.History,
-                            contentDescription = "History",
-                            tint = colorOnSurface,
-                            modifier = Modifier.size(19.dp)
-                        )
-                    }
-
-                    // Settings
-                    IconButton(
-                        onClick = onShowSettingsClick,
-                        modifier = Modifier
-                            .size(38.dp)
-                            .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f), CircleShape)
-                            .border(
-                                width = 0.8.dp,
-                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f),
-                                shape = CircleShape
-                            )
-                            .shadow(2.dp, CircleShape)
-                    ) {
-                        Icon(
-                            Icons.Rounded.Settings,
-                            contentDescription = "Settings",
-                            tint = colorOnSurface,
-                            modifier = Modifier.size(19.dp)
-                        )
-                    }
-                }
+                        .padding(top = 96.dp, start = 16.dp, end = 16.dp)
+                )
             }
 
-                // 5D. AR Horizon & Spatial Surface Guidance Indicator
-                ArHorizonGuidanceIndicator(
+            // 4. Clean Minimal Top Bar
+            if (!isTakingPhoto) {
+                ModernArTopBar(
+                    viewModel = viewModel,
+                    context = context,
+                    subMode = subMode,
+                    autoDetectedType = autoDetectedType,
+                    selectedUnit = selectedUnit,
+                    isTorchOn = isTorchOn,
+                    torchBrightness = torchBrightness,
+                    cameraAspectRatio = cameraAspectRatio,
                     sensorTelemetry = sensorTelemetry,
                     planesCount = planesCount,
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .statusBarsPadding()
-                        .padding(top = 54.dp)
+                    isRecordingVideo = isRecordingVideo,
+                    recordingSeconds = recordingSeconds,
+                    onShowHelp = { showHelpDialog = true },
+                    onShowHistoryClick = onShowHistoryClick,
+                    onShowSettingsClick = onShowSettingsClick,
+                    modifier = Modifier.align(Alignment.TopCenter)
                 )
             }
-        }
 
-
-
-            // 5C. Aspect Ratio Viewfinder Framing Mask Overlay
-            if (cameraAspectRatio != "FULL") {
-                val targetRatio = when (cameraAspectRatio) {
-                    "4_3" -> 3f / 4f // Portrait 3:4
-                    "16_9" -> 9f / 16f // Portrait 9:16
-                    "1_1" -> 1.0f
-                    else -> 0f
-                }
-                if (targetRatio > 0f) {
-                    BoxWithConstraints(
-                        modifier = Modifier
-                            .fillMaxSize()
-                    ) {
-                        val totalW = maxWidth
-                        val totalH = maxHeight
-                        if (totalW.value > 0f && totalH.value > 0f) {
-                            val currentRatio = totalW.value / totalH.value
-                            var padH = 0.dp
-                            var padV = 0.dp
-
-                            if (currentRatio > targetRatio) {
-                                val frameW = totalH.value * targetRatio
-                                padH = ((totalW.value - frameW) / 2f).coerceAtLeast(0f).dp
-                            } else {
-                                val frameH = totalW.value / targetRatio
-                                padV = ((totalH.value - frameH) / 2f).coerceAtLeast(0f).dp
-                            }
-
-                            val maskColor = Color.Transparent
-                            if (padV > 0.dp) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(padV)
-                                        .align(Alignment.TopCenter)
-                                        .background(maskColor)
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(padV)
-                                        .align(Alignment.BottomCenter)
-                                        .background(maskColor)
-                                )
-                            }
-                            if (padH > 0.dp) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxHeight()
-                                        .width(padH)
-                                        .align(Alignment.CenterStart)
-                                        .background(maskColor)
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxHeight()
-                                        .width(padH)
-                                        .align(Alignment.CenterEnd)
-                                        .background(maskColor)
-                                )
-                            }
+            // 5. Bottom Dynamic Control Deck
+            if (!isTakingPhoto) {
+                ModernArBottomDeck(
+                    viewModel = viewModel,
+                    subMode = subMode,
+                    selectedUnit = selectedUnit,
+                    hasCapturedPoints = hasCapturedPoints,
+                    isWaitingForSecondPoint = isWaitingForSecondPoint,
+                    capturedPointsCount = capturedPoints.size,
+                    isMeasurementAvailable = isMeasurementAvailable,
+                    uiButtonScale = uiButtonScale,
+                    isRecordingVideo = isRecordingVideo,
+                    bottomPadding = bottomPadding,
+                    textureViewRef = { textureViewRef },
+                    modernArGlViewRef = { modernArGlViewRef },
+                    cameraAspectRatio = cameraAspectRatio,
+                    useDisplayP3ColorSpace = useDisplayP3ColorSpace,
+                    videoRecorder = videoRecorder,
+                    onShowHistoryClick = onShowHistoryClick,
+                    onTriggerShutterFlash = {
+                        isShutterFlash = true
+                        coroutineScope.launch {
+                            delay(120)
+                            isShutterFlash = false
                         }
-                    }
-                }
-            }
-
-            // 5B. Video Recording Active Top HUD & Screen Border (When recording video via long-press shutter)
-            if (isRecordingVideo) {
-                // Outer glowing recording border
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .border(width = 3.dp, color = Color(0xFFE53935).copy(alpha = 0.9f))
+                    },
+                    modifier = Modifier.align(Alignment.BottomCenter)
                 )
-
-                // Recording Time & REC Badge Pill
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.95f),
-                    contentColor = MaterialTheme.colorScheme.onSurface,
-                    shape = RoundedCornerShape(24.dp),
-                    border = BorderStroke(1.5.dp, Color(0xFFE53935)),
-                    shadowElevation = 10.dp,
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .statusBarsPadding()
-                        .padding(top = 58.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        // Pulsing Red Dot
-                        Box(
-                            modifier = Modifier
-                                .size(10.dp)
-                                .background(Color(0xFFE53935), CircleShape)
-                        )
-                        val mins = recordingSeconds / 60
-                        val secs = recordingSeconds % 60
-                        Text(
-                            text = String.format("REC %02d:%02d", mins, secs),
-                            color = Color.White,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                        )
-                        Text(
-                            text = "· 點擊快門停止",
-                            color = Color.White.copy(alpha = 0.85f),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
             }
 
-            // 5B. Off-Screen Anchor Orientation Pointer (Disabled per user preference)
-            if (false && hasCapturedPoints && isWaitingForSecondPoint) {
-                // Off-screen banner disabled
-            }
-
-
-
-            // 6. Bottom Dynamic Control Deck (+ / ✓ Button & Camera Shutter)
-            var isShutterFlash by remember { mutableStateOf(false) }
-
-            // Shutter Flash Animation
+            // 6. Shutter Flash Effect
             if (isShutterFlash) {
                 Box(
                     modifier = Modifier
@@ -1491,1551 +528,29 @@ fun ModernArCameraView(
                         .background(Color.White.copy(alpha = 0.75f))
                 )
             }
-
-            if (!isTakingPhoto) {
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = bottomPadding + 10.dp)
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                // Real-Time Measurement Completed Summary Card (1-tap copy, save & unit conversion)
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = hasCapturedPoints && capturedPoints.size >= 2,
-                    enter = fadeIn(animationSpec = tween(200)) + expandVertically(animationSpec = tween(200)),
-                    exit = fadeOut(animationSpec = tween(150)) + shrinkVertically(animationSpec = tween(150))
-                ) {
-                    Box(modifier = Modifier.padding(bottom = 8.dp)) {
-                        MeasurementLiveSummaryCard(
-                            viewModel = viewModel,
-                            subMode = subMode,
-                            selectedUnit = selectedUnit,
-                            onShowHistory = onShowHistoryClick
-                        )
-                    }
-                }
-
-                // Dynamic Live Measurement Guidance & Status Pill
-                val hasGuidanceContent = (!isMobileSamMode && !isObjectronMode && isWaitingForSecondPoint) ||
-                        isMobileSamMode || isObjectronMode
-
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = hasGuidanceContent,
-                    enter = fadeIn(animationSpec = tween(180)) + expandVertically(animationSpec = tween(180)),
-                    exit = fadeOut(animationSpec = tween(140)) + shrinkVertically(animationSpec = tween(140))
-                ) {
-                    Box(modifier = Modifier.padding(bottom = 10.dp)) {
-                        if (!isMobileSamMode && !isObjectronMode) {
-                            if (isWaitingForSecondPoint) {
-                                LiveDistanceBadge(
-                                    viewModel = viewModel,
-                                    selectedUnit = selectedUnit
-                                )
-                            }
-                        } else {
-                            Surface(
-                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.70f),
-                                shape = RoundedCornerShape(18.dp),
-                                border = BorderStroke(
-                                    1.dp,
-                                    when {
-                                        isMobileSamMode -> colorTertiary.copy(alpha = 0.6f)
-                                        isObjectronMode -> colorSecondary.copy(alpha = 0.5f)
-                                        else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
-                                    }
-                                ),
-                                modifier = Modifier
-                                    .shadow(4.dp, RoundedCornerShape(18.dp))
-                                    .then(
-                                        if (isMobileSamMode && segmentedObject != null) {
-                                            Modifier.clickable {
-                                                viewModel.applySegmentedObjectCorners()
-                                            }
-                                        } else if (isObjectronMode && objectron3DBox != null) {
-                                            Modifier.clickable {
-                                                viewModel.applyObjectronBoxCorners()
-                                            }
-                                        } else Modifier
-                                    )
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    if (isMobileSamMode && segmentedObject != null) {
-                                        Icon(Icons.Rounded.AutoAwesomeMosaic, null, tint = colorTertiary, modifier = Modifier.size(15.dp))
-                                        Text(
-                                            text = "SAM ${segmentedObject!!.label}: ${"%.2f".format(segmentedObject!!.areaM2)} m² (輕觸一鍵鎖定)",
-                                            color = colorTertiary,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    } else if (isMobileSamMode) {
-                                        Icon(Icons.Rounded.TouchApp, null, tint = colorTertiary, modifier = Modifier.size(15.dp))
-                                        Text(
-                                            text = "輕觸畫面任意物件，即時分割邊界與面積",
-                                            color = colorOnSurface,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Medium
-                                        )
-                                    } else if (isObjectronMode && objectron3DBox != null) {
-                                        Icon(Icons.Rounded.ViewInAr, null, tint = colorSecondary, modifier = Modifier.size(15.dp))
-                                        Text(
-                                            text = "AI 3D方框: ${"%.0f".format(objectron3DBox!!.widthMeters * 100)}×${"%.0f".format(objectron3DBox!!.heightMeters * 100)}×${"%.0f".format(objectron3DBox!!.depthMeters * 100)} cm (輕觸鎖定)",
-                                            color = colorSecondary,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // 2. Interactive Bottom Action Deck (Left, Center, Right Symmetrical Layout)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Left Slot (Balanced 1f weight): Undo & Clear buttons
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(start = 4.dp),
-                        contentAlignment = Alignment.CenterStart
-                    ) {
-                        androidx.compose.animation.AnimatedVisibility(
-                            visible = hasCapturedPoints,
-                            enter = fadeIn(animationSpec = tween(180)) + scaleIn(
-                                initialScale = 0.85f,
-                                animationSpec = tween(180, easing = FastOutSlowInEasing)
-                            ) + slideInHorizontally(
-                                initialOffsetX = { -it / 2 },
-                                animationSpec = tween(180, easing = FastOutSlowInEasing)
-                            ),
-                            exit = fadeOut(animationSpec = tween(140)) + scaleOut(
-                                targetScale = 0.85f,
-                                animationSpec = tween(140, easing = FastOutLinearInEasing)
-                            ) + slideOutHorizontally(
-                                targetOffsetX = { -it / 2 },
-                                animationSpec = tween(140, easing = FastOutLinearInEasing)
-                            )
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                IconButton(
-                                    onClick = {
-                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
-                                        viewModel.undo()
-                                    },
-                                    modifier = Modifier
-                                        .size((44 * uiButtonScale).dp)
-                                        .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.70f else 0.88f), CircleShape)
-                                        .border(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f), CircleShape)
-                                        .shadow(3.dp, CircleShape)
-                                        .testTag("undo_button")
-                                ) {
-                                    Icon(
-                                        Icons.Rounded.Undo,
-                                        contentDescription = "復原上一點",
-                                        tint = colorOnSurface,
-                                        modifier = Modifier.size((20 * uiButtonScale).dp)
-                                    )
-                                }
-
-                                IconButton(
-                                    onClick = {
-                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                        viewModel.clearActivePoints()
-                                    },
-                                    modifier = Modifier
-                                        .size((44 * uiButtonScale).dp)
-                                        .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.85f), CircleShape)
-                                        .border(0.8.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.55f), CircleShape)
-                                        .shadow(3.dp, CircleShape)
-                                        .testTag("clear_all_button")
-                                ) {
-                                    Icon(
-                                        Icons.Rounded.DeleteOutline,
-                                        contentDescription = "全部清除",
-                                        tint = MaterialTheme.colorScheme.onErrorContainer,
-                                        modifier = Modifier.size((20 * uiButtonScale).dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // Center Slot: Primary Main Add Button (Only Corner Radius Morphs on Press, No Scale/Ripple/Elevation Effects)
-                    val addFabInteractionSource = remember { MutableInteractionSource() }
-                    val isAddFabPressed by addFabInteractionSource.collectIsPressedAsState()
-
-                    val addFabCornerRadius by animateDpAsState(
-                        targetValue = if (isAddFabPressed) 16.dp else 32.dp,
-                        animationSpec = tween(150),
-                        label = "addFabCornerRadius"
-                    )
-
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    ) {
-                        Surface(
-                            color = addFabContainerColor,
-                            shape = RoundedCornerShape(addFabCornerRadius),
-                            border = if (!isMeasurementAvailable) BorderStroke(1.5.dp, MaterialTheme.colorScheme.outlineVariant) else null,
-                            shadowElevation = if (isMeasurementAvailable) 4.dp else 2.dp,
-                            modifier = Modifier
-                                .size((64 * uiButtonScale).dp)
-                                .clickable(
-                                    interactionSource = addFabInteractionSource,
-                                    indication = null
-                                ) {
-                                    if (isMeasurementAvailable) {
-                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                        viewModel.requestHitTest()
-                                    } else {
-                                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
-                                    }
-                                }
-                                .testTag("add_point_fab")
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                AnimatedContent(
-                                    targetState = isWaitingForSecondPoint,
-                                    transitionSpec = {
-                                        (fadeIn(animationSpec = tween(150)) + scaleIn(initialScale = 0.6f, animationSpec = tween(150)))
-                                            .togetherWith(fadeOut(animationSpec = tween(110)) + scaleOut(targetScale = 0.6f, animationSpec = tween(110)))
-                                    },
-                                    label = "AddPointFabIconTransition"
-                                ) { waitingForSecond ->
-                                    Icon(
-                                        imageVector = if (waitingForSecond) Icons.Rounded.Check else Icons.Rounded.Add,
-                                        contentDescription = if (waitingForSecond) "確認第二點 (Confirm Point)" else "加入點 (Add Point)",
-                                        tint = addFabIconColor,
-                                        modifier = Modifier.size((32 * uiButtonScale).dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // Right Slot (Balanced 1f weight): Camera Shutter Button
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(end = 4.dp),
-                        contentAlignment = Alignment.CenterEnd
-                    ) {
-                        // Camera Shutter Button (Pixel Camera Style: Tap to take Photo, Long-Press to Record Video)
-                        PixelShutterButton(
-                            size = (50 * uiButtonScale).dp,
-                            isRecording = isRecordingVideo,
-                            onClick = {
-                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                if (isRecordingVideo) {
-                                    // Stop Video Recording
-                                    videoRecorder.stopRecording { videoPath, thumbPath, durationSec ->
-                                        if (videoPath != null) {
-                                            viewModel.saveMeasurementRecord(
-                                                imagePath = thumbPath ?: videoPath,
-                                                customNotes = "AR 測量錄影 (${durationSec}秒): $videoPath"
-                                            )
-                                        }
-                                    }
-                                } else {
-                                    // Capture Photo Snapshot with Real Hardware Camera Feed
-                                    coroutineScope.launch {
-                                        try {
-                                            viewModel.setIsTakingPhoto(true)
-                                            // Wait 40ms for Compose to recompose with UI controls hidden
-                                            kotlinx.coroutines.delay(40)
-
-                                            val currentTv = textureViewRef
-                                            val currentGl = modernArGlViewRef
-
-                                            val onCameraFrameReady: (Bitmap?) -> Unit = { cameraBmp ->
-                                                ShareUtility.captureArCompositeSnapshot(
-                                                    view = localView,
-                                                    cameraBitmap = cameraBmp,
-                                                    textureView = currentTv,
-                                                    glView = currentGl,
-                                                    aspectRatio = cameraAspectRatio,
-                                                    useDisplayP3 = useDisplayP3ColorSpace,
-                                                    primaryMeasurement = viewModel.getPrimaryMeasurementDisplayString()
-                                                ) { savedPath ->
-                                                    viewModel.setIsTakingPhoto(false)
-                                                    // Trigger screen flash animation for satisfying shutter feedback
-                                                    isShutterFlash = true
-                                                    coroutineScope.launch {
-                                                        kotlinx.coroutines.delay(120)
-                                                        isShutterFlash = false
-                                                    }
-                                                    viewModel.saveMeasurementRecord(imagePath = savedPath)
-                                                }
-                                            }
-
-                                            if (currentTv != null && currentTv.isAvailable) {
-                                                val bmp = try {
-                                                    currentTv.bitmap ?: if (localView.width > 0 && localView.height > 0) {
-                                                        currentTv.getBitmap(localView.width, localView.height)
-                                                    } else null
-                                                } catch (e: Throwable) {
-                                                    try { currentTv.bitmap } catch (_: Throwable) { null }
-                                                }
-                                                onCameraFrameReady(bmp)
-                                            } else if (currentGl != null) {
-                                                currentGl.captureBitmap { glBmp ->
-                                                    onCameraFrameReady(glBmp)
-                                                }
-                                            } else {
-                                                onCameraFrameReady(null)
-                                            }
-                                        } catch (e: Throwable) {
-                                            viewModel.setIsTakingPhoto(false)
-                                            android.util.Log.e("ModernArCameraView", "Error capturing snapshot", e)
-                                        }
-                                    }
-                                }
-                            },
-                            onLongClick = {
-                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                if (!isRecordingVideo) {
-                                    videoRecorder.startRecording(
-                                        view = localView,
-                                        cameraBitmapProvider = {
-                                            val tv = textureViewRef
-                                            if (tv != null && tv.isAvailable) tv.bitmap else null
-                                        }
-                                    )
-                                }
-                            },
-                            testTag = "camera_shutter_button"
-                        )
-                    }
-                }
-            }
-            }
         }
     }
 
-    // Tile Detail Bottom Sheet (Only show if a genuine tile is selected or detected)
-    val tileForDetail = selectedTileForDetail ?: if (showTileDetailSheet) detectedTiles.firstOrNull() else null
-    if (tileForDetail != null) {
-        TileDetailBottomSheet(
-            tile = tileForDetail,
-            viewModel = viewModel,
-            onDismiss = {
-                showTileDetailSheet = false
-                viewModel.selectTileForDetail(null)
-            }
-        )
-    }
-
-    // Help Dialog
-    if (showHelpDialog) {
-        AlertDialog(
-            onDismissRequest = { showHelpDialog = false },
-            title = {
-                EnableWindowBlur(blurRadiusDp = 50)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Rounded.TipsAndUpdates, null, tint = colorPrimary)
-                    Spacer(Modifier.width(8.dp))
-                    Text("AR 專業測量指南", fontWeight = FontWeight.Bold)
-                }
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("• MobileSAM 智慧邊緣分割：輕觸畫面任意物件，即時偵測邊界輪廓、估算面積並支援一鍵鎖定測量。")
-                    Text("• MediaPipe Objectron 3D AI：智慧 3D 物件包絡線與 8 頂點方框預測，即時計算長寬高與空間體積。")
-                    Text("• 60 FPS 點雲渲染：相機即時偵測周圍環境的幾何特徵點與表面。")
-                    Text("• 磁吸對齊功能：當準星靠近既有頂點時會自動吸附並震動提示，精準閉合多邊形。")
-                    Text("• 多感應器融合校正：即時結合陀螺儀防抖、重力垂準、氣壓計高度、近接感應與雙鏡頭視差。")
-                    Text("• 六大測量模式：直線/折線距離、封閉面積、垂直高度、3D 包絡體積、圓形半徑與直徑、空間夾角。")
-                    Text("• 物理錨點鎖定：採用實體 ARCore Anchor，走動或轉移視角時完全無漂移。")
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showHelpDialog = false }) {
-                    Text("我知道了")
-                }
-            }
-        )
-    }
-
-    // Multi-Sensor Fusion Status Dialog
-    if (showSensorStatusDialog) {
-        val sensorTelemetry by viewModel.sensorTelemetry.collectAsState()
-        val antiJitter by viewModel.antiJitterEnabled.collectAsState()
-        val gravityAlign by viewModel.gravityAlignmentEnabled.collectAsState()
-        val barometerFusion by viewModel.barometerFusionEnabled.collectAsState()
-        val jerkRejection by viewModel.jerkRejectionEnabled.collectAsState()
-        val rawDepthConfidenceEnabled by viewModel.rawDepthConfidenceEnabled.collectAsState()
-        val rawDepthConfidenceThreshold by viewModel.rawDepthConfidenceThreshold.collectAsState()
-        val df1 = remember { DecimalFormat("#,##0") }
-        val df2 = remember { DecimalFormat("#,##0") }
-
-        AlertDialog(
-            onDismissRequest = { showSensorStatusDialog = false },
-            title = {
-                EnableWindowBlur(blurRadiusDp = 50)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Rounded.Sensors, null, tint = colorPrimary)
-                    Spacer(Modifier.width(8.dp))
-                    Text("多感應器即時校正狀態", fontWeight = FontWeight.Bold)
-                }
-            },
-            text = {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(
-                        "硬體感應器正在即時校驗 AR 空間座標，修正視角傾斜、手震與高程誤差：",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    // Sensor Status Cards
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
-                            .padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        // 1. Gyro Stability
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Surface(
-                                    color = if (antiJitter) colorPrimary else MaterialTheme.colorScheme.outlineVariant,
-                                    shape = CircleShape,
-                                    modifier = Modifier.size(8.dp)
-                                ) {}
-                                Spacer(Modifier.width(6.dp))
-                                Text("陀螺儀防抖穩定度", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                            }
-                            Text(
-                                "${(sensorTelemetry.stabilityScore * 100).toInt()}% (${if (sensorTelemetry.isHandSteady) "🎯 穩定鎖定" else "微動追蹤"})",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-
-                        // Anti-Jitter toggle
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { viewModel.setAntiJitterEnabled(!antiJitter) },
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "陀螺儀防手震濾波 (Anti-Jitter)",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Switch(
-                                checked = antiJitter,
-                                onCheckedChange = { viewModel.setAntiJitterEnabled(it) }
-                            )
-                        }
-
-                        // 2. Gravity Vector / Tilt
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Surface(
-                                    color = colorPrimary,
-                                    shape = CircleShape,
-                                    modifier = Modifier.size(8.dp)
-                                ) {}
-                                Spacer(Modifier.width(6.dp))
-                                Text("重力向量垂直基準", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                            }
-                            Text(
-                                "俯仰: ${df1.format(sensorTelemetry.pitchDeg)}° / 滾轉: ${df1.format(sensorTelemetry.rollDeg)}°",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-
-                        // 3. Barometer Altitude
-                        if (sensorTelemetry.isBarometerAvailable) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Surface(
-                                        color = colorPrimary,
-                                        shape = CircleShape,
-                                        modifier = Modifier.size(8.dp)
-                                    ) {}
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("氣壓計相對高程", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                                }
-                                Text(
-                                    "${if (sensorTelemetry.barometricAltitudeMeters >= 0) "+" else ""}${df2.format(sensorTelemetry.barometricAltitudeMeters)} m (${df1.format(sensorTelemetry.currentPressureHpa)} hPa)",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-
-                        // 4. Proximity Sensor (Surface Contact Zero-Point)
-                        if (sensorTelemetry.isProximityAvailable) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Surface(
-                                        color = if (sensorTelemetry.isProximityNear) colorPrimary else MaterialTheme.colorScheme.outlineVariant,
-                                        shape = CircleShape,
-                                        modifier = Modifier.size(8.dp)
-                                    ) {}
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("近接貼面零點校準", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                                }
-                                Text(
-                                    if (sensorTelemetry.isProximityNear) "📐 貼面觸碰 (0 cm 零點補償)" else "遠離表面 (${df1.format(sensorTelemetry.proximityDistanceCm)} cm)",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-                        }
-
-                        // 5. Dual-Camera Stereo Parallax Baseline
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Surface(
-                                    color = colorPrimary,
-                                    shape = CircleShape,
-                                    modifier = Modifier.size(8.dp)
-                                ) {}
-                                Spacer(Modifier.width(6.dp))
-                                Text("雙鏡頭同步視差基準", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                            }
-                            Text(
-                                "物理基線: ${df1.format(sensorTelemetry.stereoBaselineMm)} mm (置信度 ${(sensorTelemetry.stereoScaleConfidence * 100).toInt()}%)",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-
-                        // 6. Pixel Raw Depth Confidence Filter (ML Depth map confidence)
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Surface(
-                                    color = if (rawDepthConfidenceEnabled) colorPrimary else MaterialTheme.colorScheme.outlineVariant,
-                                    shape = CircleShape,
-                                    modifier = Modifier.size(8.dp)
-                                ) {}
-                                Spacer(Modifier.width(6.dp))
-                                Column {
-                                    Text("Pixel Raw Depth 置信度過濾", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                                    Text("門檻: 置信度 ≥ ${rawDepthConfidenceThreshold}% (無效噪點自動剔除)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
-                            Switch(
-                                checked = rawDepthConfidenceEnabled,
-                                onCheckedChange = { viewModel.setRawDepthConfidenceEnabled(it) }
-                            )
-                        }
-
-                        // 7. 60Hz High Refresh Rate Camera Mode
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { viewModel.setHighFpsModeEnabled(!highFpsModeEnabled) },
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                modifier = Modifier.weight(1f),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Surface(
-                                    color = if (highFpsModeEnabled) colorPrimary else MaterialTheme.colorScheme.outlineVariant,
-                                    shape = CircleShape,
-                                    modifier = Modifier.size(8.dp)
-                                ) {}
-                                Spacer(Modifier.width(6.dp))
-                                Column {
-                                    Text("60Hz 相機超流暢預覽", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                                    Text("硬體直出零拷貝 SurfaceView，大幅降低畫面延遲", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
-                            Switch(
-                                checked = highFpsModeEnabled,
-                                onCheckedChange = { viewModel.setHighFpsModeEnabled(it) }
-                            )
-                        }
-                    }
-
-                    // Reset Base Button
-                    FilledTonalButton(
-                        onClick = {
-                            viewModel.calibrateSensors()
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Rounded.RestartAlt, null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("重新校準當前感應器零點基準")
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showSensorStatusDialog = false }) {
-                    Text("確定")
-                }
-            }
-        )
-    }
-
-    // Lens Cleaning Warning Dialog
-    if (showLensCleaningDialog) {
-        AlertDialog(
-            onDismissRequest = { showLensCleaningDialog = false },
-            icon = {
-                Icon(
-                    imageVector = Icons.Rounded.CleaningServices,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.tertiary,
-                    modifier = Modifier.size(32.dp)
-                )
-            },
-            title = {
-                Text("鏡頭清潔提醒", fontWeight = FontWeight.Bold)
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        "偵測到鏡頭可能附著指紋油污或灰塵髒污。",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.tertiary
-                    )
-                    Text(
-                        "建議使用拭鏡布或乾淨棉布擦拭手機鏡頭表面，以維持最清晰的 AR 深度辨識與色彩品質。",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        viewModel.dismissLensDirtWarning()
-                        showLensCleaningDialog = false
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.tertiary,
-                        contentColor = MaterialTheme.colorScheme.onTertiary
-                    )
-                ) {
-                    Text("已擦拭完成", fontWeight = FontWeight.Bold)
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = {
-                        viewModel.dismissLensDirtWarning()
-                        showLensCleaningDialog = false
-                    }
-                ) {
-                    Text("暫時關閉")
-                }
-            }
-        )
-    }
-
-    // Low Light Environmental Alert Dialog
-    if (showLowLightDialog) {
-        AlertDialog(
-            onDismissRequest = { showLowLightDialog = false },
-            icon = {
-                Icon(
-                    imageVector = Icons.Rounded.WbSunny,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(32.dp)
-                )
-            },
-            title = {
-                Text("環境光線不足", fontWeight = FontWeight.Bold)
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        "目前環境光照較弱，可能導致 AR 特徵點追蹤精度降低或產生飄移。",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        "建議開啟手電筒補光或前往光源充足之處進行精確量測。",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        viewModel.toggleTorch(context)
-                        viewModel.dismissLowLightWarning()
-                        showLowLightDialog = false
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
-                    )
-                ) {
-                    Text("開啟手電筒補光", fontWeight = FontWeight.Bold)
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = {
-                        viewModel.dismissLowLightWarning()
-                        showLowLightDialog = false
-                    }
-                ) {
-                    Text("知道了")
-                }
-            }
-        )
-    }
-
-    // Excessive Motion Alert Dialog
-    if (showMotionDialog) {
-        AlertDialog(
-            onDismissRequest = { showMotionDialog = false },
-            icon = {
-                Icon(
-                    imageVector = Icons.Rounded.Speed,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.size(32.dp)
-                )
-            },
-            title = {
-                Text("相機移動過快", fontWeight = FontWeight.Bold)
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        "移動速度過快容易引起空間錨點跳動或重定位失敗。",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.secondary
-                    )
-                    Text(
-                        "請放慢平移與轉向速度，平穩掃描周遭環境以獲取最精準的尺寸數值。",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        viewModel.dismissMovementWarning()
-                        showMotionDialog = false
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.secondary,
-                        contentColor = MaterialTheme.colorScheme.onSecondary
-                    )
-                ) {
-                    Text("瞭解，放慢移動", fontWeight = FontWeight.Bold)
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = {
-                        viewModel.dismissMovementWarning()
-                        showMotionDialog = false
-                    }
-                ) {
-                    Text("關閉提醒")
-                }
-            }
-        )
-    }
-
-    // Deficient Feature Points Alert Dialog
-    if (showFeatureDialog) {
-        AlertDialog(
-            onDismissRequest = { showFeatureDialog = false },
-            icon = {
-                Icon(
-                    imageVector = Icons.Rounded.Grain,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.tertiary,
-                    modifier = Modifier.size(32.dp)
-                )
-            },
-            title = {
-                Text("環境紋理特徵不足", fontWeight = FontWeight.Bold)
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        "鏡頭視野內缺乏足夠的幾何或紋理特徵點（例如大面積純白牆面、光滑無紋理桌面）。",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.tertiary
-                    )
-                    Text(
-                        "建議將相機稍作平移，對準物體邊界、縫隙、踢腳板或有紋理的地面以建立堅固的空間錨點。",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        viewModel.dismissFeatureDeficientWarning()
-                        showFeatureDialog = false
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.tertiary,
-                        contentColor = MaterialTheme.colorScheme.onTertiary
-                    )
-                ) {
-                    Text("知道了", fontWeight = FontWeight.Bold)
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = {
-                        viewModel.dismissFeatureDeficientWarning()
-                        showFeatureDialog = false
-                    }
-                ) {
-                    Text("關閉提醒")
-                }
-            }
-        )
-    }
-
-    // AR Stability & Confidence Diagnostics Dialog
-    if (showStabilityDiagnosticsDialog) {
-        ArStabilityDiagnosticsDialog(
-            stability = trackingStability,
-            isLensSmudged = isLensSmudged,
-            simulatedAlert = simulatedAlert,
-            onTriggerCleaningTest = { viewModel.triggerLensDirtAlert() },
-            onTriggerLowLightTest = { viewModel.triggerLowLightAlert() },
-            onTriggerMovementTest = { viewModel.triggerFastMovementAlert() },
-            onTriggerFeatureTest = { viewModel.triggerLowFeatureAlert() },
-            onDismiss = { showStabilityDiagnosticsDialog = false }
-        )
-    }
-}
-
-/**
- * Active Tracking Stability Warning Banner
- * Proactively notifies the user when camera moves too fast or feature points are deficient
- * (e.g. pure white wall/ceiling, dim lighting), preventing measurement drift.
- */
-@Composable
-fun ActiveTrackingStabilityWarningBanner(
-    stability: ArTrackingStability,
-    onActionClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val bannerColor = if (stability.level == StabilityLevel.POOR) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.errorContainer
-    val bannerTextColor = if (stability.level == StabilityLevel.POOR) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onErrorContainer
-
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.95f),
-        shape = RoundedCornerShape(20.dp),
-        border = BorderStroke(1.5.dp, bannerColor.copy(alpha = 0.85f)),
-        modifier = modifier
-            .fillMaxWidth()
-            .shadow(12.dp, RoundedCornerShape(20.dp))
-    ) {
-        Row(
-            modifier = Modifier
-                .padding(horizontal = 16.dp, vertical = 12.dp)
-                .fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .background(bannerColor.copy(alpha = 0.18f), CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = when {
-                        stability.isFeatureDeficient -> Icons.Rounded.Grain
-                        stability.isMotionExcessive -> Icons.Rounded.Speed
-                        stability.isLightingDeficient -> Icons.Rounded.WbSunny
-                        else -> Icons.Rounded.WarningAmber
-                    },
-                    contentDescription = null,
-                    tint = bannerColor,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stability.warningMessage ?: "特徵點不足，請慢速平移相機",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = when {
-                        stability.isFeatureDeficient -> "請對準有紋理邊緣並慢速平移，避免點位偏移"
-                        stability.isMotionExcessive -> "目前平移速度 ${"%.2f".format(stability.cameraSpeedMps)}m/s，請放慢以確保精準"
-                        stability.isLightingDeficient -> "環境偏暗可能引起空間漂移，建議補光"
-                        else -> "慢速平移能建立穩固特徵點，防止測量偏移"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    lineHeight = 15.sp
-                )
-            }
-
-            Surface(
-                color = bannerColor.copy(alpha = 0.25f),
-                shape = RoundedCornerShape(12.dp),
-                border = BorderStroke(1.dp, bannerColor.copy(alpha = 0.6f)),
-                modifier = Modifier.clickable { onActionClick() }
-            ) {
-                Text(
-                    text = if (stability.isLightingDeficient) "補光" else "診斷",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
-                )
-            }
-        }
-    }
-}
-
-/**
- * AR Stability & Confidence Diagnostics Dialog
- * Detailed telemetry inspection: confidence score, feature points, speed, illumination and drift protection guide.
- */
-@Composable
-fun ArStabilityDiagnosticsDialog(
-    stability: ArTrackingStability,
-    isLensSmudged: Boolean = false,
-    simulatedAlert: String? = null,
-    onTriggerCleaningTest: (() -> Unit)? = null,
-    onTriggerLowLightTest: (() -> Unit)? = null,
-    onTriggerMovementTest: (() -> Unit)? = null,
-    onTriggerFeatureTest: (() -> Unit)? = null,
-    onDismiss: () -> Unit
-) {
-    val levelColor = when (stability.level) {
-        StabilityLevel.HIGH -> MaterialTheme.colorScheme.tertiary
-        StabilityLevel.MODERATE -> MaterialTheme.colorScheme.primary
-        StabilityLevel.LOW -> MaterialTheme.colorScheme.secondary
-        StabilityLevel.POOR -> MaterialTheme.colorScheme.error
-    }
-
-    val levelText = when (stability.level) {
-        StabilityLevel.HIGH -> "🎯 極佳 (穩定鎖定，空間無偏移)"
-        StabilityLevel.MODERATE -> "✨ 良好 (適宜正常測量)"
-        StabilityLevel.LOW -> "⚠️ 特徵偏少 (慢速平移警告)"
-        StabilityLevel.POOR -> "🔴 極低 (特徵匱乏，高偏移風險)"
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            EnableWindowBlur(blurRadiusDp = 50)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.Speed, null, tint = levelColor)
-                Spacer(Modifier.width(8.dp))
-                Text("AR 空間追蹤與置信度診斷", fontWeight = FontWeight.Bold)
-            }
-        },
-        text = {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                // Confidence Score Gauge
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                    shape = RoundedCornerShape(16.dp),
-                    border = BorderStroke(1.dp, levelColor.copy(alpha = 0.4f)),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "即時置信指數 (Confidence)",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = "${(stability.confidenceScore * 100).toInt()}%",
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = levelColor
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        LinearProgressIndicator(
-                            progress = { stability.confidenceScore },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(8.dp)
-                                .clip(CircleShape),
-                            color = levelColor,
-                            trackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
-                        )
-
-                        Spacer(modifier = Modifier.height(6.dp))
-
-                        Text(
-                            text = "狀態：$levelText",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Medium,
-                            color = levelColor
-                        )
-                    }
-                }
-
-                // Environment Telemetry Breakdown
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    // Feature Points
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Rounded.Grain, null, tint = if (stability.isFeatureDeficient) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("空間特徵點數量", style = MaterialTheme.typography.bodySmall)
-                        }
-                        Text(
-                            "${stability.featurePointsCount} 個 (${if (stability.isFeatureDeficient) "⚠️ 偏少" else "充足"})",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = if (stability.isFeatureDeficient) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-
-                    // Camera Panning Speed
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Rounded.Speed, null, tint = if (stability.isMotionExcessive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("相機平移速度", style = MaterialTheme.typography.bodySmall)
-                        }
-                        Text(
-                            "${"%.2f".format(stability.cameraSpeedMps)} m/s (${if (stability.isMotionExcessive) "⚠️ 過快" else "慢速穩定"})",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = if (stability.isMotionExcessive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-
-                    // Tracked Planes
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Rounded.Layers, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("環境辨識平面", style = MaterialTheme.typography.bodySmall)
-                        }
-                        Text(
-                            "${stability.trackingPlanesCount} 處平面",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-
-                    // Environmental Lighting
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Rounded.WbSunny, null, tint = if (stability.isLightingDeficient) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("環境照度指標", style = MaterialTheme.typography.bodySmall)
-                        }
-                        Text(
-                            "${"%.2f".format(stability.lightIntensity)} (${if (stability.isLightingDeficient) "⚠️ 偏暗" else "充足"})",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = if (stability.isLightingDeficient) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-
-                    // Lens Cleanliness Telemetry
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Rounded.CleaningServices,
-                                null,
-                                tint = if (isLensSmudged) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text("相機鏡頭潔淨度", style = MaterialTheme.typography.bodySmall)
-                        }
-                        Text(
-                            if (isLensSmudged) "⚠️ 需擦拭 (提醒中)" else "鏡頭清晰",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isLensSmudged) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                }
-
-                // Alert Test Simulations
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        "🧪 模擬觸發提醒測試：",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        if (onTriggerCleaningTest != null) {
-                            OutlinedButton(
-                                onClick = {
-                                    onTriggerCleaningTest()
-                                    onDismiss()
-                                },
-                                modifier = Modifier.weight(1f),
-                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
-                            ) {
-                                Text("清潔提醒", fontSize = 11.sp, maxLines = 1)
-                            }
-                        }
-                        if (onTriggerLowLightTest != null) {
-                            OutlinedButton(
-                                onClick = {
-                                    onTriggerLowLightTest()
-                                    onDismiss()
-                                },
-                                modifier = Modifier.weight(1f),
-                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
-                            ) {
-                                Text("光線不足", fontSize = 11.sp, maxLines = 1)
-                            }
-                        }
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        if (onTriggerMovementTest != null) {
-                            OutlinedButton(
-                                onClick = {
-                                    onTriggerMovementTest()
-                                    onDismiss()
-                                },
-                                modifier = Modifier.weight(1f),
-                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
-                            ) {
-                                Text("移動過快", fontSize = 11.sp, maxLines = 1)
-                            }
-                        }
-                        if (onTriggerFeatureTest != null) {
-                            OutlinedButton(
-                                onClick = {
-                                    onTriggerFeatureTest()
-                                    onDismiss()
-                                },
-                                modifier = Modifier.weight(1f),
-                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
-                            ) {
-                                Text("特徵不足", fontSize = 11.sp, maxLines = 1)
-                            }
-                        }
-                    }
-                }
-
-                // Anti-Drift Guidance Tips
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        "🛡️ 空間防偏移最佳實務：",
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        "• 慢速勻速平移：轉換角度時請維持慢速平移，避免劇烈手震晃動導致空間錨點漂移。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 12.sp
-                    )
-                    Text(
-                        "• 避開純色無紋理表面：純白牆面或暗光下缺乏幾何特徵點，請對準接縫或紋理邊緣以鎖定坐標。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 12.sp
-                    )
-                    Text(
-                        "• 保持鏡頭乾淨：鏡頭附著指紋油污會干擾特徵點識別，若出現清潔提醒請及時擦拭。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 12.sp
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("確定")
-            }
-        },
-        dismissButton = if (onTriggerCleaningTest != null) {
-            {
-                TextButton(
-                    onClick = {
-                        onTriggerCleaningTest()
-                        onDismiss()
-                    }
-                ) {
-                    Text("測試清潔提醒", color = MaterialTheme.colorScheme.tertiary)
-                }
-            }
-        } else null
+    // 7. AR Dialogs
+    ModernArDialogs(
+        viewModel = viewModel,
+        context = context,
+        showHelpDialog = showHelpDialog,
+        onDismissHelp = { showHelpDialog = false },
+        showSensorStatusDialog = showSensorStatusDialog,
+        onDismissSensorStatus = { showSensorStatusDialog = false },
+        showLensCleaningDialog = showLensCleaningDialog,
+        onDismissLensCleaning = { showLensCleaningDialog = false },
+        showLowLightDialog = showLowLightDialog,
+        onDismissLowLight = { showLowLightDialog = false },
+        showMotionDialog = showMotionDialog,
+        onDismissMotion = { showMotionDialog = false },
+        showFeatureDialog = showFeatureDialog,
+        onDismissFeature = { showFeatureDialog = false },
+        showStabilityDiagnosticsDialog = showStabilityDiagnosticsDialog,
+        onDismissStabilityDiagnostics = { showStabilityDiagnosticsDialog = false },
+        trackingStability = trackingStability,
+        isLensSmudged = isLensSmudged,
+        simulatedAlert = simulatedAlert
     )
-}
-
-/**
- * Isolated Live Distance readout badge.
- * Collecting liveDistanceMeters in this isolated scope prevents the entire 2500+ line
- * ModernArCameraView hierarchy from recomposing on every AR camera frame (30~60 FPS).
- */
-@Composable
-private fun LiveDistanceBadge(
-    viewModel: MeasureViewModel,
-    selectedUnit: String
-) {
-    val liveDistanceMeters by viewModel.liveDistanceMeters.collectAsState()
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
-        shape = RoundedCornerShape(18.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)),
-        modifier = Modifier.shadow(4.dp, RoundedCornerShape(18.dp))
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Icon(Icons.Rounded.Straighten, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(15.dp))
-            val liveDistText = liveDistanceMeters?.let { viewModel.formatLength(it, selectedUnit) } ?: "量測中..."
-            Text(
-                text = "即時長度: $liveDistText • 輕觸 ✓ 釘選終點",
-                color = MaterialTheme.colorScheme.primary,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold
-            )
-        }
-    }
-}
-
-/**
- * AR Spatial Horizon & Level Tilt Bar.
- * Provides instant real-time visual feedback on phone orientation (pitch and roll)
- * and detected spatial anchor planes, empowering users to align measurements perfectly.
- */
-@Composable
-private fun ArHorizonGuidanceIndicator(
-    sensorTelemetry: com.example.logic.sensor.SensorCorrectionTelemetry,
-    planesCount: Int,
-    modifier: Modifier = Modifier
-) {
-    val pitch: Float = sensorTelemetry.pitchDeg
-    val roll: Float = sensorTelemetry.rollDeg
-    val isRollLevel = kotlin.math.abs(roll) < 2.0f
-    val isPitchLevel = kotlin.math.abs(pitch) < 2.5f || kotlin.math.abs(pitch - 90f) < 2.5f || kotlin.math.abs(pitch + 90f) < 2.5f
-    val isLevel = isRollLevel && isPitchLevel
-
-    val animatedIndicatorColor by animateColorAsState(
-        targetValue = if (isLevel) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-        animationSpec = tween(200),
-        label = "horizonColor"
-    )
-
-    Surface(
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
-        shape = RoundedCornerShape(14.dp),
-        border = BorderStroke(0.8.dp, animatedIndicatorColor),
-        modifier = modifier
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Icon(
-                if (isLevel) Icons.Rounded.CheckCircle else Icons.Rounded.FilterTiltShift,
-                contentDescription = null,
-                tint = if (isLevel) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(13.dp)
-            )
-            Text(
-                text = if (isLevel) "🎯 基準水平對齊 (0°)" else "俯仰 ${String.format(java.util.Locale.US, "%.0f°", pitch)} · 滾轉 ${String.format(java.util.Locale.US, "%.0f°", roll)}",
-                style = MaterialTheme.typography.labelSmall,
-                color = if (isLevel) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
-                fontWeight = if (isLevel) FontWeight.Bold else FontWeight.Normal,
-                fontSize = 11.sp
-            )
-            if (planesCount > 0) {
-                Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = RoundedCornerShape(6.dp)
-                ) {
-                    Text(
-                        text = "表面×$planesCount",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                    )
-                }
-            }
-        }
-    }
-}
-
-/**
- * Real-Time Measurement Completed Summary Card.
- * Appears whenever 2+ points are placed, featuring primary dimensions, dual-unit conversion,
- * 1-tap copy to clipboard, and instant save-to-history button.
- */
-@Composable
-private fun MeasurementLiveSummaryCard(
-    viewModel: MeasureViewModel,
-    subMode: Int,
-    selectedUnit: String,
-    onShowHistory: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val capturedPoints = viewModel.capturedPoints
-    if (capturedPoints.size < 2) return
-
-    val clipboardManager = LocalClipboardManager.current
-    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
-    var isCopied by remember { mutableStateOf(false) }
-    var isSaved by remember { mutableStateOf(false) }
-
-    LaunchedEffect(capturedPoints.size) {
-        isSaved = false
-        isCopied = false
-    }
-
-    val autoDetectedType by viewModel.autoDetectedType.collectAsState()
-    val effectiveType = if (subMode == 0) autoDetectedType else when (subMode) {
-        1 -> "AREA"
-        2 -> "HEIGHT"
-        5 -> "ANGLE"
-        else -> "DISTANCE"
-    }
-
-    val (primaryText, secondaryText, icon) = when (effectiveType) {
-        "AREA" -> {
-            val area = viewModel.calculatePolygonArea()
-            val ping = String.format(java.util.Locale.US, "%.2f 坪", area * 0.3025)
-            val sqft = String.format(java.util.Locale.US, "%.1f sq ft", area * 10.7639)
-            Triple(viewModel.formatArea(area, selectedUnit), "$ping · $sqft", Icons.Rounded.SquareFoot)
-        }
-        "HEIGHT" -> {
-            val h = viewModel.calculateVerticalHeight()
-            val cm = String.format(java.util.Locale.US, "%.1f cm", h * 100)
-            val ft = String.format(java.util.Locale.US, "%.2f ft", h * 3.28084)
-            val inch = String.format(java.util.Locale.US, "%.1f in", h * 39.3701)
-            Triple("垂直高 ${viewModel.formatLength(h, selectedUnit)}", "$cm · $ft · $inch", Icons.Rounded.Height)
-        }
-        "ANGLE" -> {
-            val deg = viewModel.calculateAngle()
-            val rad = String.format(java.util.Locale.US, "%.3f rad", Math.toRadians(deg.toDouble()))
-            Triple("空間夾角 ${Math.round(deg)}°", rad, Icons.Rounded.Architecture)
-        }
-        else -> {
-            val dist = viewModel.calculateTotalDistance()
-            val cm = String.format(java.util.Locale.US, "%.1f cm", dist * 100)
-            val ft = String.format(java.util.Locale.US, "%.2f ft", dist * 3.28084)
-            val inch = String.format(java.util.Locale.US, "%.1f in", dist * 39.3701)
-            Triple(viewModel.formatLength(dist, selectedUnit), "$cm · $ft · $inch", Icons.Rounded.Straighten)
-        }
-    }
-
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.94f),
-        shape = RoundedCornerShape(20.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
-        shadowElevation = 8.dp,
-        modifier = modifier
-            .fillMaxWidth()
-            .testTag("measurement_live_summary_card")
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.weight(1f)
-            ) {
-                Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = CircleShape,
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            icon,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-
-                Column {
-                    Text(
-                        text = primaryText,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = secondaryText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 11.sp
-                    )
-                }
-            }
-
-            // Quick Action Buttons (Copy, Save)
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                // Copy Button
-                IconButton(
-                    onClick = {
-                        clipboardManager.setText(AnnotatedString(primaryText))
-                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
-                        isCopied = true
-                    },
-                    modifier = Modifier
-                        .size(34.dp)
-                        .background(
-                            if (isCopied) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
-                            CircleShape
-                        )
-                ) {
-                    Icon(
-                        if (isCopied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
-                        contentDescription = "複製測量數值",
-                        tint = if (isCopied) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-
-                // Save to History Button
-                IconButton(
-                    onClick = {
-                        if (!isSaved) {
-                            viewModel.saveMeasurementRecord {
-                                isSaved = true
-                            }
-                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                        } else {
-                            onShowHistory()
-                        }
-                    },
-                    modifier = Modifier
-                        .size(34.dp)
-                        .background(
-                            if (isSaved) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.primary,
-                            CircleShape
-                        )
-                ) {
-                    Icon(
-                        if (isSaved) Icons.Rounded.BookmarkAdded else Icons.Rounded.BookmarkAdd,
-                        contentDescription = "儲存至紀錄",
-                        tint = if (isSaved) MaterialTheme.colorScheme.onTertiaryContainer else MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-            }
-        }
-    }
 }
