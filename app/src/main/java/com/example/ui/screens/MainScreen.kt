@@ -140,93 +140,7 @@ fun MainScreen(viewModel: MeasureViewModel) {
                 Scaffold(
                     containerColor = if (currentMode == 0) Color.Transparent else MaterialTheme.colorScheme.background,
                     topBar = {
-                        if (currentMode == 1) {
-                            GradientBlurTopBar(
-                                baseColor = MaterialTheme.colorScheme.surface,
-                                modifier = Modifier.testTag("top_gradient_blur_bar")
-                            ) {
-                                CenterAlignedTopAppBar(
-                                    title = {
-                                        Text(
-                                            text = rulerLabel.ifEmpty { "螢幕尺" },
-                                            fontWeight = FontWeight.Bold,
-                                            style = MaterialTheme.typography.titleMedium
-                                        )
-                                    },
-                                    actions = {
-                                        // Unit selector button
-                                        Box {
-                                            TextButton(
-                                                onClick = { showUnitMenu = true },
-                                                shape = RoundedCornerShape(12.dp)
-                                            ) {
-                                                Text(
-                                                    text = selectedUnit.uppercase(),
-                                                    fontWeight = FontWeight.ExtraBold,
-                                                    color = colorPrimary
-                                                )
-                                                Icon(
-                                                    Icons.Rounded.ArrowDropDown,
-                                                    contentDescription = null,
-                                                    modifier = Modifier.size(18.dp)
-                                                )
-                                            }
-
-                                            DropdownMenu(
-                                                expanded = showUnitMenu,
-                                                onDismissRequest = { showUnitMenu = false }
-                                            ) {
-                                                listOf("cm" to "公分 (cm)", "m" to "公尺 (m)", "in" to "英吋 (in)", "ft" to "英呎 (ft)", "yd" to "碼 (yd)").forEach { (unitCode, label) ->
-                                                    DropdownMenuItem(
-                                                        text = { Text(label, fontWeight = if (selectedUnit == unitCode) FontWeight.Bold else FontWeight.Normal) },
-                                                        onClick = {
-                                                            viewModel.setSelectedUnit(unitCode)
-                                                            showUnitMenu = false
-                                                        },
-                                                        leadingIcon = if (selectedUnit == unitCode) {
-                                                            { Icon(Icons.Rounded.Check, null, tint = colorPrimary) }
-                                                        } else null
-                                                    )
-                                                }
-                                            }
-                                        }
-
-                                        // Flashlight button
-                                        IconButton(
-                                            onClick = { viewModel.toggleTorch(context) },
-                                            modifier = Modifier.testTag("ruler_flashlight_button")
-                                        ) {
-                                            Icon(
-                                                if (isTorchOn) Icons.Rounded.FlashlightOn else Icons.Rounded.FlashlightOff,
-                                                contentDescription = "手電筒",
-                                                tint = if (isTorchOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                            )
-                                        }
-
-                                        // History button (toggles supporting pane on tablets or opens sheet)
-                                        IconButton(onClick = { showHistorySheet = !showHistorySheet }) {
-                                            Icon(
-                                                Icons.Rounded.History,
-                                                contentDescription = "歷史記錄",
-                                                tint = if (showHistorySheet) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                            )
-                                        }
-
-                                        // Settings dialog button
-                                        IconButton(onClick = { showSettingsDialog = true }) {
-                                            Icon(
-                                                Icons.Rounded.Settings,
-                                                contentDescription = "設定",
-                                                tint = MaterialTheme.colorScheme.onSurface
-                                            )
-                                        }
-                                    },
-                                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                                        containerColor = Color.Transparent
-                                    )
-                                )
-                            }
-                        } else if (currentMode == 2) {
+                        if (currentMode == 2) {
                             GradientBlurTopBar(
                                 baseColor = MaterialTheme.colorScheme.surface,
                                 modifier = Modifier.testTag("level_top_gradient_blur_bar")
@@ -303,7 +217,7 @@ fun MainScreen(viewModel: MeasureViewModel) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(if (currentMode == 0) PaddingValues(0.dp) else innerPadding)
+                            .padding(if (currentMode == 0 || currentMode == 1) PaddingValues(0.dp) else innerPadding)
                     ) {
                         // Smooth Fade & Subtle Scale Transition: Camera AR (0) <-> Screen Ruler (1)
                         AnimatedContent(

@@ -1,10 +1,6 @@
 package com.example.ui.components
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -33,13 +29,12 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
- * 專業高精度雙邊螢幕直尺 (Precision Dual-Edge Screen Ruler)
+ * 全螢幕高精度雙邊螢幕直尺 (Full-Screen Precision Dual-Edge Screen Ruler)
  *
- * 核心功能：
- * 1. 左右雙邊獨立刻度：左側公制 (mm/cm)，右側可一鍵切換公制 (cm) 或英制 (inch, 1/16" 精準刻度)。
- * 2. 零點對齊基準線：貫穿左右尺身，方便實體待測物件邊緣頂齊起點直接對比量測。
- * 3. 極致流暢校準面板：支援 0.002x 精密步進與連續平滑滑桿（非同步寫入快取，鬆手持久化）。
- * 4. 自適應螢幕密度排版：文字依 sp 向量縮放，垂直基準線以 FontMetrics 完美居中對齊。
+ * 核心特色：
+ * 1. 自動全螢幕沉浸式量測，無頂部標題列與手電筒干擾，極致利用螢幕全高。
+ * 2. 移除切換單位干擾按鈕，雙邊均勻清晰刻度，左側標註公制 (cm)，右側零點基準對齊。
+ * 3. 矯正調整面板精簡移至左上角 (Top-Left)，以超小型 Mini-Strip 呈現微調步進 (0.002x) 與即時比例。
  */
 private val PRECALCULATED_INT_STRINGS = Array(301) { "$it" }
 
@@ -55,11 +50,7 @@ fun RulerComponent(
 
     // Calibration factor from ViewModel state (persisted in SharedPreferences)
     val calibrationFactor by viewModel.rulerCalibration.collectAsState()
-    val isCalibrationActive by viewModel.isRulerCalibrationActive.collectAsState()
     val rulerTheme by viewModel.rulerTheme.collectAsState()
-
-    // Right-edge unit: "cm" or "in"
-    var rightUnit by remember { mutableStateOf("cm") }
 
     val rulerAccentColor = when (rulerTheme) {
         "NEON_CYAN" -> androidx.compose.ui.graphics.Color(0xFF00E5FF)
@@ -74,10 +65,9 @@ fun RulerComponent(
     }
     val safeFactor = if (calibrationFactor > 0.05f && !calibrationFactor.isNaN() && !calibrationFactor.isInfinite()) calibrationFactor else 1.0f
     val mmInPx = ((ydpi / 25.4f) * safeFactor).coerceIn(1.5f, 50.0f)
-    val inchInPx = (ydpi * safeFactor).coerceIn(40.0f, 1200.0f)
 
-    // Zero Y baseline: positioned comfortably below top status/controls bar
-    val zeroY = with(density) { 86.dp.toPx() }
+    // Full screen Zero Y baseline: positioned comfortably below top status bar / notch
+    val zeroY = with(density) { 52.dp.toPx() }
 
     val colorPrimary = MaterialTheme.colorScheme.primary
     val colorSurface = MaterialTheme.colorScheme.surface
@@ -135,7 +125,9 @@ fun RulerComponent(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        // Dual-Edge Ruler Canvas
+        // -------------------------------------------------------------
+        // Dual-Edge Full-Screen Ruler Canvas
+        // -------------------------------------------------------------
         Canvas(
             modifier = Modifier.fillMaxSize()
         ) {
@@ -153,12 +145,6 @@ fun RulerComponent(
             val tickMmLlen = 12.dp.toPx()
             val strokeCmWidth = 2.dp.toPx()
             val strokeMmWidth = 1.dp.toPx()
-
-            val tickWholeInLen = 34.dp.toPx()
-            val tickHalfInLen = 24.dp.toPx()
-            val tickQuarterInLen = 18.dp.toPx()
-            val tickEighthInLen = 14.dp.toPx()
-            val tickSixteenthInLen = 10.dp.toPx()
 
             // 1. Left Ruler Body Background
             drawRect(
@@ -189,7 +175,7 @@ fun RulerComponent(
                 strokeWidth = borderStrokeWidth
             )
 
-            // 3. Zero Reference Baseline connecting Left and Right Rulers
+            // 3. Zero Reference Baseline connecting Left and Right Rulers across the full screen
             drawLine(
                 color = colorPrimary,
                 start = Offset(0f, zeroY),
@@ -199,7 +185,7 @@ fun RulerComponent(
 
             // Zero Unit Label Headers
             drawContext.canvas.nativeCanvas.drawText("cm", pad12Px, zeroY - pad10Px, unitPaintLeft)
-            drawContext.canvas.nativeCanvas.drawText(rightUnit, w - pad12Px, zeroY - pad10Px, unitPaintRight)
+            drawContext.canvas.nativeCanvas.drawText("cm", w - pad12Px, zeroY - pad10Px, unitPaintRight)
 
             // 4. Left Edge Graduations (Centimeter & Millimeter ticks)
             var leftCurY = zeroY
@@ -238,406 +224,157 @@ fun RulerComponent(
                 leftMm++
             }
 
-            // 5. Right Edge Graduations (cm or in)
-            if (rightUnit == "cm") {
-                // Right side Metric
-                var rightCurY = zeroY
-                var rightMm = 0
-                while (rightCurY < h && rightMm < 3000) {
-                    val isCm = (rightMm % 10 == 0)
-                    val isHalfCm = (rightMm % 5 == 0)
+            // 5. Right Edge Graduations (Matching Metric Centimeter & Millimeter ticks)
+            var rightCurY = zeroY
+            var rightMm = 0
+            while (rightCurY < h && rightMm < 3000) {
+                val isCm = (rightMm % 10 == 0)
+                val isHalfCm = (rightMm % 5 == 0)
 
-                    val tickLength = when {
-                        isCm -> tickCmLen
-                        isHalfCm -> tickHalfCmLen
-                        else -> tickMmLlen
-                    }
-
-                    val tickColor = if (isCm) colorPrimary else colorOnSurface.copy(alpha = 0.35f)
-                    val strokeWidth = if (isCm) strokeCmWidth else strokeMmWidth
-
-                    drawLine(
-                        color = tickColor,
-                        start = Offset(w, rightCurY),
-                        end = Offset(w - tickLength, rightCurY),
-                        strokeWidth = strokeWidth
-                    )
-
-                    if (isCm && rightMm > 0) {
-                        val cmVal = rightMm / 10
-                        drawContext.canvas.nativeCanvas.drawText(
-                            PRECALCULATED_INT_STRINGS.getOrElse(cmVal) { "$cmVal" },
-                            w - tickLength - pad8Px,
-                            rightCurY - fontVerticalOffset,
-                            textPaintRight
-                        )
-                    }
-
-                    rightCurY += mmInPx
-                    rightMm++
+                val tickLength = when {
+                    isCm -> tickCmLen
+                    isHalfCm -> tickHalfCmLen
+                    else -> tickMmLlen
                 }
-            } else {
-                // Right side Imperial (Inches with 1/16" precision)
-                val sixteenthInPx = (inchInPx / 16f).coerceIn(2.0f, 100.0f)
-                var rightCurY = zeroY
-                var step = 0
-                while (rightCurY < h && step < 3000) {
-                    val isWhole = (step % 16 == 0)
-                    val isHalf = (step % 8 == 0)
-                    val isQuarter = (step % 4 == 0)
-                    val isEighth = (step % 2 == 0)
 
-                    val tickLength = when {
-                        isWhole -> tickWholeInLen
-                        isHalf -> tickHalfInLen
-                        isQuarter -> tickQuarterInLen
-                        isEighth -> tickEighthInLen
-                        else -> tickSixteenthInLen
-                    }
+                val tickColor = if (isCm) colorPrimary else colorOnSurface.copy(alpha = 0.35f)
+                val strokeWidth = if (isCm) strokeCmWidth else strokeMmWidth
 
-                    val tickColor = if (isWhole) colorPrimary else colorOnSurface.copy(alpha = 0.35f)
-                    val strokeWidth = if (isWhole) strokeCmWidth else strokeMmWidth
+                drawLine(
+                    color = tickColor,
+                    start = Offset(w, rightCurY),
+                    end = Offset(w - tickLength, rightCurY),
+                    strokeWidth = strokeWidth
+                )
 
-                    drawLine(
-                        color = tickColor,
-                        start = Offset(w, rightCurY),
-                        end = Offset(w - tickLength, rightCurY),
-                        strokeWidth = strokeWidth
+                if (isCm && rightMm > 0) {
+                    val cmVal = rightMm / 10
+                    drawContext.canvas.nativeCanvas.drawText(
+                        PRECALCULATED_INT_STRINGS.getOrElse(cmVal) { "$cmVal" },
+                        w - tickLength - pad8Px,
+                        rightCurY - fontVerticalOffset,
+                        textPaintRight
                     )
-
-                    if (isWhole && step > 0) {
-                        val inchVal = step / 16
-                        drawContext.canvas.nativeCanvas.drawText(
-                            PRECALCULATED_INT_STRINGS.getOrElse(inchVal) { "$inchVal" },
-                            w - tickLength - pad8Px,
-                            rightCurY - fontVerticalOffset,
-                            textPaintRight
-                        )
-                    }
-
-                    rightCurY += sixteenthInPx
-                    step++
                 }
+
+                rightCurY += mmInPx
+                rightMm++
             }
         }
 
-        // Center Calibration Visual Guide (displayed during calibration)
-        if (isCalibrationActive) {
-            Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.95f),
-                tonalElevation = 6.dp,
-                shadowElevation = 8.dp,
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .padding(horizontal = 76.dp)
-            ) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Icon(
-                        Icons.Rounded.Straighten,
-                        contentDescription = null,
-                        tint = colorPrimary,
-                        modifier = Modifier.size(36.dp)
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "貼齊實體尺至螢幕邊緣",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = colorOnSurface
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "建議比對 5cm 或 10cm 標示線，微調至完全吻合即可保證 100% 精準度",
-                        style = MaterialTheme.typography.bodySmall,
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        lineHeight = 16.sp
-                    )
-                }
-            }
-        }
-
-        // Top Controls Bar (Header, Unit switcher, Calibration toggle, History)
+        // -------------------------------------------------------------
+        // TOP-LEFT CORNER: SHRUNK COMPACT CALIBRATION STRIP (左上角微縮校準條)
+        // -------------------------------------------------------------
         Surface(
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
-            tonalElevation = 4.dp,
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.94f),
+            tonalElevation = 6.dp,
+            shadowElevation = 8.dp,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
             modifier = Modifier
-                .fillMaxWidth()
-                .align(Alignment.TopCenter)
+                .align(Alignment.TopStart)
                 .statusBarsPadding()
+                .padding(start = 8.dp, top = 6.dp)
         ) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                // Title & Active Mode Pill
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f, fill = false)
+                Icon(
+                    Icons.Rounded.Tune,
+                    contentDescription = "校準",
+                    tint = colorPrimary,
+                    modifier = Modifier.size(15.dp)
+                )
+
+                Spacer(modifier = Modifier.width(2.dp))
+
+                Text(
+                    text = String.format(Locale.US, "%.3fx", safeFactor),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colorPrimary
+                )
+
+                // Micro Decrement [-] Button
+                IconButton(
+                    onClick = {
+                        val next = ((safeFactor - 0.002f) * 1000f).roundToInt() / 1000f
+                        viewModel.updateRulerCalibration(next.coerceIn(0.80f, 1.25f), persistImmediately = true)
+                        viewModel.triggerHapticFeedback(HapticType.CLICK)
+                    },
+                    modifier = Modifier.size(26.dp)
                 ) {
                     Icon(
-                        if (isCalibrationActive) Icons.Rounded.Tune else Icons.Rounded.Straighten,
-                        contentDescription = null,
-                        tint = colorPrimary,
-                        modifier = Modifier.size(24.dp)
+                        Icons.Rounded.Remove,
+                        contentDescription = "微調減少",
+                        modifier = Modifier.size(14.dp),
+                        tint = colorOnSurface
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column {
-                        Text(
-                            text = if (isCalibrationActive) "刻度校準中" else "精密螢幕尺",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = colorOnSurface
-                        )
-                        Text(
-                            text = if (isCalibrationActive) "即時調節實體比例" else "左右雙邊精準刻度",
-                            style = MaterialTheme.typography.bodySmall,
-                            fontSize = 10.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    // Factor Badge
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = if (abs(calibrationFactor - 1.0f) > 0.001f) {
-                            MaterialTheme.colorScheme.primaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.surfaceVariant
-                        }
-                    ) {
-                        Text(
-                            text = String.format(Locale.US, "%.3fx", calibrationFactor),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (abs(calibrationFactor - 1.0f) > 0.001f) {
-                                MaterialTheme.colorScheme.onPrimaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
-                        )
-                    }
                 }
 
-                // Action Controls
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                // Micro Increment [+] Button
+                IconButton(
+                    onClick = {
+                        val next = ((safeFactor + 0.002f) * 1000f).roundToInt() / 1000f
+                        viewModel.updateRulerCalibration(next.coerceIn(0.80f, 1.25f), persistImmediately = true)
+                        viewModel.triggerHapticFeedback(HapticType.CLICK)
+                    },
+                    modifier = Modifier.size(26.dp)
                 ) {
-                    if (!isCalibrationActive) {
-                        // Right Edge Unit Switcher (cm / in)
-                        FilterChip(
-                            selected = rightUnit == "in",
-                            onClick = {
-                                rightUnit = if (rightUnit == "cm") "in" else "cm"
-                                viewModel.triggerHapticFeedback(HapticType.CLICK)
-                            },
-                            label = {
-                                Text(
-                                    text = "右: $rightUnit",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            },
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.height(32.dp)
+                    Icon(
+                        Icons.Rounded.Add,
+                        contentDescription = "微調增加",
+                        modifier = Modifier.size(14.dp),
+                        tint = colorOnSurface
+                    )
+                }
+
+                // Reset to Default (1.000x) if calibrated
+                if (abs(safeFactor - 1.0f) > 0.001f) {
+                    IconButton(
+                        onClick = {
+                            viewModel.updateRulerCalibration(1.0f, persistImmediately = true)
+                            viewModel.triggerHapticFeedback(HapticType.CLICK)
+                        },
+                        modifier = Modifier.size(26.dp)
+                    ) {
+                        Icon(
+                            Icons.Rounded.RestartAlt,
+                            contentDescription = "重設校準",
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-
-                        // Calibration Button
-                        FilledTonalButton(
-                            onClick = {
-                                viewModel.setRulerCalibrationActive(true)
-                                viewModel.triggerHapticFeedback(HapticType.CLICK)
-                            },
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.height(32.dp)
-                        ) {
-                            Icon(Icons.Rounded.Tune, contentDescription = null, modifier = Modifier.size(15.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(text = "校準", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-
-                        // History Button
-                        IconButton(
-                            onClick = onShowHistoryClick,
-                            modifier = Modifier.size(36.dp)
-                        ) {
-                            Icon(
-                                Icons.Rounded.History,
-                                contentDescription = "歷史紀錄",
-                                tint = colorOnSurface
-                            )
-                        }
-                    } else {
-                        // Calibration Mode: Finish Button
-                        Button(
-                            onClick = {
-                                viewModel.persistRulerCalibration()
-                                viewModel.setRulerCalibrationActive(false)
-                                viewModel.triggerHapticFeedback(HapticType.DOUBLE)
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = colorPrimary,
-                                contentColor = MaterialTheme.colorScheme.onPrimary
-                            ),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.height(34.dp)
-                        ) {
-                            Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("完成", fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                        }
                     }
                 }
             }
         }
 
-        // =========================================================================
-        // BOTTOM FLOATING PANELS
-        // =========================================================================
-
-        // 1. STREAMLINED ULTRA-SMOOTH CALIBRATION DOCK (Active during Calibration)
-        AnimatedVisibility(
-            visible = isCalibrationActive,
-            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+        // -------------------------------------------------------------
+        // TOP-RIGHT CORNER: MINIMAL HISTORY SHORTCUT
+        // -------------------------------------------------------------
+        Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.88f),
+            tonalElevation = 4.dp,
+            shadowElevation = 6.dp,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
             modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = bottomPadding + 8.dp, start = 12.dp, end = 12.dp)
+                .align(Alignment.TopEnd)
+                .statusBarsPadding()
+                .padding(end = 8.dp, top = 6.dp)
         ) {
-            Surface(
-                shape = RoundedCornerShape(22.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                tonalElevation = 8.dp,
-                shadowElevation = 10.dp,
-                modifier = Modifier.fillMaxWidth()
+            IconButton(
+                onClick = onShowHistoryClick,
+                modifier = Modifier.size(32.dp)
             ) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    // Line 1: Fine-Tuning Steppers & Continuous Smooth Slider
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        // Tactile Decrement Button [-]
-                        FilledTonalIconButton(
-                            onClick = {
-                                val next = ((calibrationFactor - 0.002f) * 1000f).roundToInt() / 1000f
-                                viewModel.updateRulerCalibration(next.coerceIn(0.80f, 1.25f), persistImmediately = true)
-                                viewModel.triggerHapticFeedback(HapticType.CLICK)
-                            },
-                            modifier = Modifier.size(44.dp),
-                            shape = CircleShape
-                        ) {
-                            Icon(Icons.Rounded.Remove, contentDescription = "微調減少", modifier = Modifier.size(22.dp))
-                        }
-
-                        // Center: Live Factor Readout & Smooth Slider
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.Center
-                            ) {
-                                Text(
-                                    text = String.format(Locale.US, "%.3fx", calibrationFactor),
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = colorPrimary
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                val pctDiff = (calibrationFactor - 1.0f) * 100f
-                                Text(
-                                    text = if (abs(pctDiff) < 0.05f) "(預設)" else String.format(Locale.US, "(%+0.1f%%)", pctDiff),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-
-                            Slider(
-                                value = calibrationFactor,
-                                onValueChange = { newVal ->
-                                    val rounded = ((newVal * 1000f).roundToInt() / 1000f).coerceIn(0.80f, 1.25f)
-                                    viewModel.updateRulerCalibration(rounded, persistImmediately = false)
-                                },
-                                onValueChangeFinished = {
-                                    viewModel.persistRulerCalibration()
-                                },
-                                valueRange = 0.82f..1.18f,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(28.dp)
-                            )
-                        }
-
-                        // Tactile Increment Button [+]
-                        FilledTonalIconButton(
-                            onClick = {
-                                val next = ((calibrationFactor + 0.002f) * 1000f).roundToInt() / 1000f
-                                viewModel.updateRulerCalibration(next.coerceIn(0.80f, 1.25f), persistImmediately = true)
-                                viewModel.triggerHapticFeedback(HapticType.CLICK)
-                            },
-                            modifier = Modifier.size(44.dp),
-                            shape = CircleShape
-                        ) {
-                            Icon(Icons.Rounded.Add, contentDescription = "微調增加", modifier = Modifier.size(22.dp))
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    // Line 2: Fast Action Buttons (Reset to 1.000x & Finish Calibration)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        TextButton(
-                            onClick = {
-                                viewModel.updateRulerCalibration(1.0f, persistImmediately = true)
-                                viewModel.triggerHapticFeedback(HapticType.CLICK)
-                            },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                        ) {
-                            Icon(Icons.Rounded.RestartAlt, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("恢復預設 (1.000x)", fontSize = 11.sp)
-                        }
-
-                        Button(
-                            onClick = {
-                                viewModel.persistRulerCalibration()
-                                viewModel.setRulerCalibrationActive(false)
-                                viewModel.triggerHapticFeedback(HapticType.DOUBLE)
-                            },
-                            shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
-                            modifier = Modifier.height(34.dp)
-                        ) {
-                            Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(15.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("完成校準", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
+                Icon(
+                    Icons.Rounded.History,
+                    contentDescription = "歷史記錄",
+                    tint = colorOnSurface,
+                    modifier = Modifier.size(16.dp)
+                )
             }
         }
     }

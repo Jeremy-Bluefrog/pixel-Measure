@@ -116,6 +116,7 @@ private fun DrawScope.drawFloorParallelAnchorDisc(
     accentColor: Color,
     isTarget: Boolean = false,
     isSnapped: Boolean = false,
+    isOrigin: Boolean = false,
     pulseScale: Float = 1.0f,
     outerPath: Path,
     innerPath: Path,
@@ -131,86 +132,65 @@ private fun DrawScope.drawFloorParallelAnchorDisc(
     } else 1.0f
     val depth = kotlin.math.abs(vz).coerceIn(0.25f, 10.0f)
     val baseRadiusM = (0.038 * kotlin.math.sqrt(depth.toDouble())).coerceIn(0.022, 0.12)
-    val currentRadiusM = baseRadiusM * (if (isTarget) pulseScale.toDouble() else 1.0)
+    val currentRadiusM = baseRadiusM * (if (isTarget) pulseScale.toDouble() else if (isOrigin) 1.15 else 1.0)
     val innerRadiusM = currentRadiusM * 0.54
     val coreRadiusM = currentRadiusM * 0.20
-    val shadowRadiusM = currentRadiusM * 1.10
-    val auraRadiusM = currentRadiusM * 1.35
+    val shadowRadiusM = currentRadiusM * 1.12
+    val auraRadiusM = currentRadiusM * 1.38
 
     val hasOuter = buildFloorParallelCirclePath(outerPath, center3D.x, center3D.y, center3D.z, currentRadiusM, viewMatrix, projectionMatrix, screenW, screenH, screenCenter)
     val hasInner = buildFloorParallelCirclePath(innerPath, center3D.x, center3D.y, center3D.z, innerRadiusM, viewMatrix, projectionMatrix, screenW, screenH, screenCenter)
     val hasCore = buildFloorParallelCirclePath(corePath, center3D.x, center3D.y, center3D.z, coreRadiusM, viewMatrix, projectionMatrix, screenW, screenH, screenCenter)
     val hasShadow = buildFloorParallelCirclePath(shadowPath, center3D.x, center3D.y, center3D.z, shadowRadiusM, viewMatrix, projectionMatrix, screenW, screenH, screenCenter)
 
-    val activeColor = if (isSnapped) accentColor else primaryColor
+    val activeColor = if (isSnapped) accentColor else if (isOrigin) Color(0xFFFFD54F) else primaryColor
 
-    // 1. Floor Drop Shadow (Soft contact shadow on ground)
+    // 1. Floor Drop Shadow (Soft contact shadow on ground, parallel to floor)
     if (hasShadow) {
         drawPath(
             path = shadowPath,
-            color = Color.Black.copy(alpha = 0.28f),
-            style = Stroke(width = 3.2.dp.toPx(), cap = StrokeCap.Round)
+            color = Color.Black.copy(alpha = 0.32f),
+            style = Stroke(width = 3.6.dp.toPx(), cap = StrokeCap.Round)
         )
     }
 
-    // 2. Pulse / Snapping Halo Aura on the floor
-    if (isSnapped || isTarget) {
+    // 2. Pulse / Snapping / Origin Halo Aura on the floor (Concentric circular ring parallel to floor)
+    if (isSnapped || isTarget || isOrigin) {
         val hasAura = buildFloorParallelCirclePath(auraPath, center3D.x, center3D.y, center3D.z, auraRadiusM, viewMatrix, projectionMatrix, screenW, screenH, screenCenter)
         if (hasAura) {
             drawPath(
                 path = auraPath,
-                color = activeColor.copy(alpha = if (isSnapped) 0.55f else 0.25f * (2f - pulseScale).coerceIn(0f, 1f)),
-                style = Stroke(width = if (isSnapped) 2.8.dp.toPx() else 1.8.dp.toPx())
+                color = activeColor.copy(alpha = if (isOrigin) 0.50f else if (isSnapped) 0.55f else 0.25f * (2f - pulseScale).coerceIn(0f, 1f)),
+                style = Stroke(width = if (isOrigin) 2.4.dp.toPx() else if (isSnapped) 2.8.dp.toPx() else 1.8.dp.toPx())
             )
         }
     }
 
-    // 3. Ground Disc Translucent Base Fill
+    // 3. Ground Disc Translucent Base Fill (Pure circular disc parallel to the floor)
     if (hasOuter) {
         drawPath(
             path = outerPath,
-            color = activeColor.copy(alpha = if (isSnapped) 0.38f else if (isTarget) 0.22f else 0.30f),
+            color = activeColor.copy(alpha = if (isOrigin) 0.35f else if (isSnapped) 0.38f else if (isTarget) 0.22f else 0.30f),
             style = Fill
         )
-        // 4. Outer Ground Perimeter Ring
+        // 4. Outer Ground Perimeter Ring (Pure circular ring parallel to the floor)
         drawPath(
             path = outerPath,
             color = activeColor.copy(alpha = 0.95f),
-            style = Stroke(width = if (isSnapped) 2.8.dp.toPx() else 2.2.dp.toPx(), cap = StrokeCap.Round)
+            style = Stroke(width = if (isOrigin || isSnapped) 2.8.dp.toPx() else 2.2.dp.toPx(), cap = StrokeCap.Round)
         )
     }
 
-    // 5. 4 Floor-Parallel Cardinal Alignment Cross Ticks
-    val tickAngles = floatArrayOf(0f, 90f, 180f, 270f)
-    for (angleDeg in tickAngles) {
-        val rad = Math.toRadians(angleDeg.toDouble())
-        val cosA = kotlin.math.cos(rad)
-        val sinA = kotlin.math.sin(rad)
-        val pInner = Point3D(center3D.x + innerRadiusM * cosA, center3D.y, center3D.z + innerRadiusM * sinA)
-        val pOuter = Point3D(center3D.x + currentRadiusM * cosA, center3D.y, center3D.z + currentRadiusM * sinA)
-        val proj1 = ArMath.projectWorldToScreen(pInner, viewMatrix, projectionMatrix, screenW, screenH)
-        val proj2 = ArMath.projectWorldToScreen(pOuter, viewMatrix, projectionMatrix, screenW, screenH)
-        if (proj1 != null && proj2 != null) {
-            drawLine(
-                color = Color.White.copy(alpha = 0.85f),
-                start = Offset(proj1.first, proj1.second),
-                end = Offset(proj2.first, proj2.second),
-                strokeWidth = 1.6.dp.toPx(),
-                cap = StrokeCap.Round
-            )
-        }
-    }
-
-    // 6. Middle Concentric Ring on the floor
+    // 5. Middle Concentric Ring on the floor (Pure circular ring parallel to the floor)
     if (hasInner) {
         drawPath(
             path = innerPath,
-            color = Color.White.copy(alpha = 0.90f),
-            style = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round)
+            color = Color.White.copy(alpha = 0.92f),
+            style = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round)
         )
     }
 
-    // 7. Center Pinpoint Core on the floor
+    // 6. Center Pinpoint Core on the floor (Pure circular core parallel to the floor)
     if (hasCore) {
         drawPath(
             path = corePath,
@@ -220,11 +200,11 @@ private fun DrawScope.drawFloorParallelAnchorDisc(
         drawPath(
             path = corePath,
             color = activeColor,
-            style = Stroke(width = 1.2.dp.toPx())
+            style = Stroke(width = 1.4.dp.toPx())
         )
     }
 
-    // Core Center Dot
+    // 7. Core Center Dot
     drawCircle(
         color = activeColor,
         center = screenCenter,
@@ -776,14 +756,6 @@ fun ArMeasurementCanvasOverlay(
                 val vOffset = Offset(p1.first, p1.second)
                 val angleDeg = viewModel.calculateAngle()
 
-                // Highlight Vertex with double halo
-                drawCircle(
-                    color = colorTertiary.copy(alpha = 0.4f),
-                    center = vOffset,
-                    radius = 18.dp.toPx(),
-                    style = Stroke(width = 2.dp.toPx())
-                )
-
                 // Draw Angle Arc Sector
                 val a1 = Math.toDegrees(atan2((p0.second - p1.second).toDouble(), (p0.first - p1.first).toDouble())).toFloat()
                 val a2 = Math.toDegrees(atan2((p2.second - p1.second).toDouble(), (p2.first - p1.first).toDouble())).toFloat()
@@ -1033,6 +1005,7 @@ fun ArMeasurementCanvasOverlay(
             val proj = projectedPoints.getOrNull(index)
             if (proj != null) {
                 val offset = Offset(proj.first, proj.second)
+                val isOrigin = (index == 0)
                 drawFloorParallelAnchorDisc(
                     center3D = pt3d,
                     screenCenter = offset,
@@ -1044,6 +1017,7 @@ fun ArMeasurementCanvasOverlay(
                     accentColor = colorTertiary,
                     isTarget = false,
                     isSnapped = false,
+                    isOrigin = isOrigin,
                     outerPath = floorOuterPath,
                     innerPath = floorInnerPath,
                     corePath = floorCorePath,
@@ -1072,6 +1046,7 @@ fun ArMeasurementCanvasOverlay(
             accentColor = colorTertiary,
             isTarget = true,
             isSnapped = isSnapped,
+            isOrigin = false,
             pulseScale = reticlePulseScale.value * snapScaleAnimated.value,
             outerPath = floorOuterPath,
             innerPath = floorInnerPath,
