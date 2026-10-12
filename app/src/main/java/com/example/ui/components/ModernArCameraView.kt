@@ -94,40 +94,14 @@ fun ModernArCameraView(
 
     val cameraAspectRatio by viewModel.cameraAspectRatio.collectAsState()
     val useDisplayP3ColorSpace by viewModel.useDisplayP3ColorSpace.collectAsState()
-    val isLensDirtWarningEnabled by viewModel.isLensDirtWarningEnabled.collectAsState()
     val isLensSmudged by viewModel.isLensSmudged.collectAsState()
     val simulatedAlert by viewModel.simulatedAlert.collectAsState()
     val uiButtonScale by viewModel.uiButtonScale.collectAsState()
-    val sensorTelemetry by viewModel.sensorTelemetry.collectAsState()
 
     // Video Recorder
     val videoRecorder = remember { ArVideoRecorder(context) }
     val isRecordingVideo by videoRecorder.isRecording.collectAsState()
     val recordingSeconds by videoRecorder.recordingSeconds.collectAsState()
-
-    // Real-time background frame analyzer: throttled & offloaded to Dispatchers.Default
-    LaunchedEffect(isLensDirtWarningEnabled) {
-        if (!isLensDirtWarningEnabled) return@LaunchedEffect
-        withContext(Dispatchers.Default) {
-            val downscaledBmp = Bitmap.createBitmap(160, 160, Bitmap.Config.ARGB_8888)
-            while (isActive) {
-                delay(2600L)
-                val currentTv = textureViewRef
-                if (currentTv != null && currentTv.isAvailable) {
-                    try {
-                        withContext(Dispatchers.Main) {
-                            currentTv.getBitmap(downscaledBmp)
-                        }
-                        if (isLensDirtWarningEnabled) {
-                            viewModel.analyzeLensCleanliness(downscaledBmp)
-                        }
-                    } catch (_: Throwable) {
-                        // Ignore transient frame capture errors
-                    }
-                }
-            }
-        }
-    }
 
     // Touch ripple visual pings
     val pings = remember { mutableStateListOf<Pair<Offset, Animatable<Float, AnimationVector1D>>>() }
@@ -366,7 +340,6 @@ fun ModernArCameraView(
                     update = { view ->
                         (view as? ModernArGlView)?.let {
                             modernArGlViewRef = it
-                            it.onResume()
                         }
                     },
                     onRelease = { view ->
@@ -479,7 +452,6 @@ fun ModernArCameraView(
                     isTorchOn = isTorchOn,
                     torchBrightness = torchBrightness,
                     cameraAspectRatio = cameraAspectRatio,
-                    sensorTelemetry = sensorTelemetry,
                     planesCount = planesCount,
                     isRecordingVideo = isRecordingVideo,
                     recordingSeconds = recordingSeconds,

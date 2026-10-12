@@ -35,6 +35,7 @@ private val UNIT_COS_TABLE = FloatArray(SAMPLES_COUNT) { i ->
 private val UNIT_SIN_TABLE = FloatArray(SAMPLES_COUNT) { i ->
     kotlin.math.sin(i * (2.0 * Math.PI / SAMPLES_COUNT)).toFloat()
 }
+private val TEMP_PROJ_HOLDER = FloatArray(2)
 
 /**
  * Projects a 3D circle lying flat on the floor (horizontal XZ plane, constant Y)
@@ -71,15 +72,17 @@ private fun buildFloorParallelCirclePath(
         val wx = centerX + radiusMeters * UNIT_COS_TABLE[i]
         val wy = centerY // Horizontal ground plane (parallel to floor)
         val wz = centerZ + radiusMeters * UNIT_SIN_TABLE[i]
-        val proj = ArMath.projectWorldToScreen(Point3D(wx, wy, wz), viewMatrix, projectionMatrix, screenW, screenH)
-        if (proj == null) {
+        val ok = ArMath.projectCoordsToScreen(wx, wy, wz, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER)
+        if (!ok) {
             allProjected = false
             break
         }
+        val px = TEMP_PROJ_HOLDER[0]
+        val py = TEMP_PROJ_HOLDER[1]
         if (i == 0) {
-            path.moveTo(proj.first, proj.second)
+            path.moveTo(px, py)
         } else {
-            path.lineTo(proj.first, proj.second)
+            path.lineTo(px, py)
         }
     }
 
@@ -102,8 +105,8 @@ private fun buildFloorParallelCirclePath(
 }
 
 /**
- * Draws a high-precision 3D circular measurement anchor disc lying parallel to the floor (ground plane).
- * Projected via 3D camera view and projection matrices to accurately reflect real-world ground perspective.
+ * 繪製簡約精確的 3D 地面平行圓形測量錨點 (Simplified Clean 3D Floor-Parallel Circular Anchor Disc)
+ * 簡化圈圈：單一簡潔地面平行圓環、柔和半透明底色、接地接觸陰影與精確核心圓點，無多重同心環視覺干擾。
  */
 private fun DrawScope.drawFloorParallelAnchorDisc(
     center3D: Point3D,
@@ -118,11 +121,8 @@ private fun DrawScope.drawFloorParallelAnchorDisc(
     isSnapped: Boolean = false,
     isOrigin: Boolean = false,
     pulseScale: Float = 1.0f,
-    outerPath: Path,
-    innerPath: Path,
-    corePath: Path,
-    shadowPath: Path,
-    auraPath: Path
+    circlePath: Path,
+    shadowPath: Path
 ) {
     val vz = if (viewMatrix.size >= 16) {
         -(viewMatrix[2] * center3D.x.toFloat() +
@@ -131,84 +131,40 @@ private fun DrawScope.drawFloorParallelAnchorDisc(
           viewMatrix[14])
     } else 1.0f
     val depth = kotlin.math.abs(vz).coerceIn(0.25f, 10.0f)
-    val baseRadiusM = (0.038 * kotlin.math.sqrt(depth.toDouble())).coerceIn(0.022, 0.12)
-    val currentRadiusM = baseRadiusM * (if (isTarget) pulseScale.toDouble() else if (isOrigin) 1.15 else 1.0)
-    val innerRadiusM = currentRadiusM * 0.54
-    val coreRadiusM = currentRadiusM * 0.20
-    val shadowRadiusM = currentRadiusM * 1.12
-    val auraRadiusM = currentRadiusM * 1.38
+    val baseRadiusM = (0.035 * kotlin.math.sqrt(depth.toDouble())).coerceIn(0.020, 0.085)
+    val currentRadiusM = baseRadiusM * (if (isTarget) pulseScale.toDouble() else 1.0)
 
-    val hasOuter = buildFloorParallelCirclePath(outerPath, center3D.x, center3D.y, center3D.z, currentRadiusM, viewMatrix, projectionMatrix, screenW, screenH, screenCenter)
-    val hasInner = buildFloorParallelCirclePath(innerPath, center3D.x, center3D.y, center3D.z, innerRadiusM, viewMatrix, projectionMatrix, screenW, screenH, screenCenter)
-    val hasCore = buildFloorParallelCirclePath(corePath, center3D.x, center3D.y, center3D.z, coreRadiusM, viewMatrix, projectionMatrix, screenW, screenH, screenCenter)
-    val hasShadow = buildFloorParallelCirclePath(shadowPath, center3D.x, center3D.y, center3D.z, shadowRadiusM, viewMatrix, projectionMatrix, screenW, screenH, screenCenter)
+    val hasCircle = buildFloorParallelCirclePath(circlePath, center3D.x, center3D.y, center3D.z, currentRadiusM, viewMatrix, projectionMatrix, screenW, screenH, screenCenter)
 
-    val activeColor = if (isSnapped) accentColor else if (isOrigin) Color(0xFFFFD54F) else primaryColor
+    val activeColor = if (isSnapped) accentColor else if (isOrigin) Color(0xFFFFB300) else primaryColor
 
-    // 1. Floor Drop Shadow (Soft contact shadow on ground, parallel to floor)
-    if (hasShadow) {
+    // 1. 地面平行圓環 (依使用者附圖：純淨單一的透視圓環線條，無模糊陰影與厚重填色)
+    if (hasCircle) {
         drawPath(
-            path = shadowPath,
-            color = Color.Black.copy(alpha = 0.32f),
-            style = Stroke(width = 3.6.dp.toPx(), cap = StrokeCap.Round)
-        )
-    }
-
-    // 2. Pulse / Snapping / Origin Halo Aura on the floor (Concentric circular ring parallel to floor)
-    if (isSnapped || isTarget || isOrigin) {
-        val hasAura = buildFloorParallelCirclePath(auraPath, center3D.x, center3D.y, center3D.z, auraRadiusM, viewMatrix, projectionMatrix, screenW, screenH, screenCenter)
-        if (hasAura) {
-            drawPath(
-                path = auraPath,
-                color = activeColor.copy(alpha = if (isOrigin) 0.50f else if (isSnapped) 0.55f else 0.25f * (2f - pulseScale).coerceIn(0f, 1f)),
-                style = Stroke(width = if (isOrigin) 2.4.dp.toPx() else if (isSnapped) 2.8.dp.toPx() else 1.8.dp.toPx())
-            )
-        }
-    }
-
-    // 3. Ground Disc Translucent Base Fill (Pure circular disc parallel to the floor)
-    if (hasOuter) {
-        drawPath(
-            path = outerPath,
-            color = activeColor.copy(alpha = if (isOrigin) 0.35f else if (isSnapped) 0.38f else if (isTarget) 0.22f else 0.30f),
-            style = Fill
-        )
-        // 4. Outer Ground Perimeter Ring (Pure circular ring parallel to the floor)
-        drawPath(
-            path = outerPath,
-            color = activeColor.copy(alpha = 0.95f),
-            style = Stroke(width = if (isOrigin || isSnapped) 2.8.dp.toPx() else 2.2.dp.toPx(), cap = StrokeCap.Round)
-        )
-    }
-
-    // 5. Middle Concentric Ring on the floor (Pure circular ring parallel to the floor)
-    if (hasInner) {
-        drawPath(
-            path = innerPath,
-            color = Color.White.copy(alpha = 0.92f),
-            style = Stroke(width = 1.8.dp.toPx(), cap = StrokeCap.Round)
-        )
-    }
-
-    // 6. Center Pinpoint Core on the floor (Pure circular core parallel to the floor)
-    if (hasCore) {
-        drawPath(
-            path = corePath,
-            color = Color.White,
-            style = Fill
-        )
-        drawPath(
-            path = corePath,
+            path = circlePath,
             color = activeColor,
-            style = Stroke(width = 1.4.dp.toPx())
+            style = Stroke(width = 2.6.dp.toPx(), cap = StrokeCap.Round)
+        )
+    } else {
+        drawCircle(
+            color = activeColor,
+            center = screenCenter,
+            radius = (22f * pulseScale).dp.toPx(),
+            style = Stroke(width = 2.6.dp.toPx())
         )
     }
 
-    // 7. Core Center Dot
+    // 2. 核心實心圓點 (依使用者附圖：清晰純淨的實心圓點，如 Google Measure 經典對齊白點)
+    val dotRadius = if (isOrigin) 5.6.dp.toPx() else 4.8.dp.toPx()
     drawCircle(
-        color = activeColor,
+        color = Color.Black.copy(alpha = 0.22f),
         center = screenCenter,
-        radius = 2.4.dp.toPx()
+        radius = dotRadius + 0.6.dp.toPx()
+    )
+    drawCircle(
+        color = Color.White,
+        center = screenCenter,
+        radius = dotRadius
     )
 }
 
@@ -230,7 +186,7 @@ fun ArMeasurementCanvasOverlay(
     reticlePulseScale: State<Float>,
     snapScaleAnimated: State<Float>,
     snapGlowAlphaAnimated: State<Float>,
-    planeLockedParticleAnim: State<Float>,
+    planeLockedParticleAnim: State<Float>? = null,
     density: Float = androidx.compose.ui.platform.LocalDensity.current.density,
     modifier: Modifier = Modifier
 ) {
@@ -309,12 +265,8 @@ fun ArMeasurementCanvasOverlay(
     val baseCachedPath = remember { Path() }
     val innerCachedPath = remember { Path() }
     val reticleCachedPath = remember { Path() }
-    val floorInnerReticleCachedPath = remember { Path() }
-    val floorOuterPath = remember { Path() }
-    val floorInnerPath = remember { Path() }
-    val floorCorePath = remember { Path() }
+    val floorCirclePath = remember { Path() }
     val floorShadowPath = remember { Path() }
-    val floorAuraPath = remember { Path() }
 
     // Persistent 2D smooth reticle position holder
     val reticlePosHolder = remember { floatArrayOf(-1000f, -1000f) }
@@ -371,72 +323,6 @@ fun ArMeasurementCanvasOverlay(
             }
         }
 
-        // -------------------------------------------------------------
-        // 0. 3D Spatial Grid & Matrix Overlay (透視地面網格 / 點陣)
-        // -------------------------------------------------------------
-        if (gridOverlayStyle != "OFF" && viewMatrix.size >= 16 && projectionMatrix.size >= 16) {
-            val centerTarget = liveTargetPoint ?: Point3D(0.0, -0.4, -1.2)
-            if (gridOverlayStyle == "PERSPECTIVE_GRID") {
-                val gridRadius = 1.0 // 1 meter radius around center
-                val step = 0.25 // 25cm grid lines
-                val numLines = 8
-                val startX = centerTarget.x - (numLines / 2) * step
-                val startZ = centerTarget.z - (numLines / 2) * step
-                val groundY = centerTarget.y
-
-                for (i in 0..numLines) {
-                    val lineX = startX + i * step
-                    val p1 = Point3D(lineX, groundY, centerTarget.z - gridRadius)
-                    val p2 = Point3D(lineX, groundY, centerTarget.z + gridRadius)
-                    val proj1 = ArMath.projectWorldToScreen(p1, viewMatrix, projectionMatrix, screenW, screenH)
-                    val proj2 = ArMath.projectWorldToScreen(p2, viewMatrix, projectionMatrix, screenW, screenH)
-                    if (proj1 != null && proj2 != null) {
-                        drawLine(
-                            color = colorPrimary.copy(alpha = 0.10f),
-                            start = Offset(proj1.first, proj1.second),
-                            end = Offset(proj2.first, proj2.second),
-                            strokeWidth = 1.dp.toPx()
-                        )
-                    }
-                }
-                for (j in 0..numLines) {
-                    val lineZ = startZ + j * step
-                    val p1 = Point3D(centerTarget.x - gridRadius, groundY, lineZ)
-                    val p2 = Point3D(centerTarget.x + gridRadius, groundY, lineZ)
-                    val proj1 = ArMath.projectWorldToScreen(p1, viewMatrix, projectionMatrix, screenW, screenH)
-                    val proj2 = ArMath.projectWorldToScreen(p2, viewMatrix, projectionMatrix, screenW, screenH)
-                    if (proj1 != null && proj2 != null) {
-                        drawLine(
-                            color = colorPrimary.copy(alpha = 0.10f),
-                            start = Offset(proj1.first, proj1.second),
-                            end = Offset(proj2.first, proj2.second),
-                            strokeWidth = 1.dp.toPx()
-                        )
-                    }
-                }
-            } else if (gridOverlayStyle == "DOT_MATRIX") {
-                val step = 0.30
-                val numDots = 4
-                val startX = centerTarget.x - (numDots / 2) * step
-                val startZ = centerTarget.z - (numDots / 2) * step
-                val groundY = centerTarget.y
-
-                for (i in 0..numDots) {
-                    for (j in 0..numDots) {
-                        val pt = Point3D(startX + i * step, groundY, startZ + j * step)
-                        val proj = ArMath.projectWorldToScreen(pt, viewMatrix, projectionMatrix, screenW, screenH)
-                        if (proj != null) {
-                            drawCircle(
-                                color = colorPrimary.copy(alpha = 0.25f),
-                                center = Offset(proj.first, proj.second),
-                                radius = 2.dp.toPx()
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
         // Optical Center & Magnetic Tether Guidance Line
         if (isSnapped) {
             val tetherDx = currentReticlePos.x - screenCenter.x
@@ -470,12 +356,18 @@ fun ArMeasurementCanvasOverlay(
             )
         }
 
-        // Immutable snapshot of capturedPoints
-        val pointsSnapshot = capturedPoints.toList()
-
-        // Project 3D points to 2D screen coordinates
-        val projectedPoints = pointsSnapshot.map { pt ->
-            ArMath.projectWorldToScreen(pt, viewMatrix, projectionMatrix, screenW, screenH)
+        // Project 3D points to 2D screen coordinates using indexed access
+        val pointsSnapshot = capturedPoints
+        val pointsCount = pointsSnapshot.size
+        val projectedPoints = ArrayList<Pair<Float, Float>?>(pointsCount)
+        for (i in 0 until pointsCount) {
+            val pt = pointsSnapshot[i]
+            val ok = ArMath.projectCoordsToScreen(pt.x, pt.y, pt.z, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER)
+            if (ok) {
+                projectedPoints.add(Pair(TEMP_PROJ_HOLDER[0], TEMP_PROJ_HOLDER[1]))
+            } else {
+                projectedPoints.add(null)
+            }
         }
 
         // Mode Detection
@@ -999,7 +891,7 @@ fun ArMeasurementCanvasOverlay(
         }
 
         // -------------------------------------------------------------
-        // 5. Floor-Parallel Circular Measurement Anchors (地面平行圓形原點)
+        // 5. Floor-Parallel Circular Measurement Anchors (簡化地面平行圓形原點)
         // -------------------------------------------------------------
         pointsSnapshot.forEachIndexed { index, pt3d ->
             val proj = projectedPoints.getOrNull(index)
@@ -1018,17 +910,14 @@ fun ArMeasurementCanvasOverlay(
                     isTarget = false,
                     isSnapped = false,
                     isOrigin = isOrigin,
-                    outerPath = floorOuterPath,
-                    innerPath = floorInnerPath,
-                    corePath = floorCorePath,
-                    shadowPath = floorShadowPath,
-                    auraPath = floorAuraPath
+                    circlePath = floorCirclePath,
+                    shadowPath = floorShadowPath
                 )
             }
         }
 
         // -------------------------------------------------------------
-        // 9. Floor-Parallel Active Target Reticle (地面平行圓形準星定位點)
+        // 9. Floor-Parallel Active Target Reticle (簡化地面平行圓形準星定位點)
         // -------------------------------------------------------------
         val activeTarget3D = liveTargetPoint ?: run {
             val groundY = pointsSnapshot.firstOrNull()?.y ?: -0.45
@@ -1048,18 +937,15 @@ fun ArMeasurementCanvasOverlay(
             isSnapped = isSnapped,
             isOrigin = false,
             pulseScale = reticlePulseScale.value * snapScaleAnimated.value,
-            outerPath = floorOuterPath,
-            innerPath = floorInnerPath,
-            corePath = floorCorePath,
-            shadowPath = floorShadowPath,
-            auraPath = floorAuraPath
+            circlePath = floorCirclePath,
+            shadowPath = floorShadowPath
         )
 
-        // Multi-Sample Burst Averaging Dynamic Progress Arc
+        // Multi-Sample Burst Averaging Dynamic Progress Arc (Only visible during active burst measurement)
         val reticleCenter = currentReticlePos
         val reticleRadiusPx = (24f * snapScaleAnimated.value * reticlePulseScale.value).dp.toPx()
         if (sensorTelemetry.multiSampleProgress > 0f) {
-            val arcRadius = reticleRadiusPx + 6.dp.toPx()
+            val arcRadius = reticleRadiusPx + 4.dp.toPx()
             drawArc(
                 color = if (sensorTelemetry.isMultiSampleLocked) colorTertiary else colorPrimary,
                 startAngle = -90f,
@@ -1067,28 +953,8 @@ fun ArMeasurementCanvasOverlay(
                 useCenter = false,
                 topLeft = Offset(reticleCenter.x - arcRadius, reticleCenter.y - arcRadius),
                 size = Size(arcRadius * 2f, arcRadius * 2f),
-                style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
+                style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
             )
-        }
-
-        // Plane Locked Micro Particle Feedback Ring
-        if (planesCount > 0) {
-            val particleCount = 8
-            for (i in 0 until particleCount) {
-                val angle = (i * (360f / particleCount)) + (planeLockedParticleAnim.value * 360f)
-                val rad = Math.toRadians(angle.toDouble())
-                val orbitRadius = (20.dp.toPx()) + (sin(planeLockedParticleAnim.value * 6.28318f + i).toFloat() * 2.5.dp.toPx())
-                val px = reticleCenter.x + (cos(rad).toFloat() * orbitRadius)
-                val py = reticleCenter.y + (sin(rad).toFloat() * orbitRadius)
-                val sineVal = sin(planeLockedParticleAnim.value * 6.28318f + i)
-                val pAlpha = ((sineVal + 1f) / 2f).coerceIn(0.25f, 0.9f)
-
-                drawCircle(
-                    color = colorPrimary.copy(alpha = pAlpha),
-                    center = Offset(px, py),
-                    radius = 2f * density
-                )
-            }
         }
     }
 }

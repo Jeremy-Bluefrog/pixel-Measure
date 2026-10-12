@@ -94,8 +94,8 @@ fun MyApplicationTheme(
 ) {
     val context = LocalContext.current
     val colorScheme = when {
-        // Enforce M3 Dynamic Color on Android 12+ (API 31+)
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+        // Enforce M3 Dynamic Color on Android 12+ (API 31+) if enabled
+        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
         darkTheme -> DarkColorScheme

@@ -406,6 +406,70 @@ object ArMath {
     }
 
     /**
+     * Project raw 3D world coordinates (X, Y, Z) to 2D screen pixel coordinates without object allocation.
+     * Writes into outXY[0] and outXY[1]. Returns true if successfully projected in front of camera, false otherwise.
+     */
+    fun projectCoordsToScreen(
+        wx: Double,
+        wy: Double,
+        wz: Double,
+        viewMatrix: FloatArray,
+        projectionMatrix: FloatArray,
+        screenWidth: Int,
+        screenHeight: Int,
+        outXY: FloatArray
+    ): Boolean {
+        if (viewMatrix.size < 16 || projectionMatrix.size < 16 || screenWidth <= 0 || screenHeight <= 0 || outXY.size < 2) {
+            return false
+        }
+
+        val fx = wx.toFloat()
+        val fy = wy.toFloat()
+        val fz = wz.toFloat()
+
+        // Multiply ViewMatrix * WorldPoint
+        val vx = viewMatrix[0] * fx + viewMatrix[4] * fy + viewMatrix[8] * fz + viewMatrix[12]
+        val vy = viewMatrix[1] * fx + viewMatrix[5] * fy + viewMatrix[9] * fz + viewMatrix[13]
+        val vz = viewMatrix[2] * fx + viewMatrix[6] * fy + viewMatrix[10] * fz + viewMatrix[14]
+        val vw = viewMatrix[3] * fx + viewMatrix[7] * fy + viewMatrix[11] * fz + viewMatrix[15]
+
+        // Multiply ProjectionMatrix * ViewPoint
+        val clipX = projectionMatrix[0] * vx + projectionMatrix[4] * vy + projectionMatrix[8] * vz + projectionMatrix[12] * vw
+        val clipY = projectionMatrix[1] * vx + projectionMatrix[5] * vy + projectionMatrix[9] * vz + projectionMatrix[13] * vw
+        val clipW = projectionMatrix[3] * vx + projectionMatrix[7] * vy + projectionMatrix[11] * vz + projectionMatrix[15] * vw
+
+        if (clipW <= 0.001f || clipW.isNaN() || clipW.isInfinite()) {
+            return false
+        }
+
+        val invW = 1.0f / clipW
+        val ndcX = clipX * invW
+        val ndcY = clipY * invW
+
+        if (ndcX.isNaN() || ndcY.isNaN() || ndcX.isInfinite() || ndcY.isInfinite()) {
+            return false
+        }
+
+        val screenX = (ndcX + 1.0f) * 0.5f * screenWidth
+        val screenY = (1.0f - ndcY) * 0.5f * screenHeight
+
+        if (screenX.isNaN() || screenY.isNaN() || screenX.isInfinite() || screenY.isInfinite()) {
+            return false
+        }
+
+        val maxMarginX = screenWidth * 3f
+        val maxMarginY = screenHeight * 3f
+        if (screenX < -maxMarginX || screenX > screenWidth + maxMarginX ||
+            screenY < -maxMarginY || screenY > screenHeight + maxMarginY) {
+            return false
+        }
+
+        outXY[0] = screenX
+        outXY[1] = screenY
+        return true
+    }
+
+    /**
      * Project a 3D world coordinate (X, Y, Z) to 2D screen pixel coordinate using View and Projection matrices.
      * Returns Pair(screenX, screenY) in pixels, or null if the point is behind the camera (W <= 0).
      */

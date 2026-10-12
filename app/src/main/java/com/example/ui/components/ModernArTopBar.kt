@@ -38,7 +38,6 @@ fun ModernArTopBar(
     isTorchOn: Boolean,
     torchBrightness: Float,
     cameraAspectRatio: String,
-    sensorTelemetry: SensorCorrectionTelemetry,
     planesCount: Int,
     isRecordingVideo: Boolean,
     recordingSeconds: Int,
@@ -446,7 +445,7 @@ fun ModernArTopBar(
 
         // 2. AR Horizon & Spatial Surface Guidance Indicator
         ArHorizonGuidanceIndicator(
-            sensorTelemetry = sensorTelemetry,
+            viewModel = viewModel,
             planesCount = planesCount,
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -479,7 +478,7 @@ fun ModernArTopBar(
                             padV = ((totalH.value - frameH) / 2f).coerceAtLeast(0f).dp
                         }
 
-                        val maskColor = Color.Transparent
+                        val maskColor = Color.Black.copy(alpha = 0.45f)
                         if (padV > 0.dp) {
                             Box(
                                 modifier = Modifier
@@ -563,10 +562,11 @@ fun ModernArTopBar(
 
 @Composable
 private fun ArHorizonGuidanceIndicator(
-    sensorTelemetry: SensorCorrectionTelemetry,
+    viewModel: MeasureViewModel,
     planesCount: Int,
     modifier: Modifier = Modifier
 ) {
+    val sensorTelemetry by viewModel.sensorTelemetry.collectAsState()
     val pitch: Float = sensorTelemetry.pitchDeg
     val roll: Float = sensorTelemetry.rollDeg
     val isRollLevel = kotlin.math.abs(roll) < 2.0f

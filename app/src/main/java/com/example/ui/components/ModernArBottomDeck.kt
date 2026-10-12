@@ -82,8 +82,8 @@ fun ModernArBottomDeck(
 
     Column(
         modifier = modifier
-            .padding(bottom = bottomPadding + 10.dp)
-            .padding(horizontal = 16.dp, vertical = 4.dp),
+            .padding(bottom = bottomPadding + 16.dp)
+            .padding(horizontal = 16.dp, vertical = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         // 1. Real-Time Measurement Completed Summary Card (1-tap copy, save & unit conversion)
@@ -192,27 +192,29 @@ fun ModernArBottomDeck(
                 }
             }
 
-            // Center Slot: Primary Main Add Button
+            // Center Slot: Primary Main Add Button (加號放大且稍微往上抬升)
             val addFabInteractionSource = remember { MutableInteractionSource() }
             val isAddFabPressed by addFabInteractionSource.collectIsPressedAsState()
 
             val addFabCornerRadius by animateDpAsState(
-                targetValue = if (isAddFabPressed) 16.dp else 32.dp,
+                targetValue = if (isAddFabPressed) 20.dp else 39.dp,
                 animationSpec = tween(150),
                 label = "addFabCornerRadius"
             )
 
             Box(
                 contentAlignment = Alignment.Center,
-                modifier = Modifier.padding(horizontal = 4.dp)
+                modifier = Modifier
+                    .padding(horizontal = 4.dp)
+                    .padding(bottom = 8.dp)
             ) {
                 Surface(
                     color = addFabContainerColor,
                     shape = RoundedCornerShape(addFabCornerRadius),
                     border = if (!isMeasurementAvailable) BorderStroke(1.5.dp, MaterialTheme.colorScheme.outlineVariant) else null,
-                    shadowElevation = if (isMeasurementAvailable) 4.dp else 2.dp,
+                    shadowElevation = if (isMeasurementAvailable) 6.dp else 3.dp,
                     modifier = Modifier
-                        .size((64 * uiButtonScale).dp)
+                        .size((90 * uiButtonScale).dp)
                         .clickable(
                             interactionSource = addFabInteractionSource,
                             indication = null
@@ -239,7 +241,7 @@ fun ModernArBottomDeck(
                                 imageVector = if (waitingForSecond) Icons.Rounded.Check else Icons.Rounded.Add,
                                 contentDescription = if (waitingForSecond) "確認第二點 (Confirm Point)" else "加入點 (Add Point)",
                                 tint = addFabIconColor,
-                                modifier = Modifier.size((32 * uiButtonScale).dp)
+                                modifier = Modifier.size((54 * uiButtonScale).dp)
                             )
                         }
                     }
@@ -318,11 +320,25 @@ fun ModernArBottomDeck(
                     onLongClick = {
                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                         if (!isRecordingVideo) {
+                            val currentTv = textureViewRef()
+                            val currentGl = modernArGlViewRef()
                             videoRecorder.startRecording(
                                 view = localView,
                                 cameraBitmapProvider = {
-                                    val tv = textureViewRef()
-                                    if (tv != null && tv.isAvailable) tv.bitmap else null
+                                    if (currentTv != null && currentTv.isAvailable) {
+                                        try { currentTv.bitmap } catch (_: Throwable) { null }
+                                    } else if (currentGl != null) {
+                                        var glBmp: Bitmap? = null
+                                        val latch = java.util.concurrent.CountDownLatch(1)
+                                        currentGl.captureBitmap { bmp ->
+                                            glBmp = bmp
+                                            latch.countDown()
+                                        }
+                                        latch.await(80, java.util.concurrent.TimeUnit.MILLISECONDS)
+                                        glBmp
+                                    } else {
+                                        null
+                                    }
                                 }
                             )
                         }

@@ -118,72 +118,44 @@ class ArVideoRecorder(private val context: Context) {
             val scaledW = (rawW / 16) * 16
             val scaledH = (rawH / 16) * 16
             val bitmap = Bitmap.createBitmap(scaledW, scaledH, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bitmap)
 
             // Direct hardware camera frame sampling if available
             val cameraBmp = try { cameraBitmapSupplier?.invoke() } catch (e: Throwable) { null }
             if (cameraBmp != null && !cameraBmp.isRecycled) {
-                val canvas = Canvas(bitmap)
                 val srcRect = Rect(0, 0, cameraBmp.width, cameraBmp.height)
                 val dstRect = Rect(0, 0, scaledW, scaledH)
                 canvas.drawBitmap(cameraBmp, srcRect, dstRect, null)
-                val scaleX = scaledW.toFloat() / view.width.toFloat()
-                val scaleY = scaledH.toFloat() / view.height.toFloat()
-                canvas.scale(scaleX, scaleY)
-                try {
-                    view.draw(canvas)
-                } catch (e: Exception) {}
-                synchronized(capturedFrameBitmaps) {
-                    if (capturedFrameBitmaps.size < 600) {
-                        capturedFrameBitmaps.add(bitmap)
-                    }
-                }
-                if (firstThumbnailPath == null) {
-                    firstThumbnailPath = saveThumbnail(bitmap)
-                }
-                return
+            } else {
+                // Dark AR background gradient fallback
+                val darkGrad = android.graphics.LinearGradient(
+                    0f, 0f, 0f, scaledH.toFloat(),
+                    intArrayOf(
+                        android.graphics.Color.rgb(15, 23, 42),
+                        android.graphics.Color.rgb(30, 41, 59),
+                        android.graphics.Color.rgb(15, 23, 42)
+                    ),
+                    null,
+                    android.graphics.Shader.TileMode.CLAMP
+                )
+                val bgPaint = android.graphics.Paint().apply { shader = darkGrad }
+                canvas.drawRect(0f, 0f, scaledW.toFloat(), scaledH.toFloat(), bgPaint)
             }
 
-            val activity = findActivity(view.context)
-            val window = activity?.window
-
-            if (window != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val loc = IntArray(2)
-                view.getLocationInWindow(loc)
-                val srcRect = Rect(loc[0], loc[1], loc[0] + view.width, loc[1] + view.height)
-
-                val latch = java.util.concurrent.CountDownLatch(1)
-                PixelCopy.request(
-                    window,
-                    srcRect,
-                    bitmap,
-                    { result ->
-                        if (result == PixelCopy.SUCCESS) {
-                            synchronized(capturedFrameBitmaps) {
-                                if (capturedFrameBitmaps.size < 600) {
-                                    capturedFrameBitmaps.add(bitmap)
-                                }
-                            }
-                            if (firstThumbnailPath == null) {
-                                firstThumbnailPath = saveThumbnail(bitmap)
-                            }
-                        }
-                        latch.countDown()
-                    },
-                    Handler(Looper.getMainLooper())
-                )
-                latch.await(80, java.util.concurrent.TimeUnit.MILLISECONDS)
-            } else {
-                val canvas = Canvas(bitmap)
-                canvas.scale(0.5f, 0.5f)
+            val scaleX = scaledW.toFloat() / view.width.toFloat()
+            val scaleY = scaledH.toFloat() / view.height.toFloat()
+            canvas.scale(scaleX, scaleY)
+            try {
                 view.draw(canvas)
-                synchronized(capturedFrameBitmaps) {
-                    if (capturedFrameBitmaps.size < 600) {
-                        capturedFrameBitmaps.add(bitmap)
-                    }
+            } catch (e: Exception) {}
+
+            synchronized(capturedFrameBitmaps) {
+                if (capturedFrameBitmaps.size < 600) {
+                    capturedFrameBitmaps.add(bitmap)
                 }
-                if (firstThumbnailPath == null) {
-                    firstThumbnailPath = saveThumbnail(bitmap)
-                }
+            }
+            if (firstThumbnailPath == null) {
+                firstThumbnailPath = saveThumbnail(bitmap)
             }
         } catch (e: Exception) {
             Log.w(TAG, "Frame capture error: ${e.message}")

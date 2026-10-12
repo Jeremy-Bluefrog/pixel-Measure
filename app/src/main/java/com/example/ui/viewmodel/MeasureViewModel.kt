@@ -508,7 +508,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         _toastMessage.tryEmit("已更新 AR 標註底框透明度：$label")
     }
 
-    private val _gridOverlayStyle = MutableStateFlow(prefs.getString("grid_overlay_style", "PERSPECTIVE_GRID") ?: "PERSPECTIVE_GRID")
+    private val _gridOverlayStyle = MutableStateFlow(prefs.getString("grid_overlay_style", "OFF") ?: "OFF")
     val gridOverlayStyle: StateFlow<String> = _gridOverlayStyle.asStateFlow()
 
     fun setGridOverlayStyle(style: String) {
@@ -911,7 +911,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         setLineThickness(3.5f)
         setArFontSize("STANDARD")
         setHudStyle("GLASS")
-        setGridOverlayStyle("PERSPECTIVE_GRID")
+        setGridOverlayStyle("OFF")
         setUiButtonScale(1.0f)
         setCameraAspectRatio("4_3")
         setUseDisplayP3ColorSpace(true)
@@ -1013,12 +1013,10 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     // AR Frame Processing on GL Thread
     fun processGlFrame(frame: Frame, engine: ModernArEngine): HitTestResult? {
-        // Synchronously extract frame camera matrices to prevent any frame phase skew between 3D and 2D
+        // Synchronously extract frame camera matrices for hit testing and projection
         val camera = frame.camera
         camera.getViewMatrix(glViewMatrixBuffer, 0)
         camera.getProjectionMatrix(glProjMatrixBuffer, 0, 0.05f, 50.0f)
-        _viewMatrix.value = glViewMatrixBuffer.clone()
-        _projectionMatrix.value = glProjMatrixBuffer.clone()
 
         // 1. Process any pending tap hit-test (creates persistent anchor only on tap)
         val tapRequest = pendingHitTestQueue.getAndSet(null)
@@ -1199,6 +1197,10 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         return centerHit
     }
 
+    private val fallbackProjMatrixBuffer = FloatArray(16)
+    private val fallbackViewMatrixBuffer = FloatArray(16)
+    private var lastFallbackAspect = 0f
+
     private fun smoothLiveDistance(targetDist: Double): Double {
         val prev = _liveDistanceMeters.value ?: return targetDist
         val diff = abs(targetDist - prev)
@@ -1212,7 +1214,9 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         val alphaScale = t * t * (3.0 - 2.0 * t) // smoothstep
         val alpha = minAlpha + (maxAlpha - minAlpha) * alphaScale
 
-        return prev * (1.0 - alpha) + targetDist * alpha
+        val filtered = prev * (1.0 - alpha) + targetDist * alpha
+        // Deadband: if distance difference is under 2.5mm, retain previous value to avoid StateFlow recomposition churn
+        return if (abs(filtered - prev) < 0.0025) prev else filtered
     }
 
     private fun updateAutoDetectedGeometry() {
@@ -1307,23 +1311,28 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     private fun updateFallbackSpatialFrame() {
-        _arTrackingState.value = TrackingState.TRACKING
-        _surfaceTypeAtCenter.value = "感應器空間校正"
+        if (_arTrackingState.value != TrackingState.TRACKING) {
+            _arTrackingState.value = TrackingState.TRACKING
+        }
+        if (_surfaceTypeAtCenter.value != "感應器空間校正") {
+            _surfaceTypeAtCenter.value = "感應器空間校正"
+        }
 
-        // Build standard perspective projection matrix
-        val pMatrix = FloatArray(16)
+        // Build standard perspective projection matrix (only re-generate if aspect ratio changed)
         val aspect = displayWidth.toFloat() / displayHeight.coerceAtLeast(1).toFloat()
-        android.opengl.Matrix.perspectiveM(pMatrix, 0, 60.0f, aspect, 0.1f, 50.0f)
-        _projectionMatrix.value = pMatrix
+        if (abs(aspect - lastFallbackAspect) > 0.01f || _projectionMatrix.value.size < 16) {
+            lastFallbackAspect = aspect
+            android.opengl.Matrix.perspectiveM(fallbackProjMatrixBuffer, 0, 60.0f, aspect, 0.1f, 50.0f)
+            _projectionMatrix.value = fallbackProjMatrixBuffer.clone()
+        }
 
         // Build View Matrix from device rotation
         val telem = sensorTelemetry.value
-        val vMatrix = FloatArray(16)
-        android.opengl.Matrix.setIdentityM(vMatrix, 0)
-        android.opengl.Matrix.rotateM(vMatrix, 0, telem.pitchDeg, 1f, 0f, 0f)
-        android.opengl.Matrix.rotateM(vMatrix, 0, telem.rollDeg, 0f, 0f, 1f)
-        android.opengl.Matrix.rotateM(vMatrix, 0, telem.azimuthDeg, 0f, 1f, 0f)
-        _viewMatrix.value = vMatrix
+        android.opengl.Matrix.setIdentityM(fallbackViewMatrixBuffer, 0)
+        android.opengl.Matrix.rotateM(fallbackViewMatrixBuffer, 0, telem.pitchDeg, 1f, 0f, 0f)
+        android.opengl.Matrix.rotateM(fallbackViewMatrixBuffer, 0, telem.rollDeg, 0f, 0f, 1f)
+        android.opengl.Matrix.rotateM(fallbackViewMatrixBuffer, 0, telem.azimuthDeg, 0f, 1f, 0f)
+        _viewMatrix.value = fallbackViewMatrixBuffer.clone()
 
         // Raycast depth estimation: pitch down creates distance to ground
         val pitchRad = Math.toRadians(telem.pitchDeg.toDouble().coerceIn(-85.0, 85.0))

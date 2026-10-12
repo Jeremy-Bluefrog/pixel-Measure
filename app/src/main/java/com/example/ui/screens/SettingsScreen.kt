@@ -477,6 +477,25 @@ fun SettingsScreen(
                                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
                             )
 
+                            HorizontalDivider(
+                                modifier = Modifier.padding(vertical = 8.dp),
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                            )
+
+                            // Language Selection
+                            SettingActionRow(
+                                icon = Icons.Rounded.Language,
+                                title = "應用程式語言",
+                                subtitle = currentLanguageDisplay,
+                                actionLabel = "切換",
+                                onClick = { showLanguageDialog = true }
+                            )
+
+                            HorizontalDivider(
+                                modifier = Modifier.padding(vertical = 8.dp),
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                            )
+
                             // Screen Ruler Calibration Action
                             SettingActionRow(
                                 icon = Icons.Rounded.AspectRatio,
@@ -633,134 +652,7 @@ fun SettingsScreen(
                 }
 
                 // ==========================================
-                // 4. 視覺與外觀樣式 (Visual & Styles)
-                // ==========================================
-                if (matchesSearch(searchQuery, listOf("準心", "樣式", "線條", "粗細", "語言", "風格", "ui", "外觀"))) {
-                    SectionHeader(
-                        title = "視覺與外觀",
-                        icon = Icons.Rounded.Palette,
-                        color = MaterialTheme.colorScheme.tertiary
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Card(
-                        shape = RoundedCornerShape(20.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            // Language
-                            SettingActionRow(
-                                icon = Icons.Rounded.Language,
-                                title = "應用程式語言",
-                                subtitle = currentLanguageDisplay,
-                                actionLabel = "切換",
-                                onClick = { showLanguageDialog = true }
-                            )
-
-                            HorizontalDivider(
-                                modifier = Modifier.padding(vertical = 12.dp),
-                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                            )
-
-                            // Reticle Style
-                            Text(
-                                text = "AR 瞄準準心樣式",
-                                style = MaterialTheme.typography.bodyLarge,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            val reticles = listOf(
-                                "DOUBLE_RING" to "地面圓盤",
-                                "PRECISION_CROSSHAIR" to "雙環圓盤",
-                                "TARGET_BOX" to "精確圓環",
-                                "MINIMAL_DOT" to "微型圓盤"
-                            )
-
-                            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                                reticles.forEachIndexed { index, (code, label) ->
-                                    val isSelected = reticleStyle == code
-                                    SegmentedButton(
-                                        selected = isSelected,
-                                        onClick = {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            viewModel.setReticleStyle(code)
-                                        },
-                                        shape = SegmentedButtonDefaults.itemShape(
-                                            index = index,
-                                            count = reticles.size
-                                        ),
-                                        label = {
-                                            Text(
-                                                text = label,
-                                                style = MaterialTheme.typography.labelMedium,
-                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                                            )
-                                        },
-                                        modifier = Modifier.testTag("reticle_btn_$code")
-                                    )
-                                }
-                            }
-
-                            HorizontalDivider(
-                                modifier = Modifier.padding(vertical = 12.dp),
-                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                            )
-
-                            // Line Thickness
-                            Text(
-                                text = "測量標註線條粗細",
-                                style = MaterialTheme.typography.bodyLarge,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            val thicknesses = listOf(
-                                2.0f to "細緻",
-                                3.5f to "標準",
-                                5.0f to "粗體"
-                            )
-
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                thicknesses.forEach { (thick, label) ->
-                                    val isSelected = kotlin.math.abs(lineThickness - thick) < 0.2f
-                                    FilterChip(
-                                        selected = isSelected,
-                                        onClick = {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            viewModel.setLineThickness(thick)
-                                        },
-                                        label = {
-                                            Text(
-                                                text = label,
-                                                fontSize = 12.sp,
-                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                                            )
-                                        },
-                                        shape = RoundedCornerShape(10.dp),
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .testTag("thickness_chip_${thick.toInt()}")
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(20.dp))
-                }
-
-                // ==========================================
-                // 5. 智慧輔助與進階演算法 (Smart Assist & Advanced)
+                // 4. 智慧輔助與進階演算法 (Smart Assist & Advanced)
                 // ==========================================
                 if (matchesSearch(searchQuery, listOf("防手震", "吸附", "正交", "重力", "氣壓", "同平面", "vulkan", "硬體", "加速", "感應器"))) {
                     SectionHeader(

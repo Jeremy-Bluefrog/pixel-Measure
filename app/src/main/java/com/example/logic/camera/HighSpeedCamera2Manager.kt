@@ -80,7 +80,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
     }
 
     /**
-     * Choose optimal 60 FPS resolution (1080p or 720p) within High Speed / Standard map limits.
+     * Choose optimal 60 FPS resolution (1080p or 720p capped) within High Speed / Standard map limits.
      */
     fun selectOptimal60FpsSize(characteristics: CameraCharacteristics): Pair<Size, Boolean> {
         val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return Pair(Size(1920, 1080), false)
@@ -96,11 +96,13 @@ class HighSpeedCamera2Manager(private val context: Context) {
                     if (targetRange != null) {
                         val sizes = map.getHighSpeedVideoSizesFor(targetRange)
                         if (!sizes.isNullOrEmpty()) {
-                            val chosen = sizes.sortedByDescending { it.width * it.height }
-                                .firstOrNull { it.width >= 1920 }
-                                ?: sizes.maxByOrNull { it.width * it.height }
+                            // Filter to sizes <= 1920x1080 to prevent GPU memory bandwidth throttling
+                            val reasonableSizes = sizes.filter { it.width <= 1920 && it.height <= 1080 }
+                            val chosen = reasonableSizes.firstOrNull { it.width == 1920 && it.height == 1080 }
+                                ?: reasonableSizes.firstOrNull { it.width == 1280 && it.height == 720 }
+                                ?: reasonableSizes.maxByOrNull { it.width * it.height }
                                 ?: sizes.first()
-                            Log.i(TAG, "Found High-Speed 60 FPS Ultra HD/FHD Size: ${chosen.width}x${chosen.height} for range $targetRange")
+                            Log.i(TAG, "Found High-Speed 60 FPS Size: ${chosen.width}x${chosen.height} for range $targetRange")
                             return Pair(chosen, true)
                         }
                     }
@@ -110,13 +112,14 @@ class HighSpeedCamera2Manager(private val context: Context) {
             }
         }
 
-        // Standard 60 FPS fallback: Pick highest resolution size from SurfaceTexture output sizes (4K / 1080p)
+        // Standard 60 FPS fallback: Pick 1080p or 720p size from SurfaceTexture output sizes (never 4K / max texture size)
         val outputSizes = map.getOutputSizes(SurfaceTexture::class.java) ?: emptyArray()
-        val chosen = outputSizes.sortedByDescending { it.width * it.height }
-            .firstOrNull { it.width >= 1920 }
-            ?: outputSizes.maxByOrNull { it.width * it.height }
+        val reasonableOutputs = outputSizes.filter { it.width <= 1920 && it.height <= 1080 }
+        val chosen = reasonableOutputs.firstOrNull { it.width == 1920 && it.height == 1080 }
+            ?: reasonableOutputs.firstOrNull { it.width == 1280 && it.height == 720 }
+            ?: reasonableOutputs.maxByOrNull { it.width * it.height }
             ?: Size(1920, 1080)
-        Log.i(TAG, "Using Standard High-Definition Size: ${chosen.width}x${chosen.height}")
+        Log.i(TAG, "Using Standard 60 FPS Size: ${chosen.width}x${chosen.height}")
         return Pair(chosen, false)
     }
 
@@ -221,10 +224,10 @@ class HighSpeedCamera2Manager(private val context: Context) {
                 set(CaptureRequest.CONTROL_SCENE_MODE, CaptureRequest.CONTROL_SCENE_MODE_DISABLED)
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
                 
-                // High Quality Processing Tuning
-                set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
-                set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
-                set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_HIGH_QUALITY)
+                // High Performance Fast Processing Tuning (prevents camera HAL frame-drop / stutter)
+                set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
+                set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
+                set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_FAST)
 
                 // Apply Low Light Boost if enabled
                 lowLightBoostEngine.applyLowLightBoost(this, isLowLightBoostEnabled)
@@ -301,10 +304,10 @@ class HighSpeedCamera2Manager(private val context: Context) {
                 set(CaptureRequest.CONTROL_SCENE_MODE, CaptureRequest.CONTROL_SCENE_MODE_DISABLED)
                 set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
 
-                // High Quality Processing Tuning
-                set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_HIGH_QUALITY)
-                set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY)
-                set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_HIGH_QUALITY)
+                // High Performance Fast Processing Tuning (prevents camera HAL frame-drop / stutter)
+                set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
+                set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
+                set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_FAST)
 
                 // Apply Low Light Boost if enabled
                 lowLightBoostEngine.applyLowLightBoost(this, isLowLightBoostEnabled)

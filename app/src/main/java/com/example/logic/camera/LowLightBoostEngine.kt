@@ -68,12 +68,9 @@ class LowLightBoostEngine(private val context: Context) {
             // Unconditionally forced ON
             if (isHardwareBoostSupported) {
                 builder.set(CaptureRequest.CONTROL_AE_MODE, AE_MODE_LOW_LIGHT_BOOST)
-                Log.i(TAG, "Permanently Forced CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY ON")
+                Log.i(TAG, "Forced CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY ON")
             } else {
-                // Forced high exposure compensation fallback for non-Android 15 devices
                 builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, 4) // +2.0 EV boost
-                Log.i(TAG, "Permanently Forced AE Exposure Compensation +2.0 EV for Low Light Boost")
             }
             isBoostActive = true
         } catch (e: Throwable) {

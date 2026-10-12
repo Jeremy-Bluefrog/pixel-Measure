@@ -304,10 +304,10 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
 
     private fun updateTelemetryState() {
         val now = android.os.SystemClock.uptimeMillis()
-        if (now - lastTelemetryEmitTimeMs < 33L) {
-            return // Throttle to ~30Hz
+        val timeSinceLastEmit = now - lastTelemetryEmitTimeMs
+        if (timeSinceLastEmit < 50L) {
+            return // Throttle to max 20Hz
         }
-        lastTelemetryEmitTimeMs = now
 
         val azimuth = Math.toDegrees(orientationAngles[0].toDouble()).toFloat()
         val pitch = Math.toDegrees(orientationAngles[1].toDouble()).toFloat()
@@ -318,6 +318,26 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
         val accelInstability = (lastLinearAccel / 2.5f).coerceIn(0f, 1f)
         val stabilityScore = (1.0f - (gyroInstability * 0.65f + accelInstability * 0.35f)).coerceIn(0.05f, 1.0f)
         val isSteady = lastAngularVelocity < STEADY_THRESHOLD_RADS && lastLinearAccel < 1.0f
+
+        val prev = _telemetry.value
+        val normAzimuth = (azimuth + 360f) % 360f
+
+        // Deadband filter: only emit StateFlow when noticeable change occurs or heartbeat (350ms)
+        val pitchDiff = abs(pitch - prev.pitchDeg)
+        val rollDiff = abs(roll - prev.rollDeg)
+        val azimDiff = abs(normAzimuth - prev.azimuthDeg)
+        val stabDiff = abs(stabilityScore - prev.stabilityScore)
+        val burstDiff = abs(burstProgress - prev.multiSampleProgress)
+
+        val hasSignificantChange = pitchDiff >= 0.35f || rollDiff >= 0.35f || azimDiff >= 0.50f ||
+                stabDiff >= 0.06f || isSteady != prev.isHandSteady ||
+                isNearContact != prev.isProximityNear || isBurstLocked != prev.isMultiSampleLocked ||
+                burstDiff >= 0.05f || lastOrthogonalSnapped != prev.isOrthogonalSnapped
+
+        if (!hasSignificantChange && timeSinceLastEmit < 350L) {
+            return
+        }
+        lastTelemetryEmitTimeMs = now
 
         // Barometric altitude formula
         val baseP = initialPressure ?: currentPressure
@@ -332,13 +352,13 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
         val burstBonus = if (isBurstLocked) 0.03f else (burstProgress * 0.02f)
         val precisionScore = (basePrecision + burstBonus).coerceIn(0.70f, 0.999f)
 
-        _telemetry.value = _telemetry.value.copy(
+        _telemetry.value = prev.copy(
             gravityX = lastGravity[0],
             gravityY = lastGravity[1],
             gravityZ = lastGravity[2],
             pitchDeg = pitch,
             rollDeg = roll,
-            azimuthDeg = (azimuth + 360f) % 360f,
+            azimuthDeg = normAzimuth,
             angularVelocityRads = lastAngularVelocity,
             linearAccelerationMps2 = lastLinearAccel,
             stabilityScore = stabilityScore,
