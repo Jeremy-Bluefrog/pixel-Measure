@@ -32,7 +32,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.logic.ShareUtility
-import com.example.logic.ar.ModernArGlView
+import com.example.logic.vulkan.VulkanArSceneView
 import com.example.logic.camera.ArVideoRecorder
 import com.example.ui.viewmodel.MeasureViewModel
 import kotlinx.coroutines.launch
@@ -51,7 +51,8 @@ fun ModernArBottomDeck(
     isRecordingVideo: Boolean,
     bottomPadding: Dp,
     textureViewRef: () -> TextureView?,
-    modernArGlViewRef: () -> ModernArGlView?,
+    modernArVulkanViewRef: () -> VulkanArSceneView? = { null },
+    modernArGlViewRef: () -> VulkanArSceneView? = modernArVulkanViewRef,
     cameraAspectRatio: String,
     useDisplayP3ColorSpace: Boolean,
     videoRecorder: ArVideoRecorder,

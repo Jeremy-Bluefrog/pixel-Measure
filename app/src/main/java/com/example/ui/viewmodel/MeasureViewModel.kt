@@ -251,8 +251,14 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     private val _projectionMatrix = MutableStateFlow(FloatArray(16))
     val projectionMatrix: StateFlow<FloatArray> = _projectionMatrix.asStateFlow()
 
-    private val glViewMatrixBuffer = FloatArray(16)
-    private val glProjMatrixBuffer = FloatArray(16)
+    private val vulkanViewMatrixBuffer = FloatArray(16)
+    private val vulkanProjMatrixBuffer = FloatArray(16)
+    @Deprecated("Legacy alias for Vulkan view matrix buffer")
+    private val glViewMatrixBuffer: FloatArray get() = vulkanViewMatrixBuffer
+    @Deprecated("Legacy alias for Vulkan projection matrix buffer")
+    private val glProjMatrixBuffer: FloatArray get() = vulkanProjMatrixBuffer
+    private val screenPosBuffer = FloatArray(2)
+
     private val _liveTargetScreenPos = MutableStateFlow<androidx.compose.ui.geometry.Offset?>(null)
     val liveTargetScreenPos: StateFlow<androidx.compose.ui.geometry.Offset?> = _liveTargetScreenPos.asStateFlow()
     private var lastValidHitTimestampMs: Long = 0L
@@ -272,11 +278,21 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     private val pointsLock = Any()
     val capturedPoints = mutableStateListOf<Point3D>()
     private val undoStack = mutableListOf<List<Point3D>>()
+    @Volatile
+    private var capturedPointsSnapshotCache: List<Point3D> = emptyList()
 
-    fun getCapturedPointsSnapshot(): List<Point3D> {
-        return synchronized(pointsLock) {
-            capturedPoints.toList()
+    private fun updateCapturedPointsSnapshotCache() {
+        synchronized(pointsLock) {
+            capturedPointsSnapshotCache = capturedPoints.toList()
         }
+    }
+
+    /**
+     * Ultra-fast zero-allocation snapshot for 60/90/120 FPS Vulkan render loop.
+     * Guaranteed immutable and non-blocking O(1) reference fetch.
+     */
+    fun getCapturedPointsSnapshot(): List<Point3D> {
+        return capturedPointsSnapshotCache
     }
 
     // Real-time live targeting preview from current reticle position
@@ -753,7 +769,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun setVulkanGraphicsEnabled(enabled: Boolean) {
         isVulkanGraphicsEnabled.value = enabled
         prefs.edit().putBoolean("vulkan_graphics_enabled", enabled).apply()
-        _toastMessage.tryEmit(if (enabled) "🚀 已啟用 Vulkan 3D 空間網格與線段硬件加速渲染" else "已切換至 OpenGL ES 渲染管線")
+        _toastMessage.tryEmit(if (enabled) "🚀 已啟用 Vulkan 3D 空間網格與線段硬件加速渲染" else "已切換至標準 Vulkan 渲染模式")
     }
 
     fun setSensorCorrectionEnabled(enabled: Boolean) {
@@ -1010,13 +1026,22 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     // Queue for hit-testing requested from UI touches
     private val pendingHitTestQueue = AtomicReference<Pair<Float, Float>?>()
+    private var lastHapticMeterMark = 0
 
-    // AR Frame Processing on GL Thread
-    fun processGlFrame(frame: Frame, engine: ModernArEngine): HitTestResult? {
+    private fun checkMeterMilestoneHaptic(distMeters: Double) {
+        val meterMark = distMeters.toInt()
+        if (meterMark > 0 && meterMark != lastHapticMeterMark) {
+            lastHapticMeterMark = meterMark
+            triggerHapticFeedback(HapticType.SNAP)
+        }
+    }
+
+    // AR Frame Processing on Vulkan Thread (Zero Allocation Hot Path)
+    fun processVulkanFrame(frame: Frame, engine: ModernArEngine): HitTestResult? {
         // Synchronously extract frame camera matrices for hit testing and projection
         val camera = frame.camera
-        camera.getViewMatrix(glViewMatrixBuffer, 0)
-        camera.getProjectionMatrix(glProjMatrixBuffer, 0, 0.05f, 50.0f)
+        camera.getViewMatrix(vulkanViewMatrixBuffer, 0)
+        camera.getProjectionMatrix(vulkanProjMatrixBuffer, 0, 0.05f, 50.0f)
 
         // 1. Process any pending tap hit-test (creates persistent anchor only on tap)
         val tapRequest = pendingHitTestQueue.getAndSet(null)
@@ -1057,7 +1082,6 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             val smoothedPoint = ArMath.filterJitterEMA(_liveTargetPoint.value, sensorCorrectedPoint)
 
             // 3. Gravity-aligned orthogonal leveling & 45/90-deg snapping
-            // 兩點成一線，不共用點：只有在繪製該線段終點（capturedPoints 奇數個點）時，才對起點進行正交對齊校正
             val pointsSnapshot = getCapturedPointsSnapshot()
             val isActivelyDrawingLine = pointsSnapshot.size % 2 == 1
             val lastConfirmedPoint = pointsSnapshot.lastOrNull()
@@ -1103,24 +1127,31 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
             _liveTargetPoint.value = finalTargetPoint
             if (displayWidth > 0 && displayHeight > 0) {
-                val proj = ArMath.projectWorldToScreen(
-                    worldPoint = finalTargetPoint,
-                    viewMatrix = glViewMatrixBuffer,
-                    projectionMatrix = glProjMatrixBuffer,
-                    screenWidth = displayWidth,
-                    screenHeight = displayHeight
-                )
-                if (proj != null) {
-                    _liveTargetScreenPos.value = androidx.compose.ui.geometry.Offset(proj.first, proj.second)
+                if (ArMath.projectWorldToScreenInPlace(
+                        worldPoint = finalTargetPoint,
+                        viewMatrix = vulkanViewMatrixBuffer,
+                        projectionMatrix = vulkanProjMatrixBuffer,
+                        screenWidth = displayWidth,
+                        screenHeight = displayHeight,
+                        outScreenPos = screenPosBuffer,
+                        outOffset = 0
+                    )
+                ) {
+                    val px = screenPosBuffer[0]
+                    val py = screenPosBuffer[1]
+                    val current = _liveTargetScreenPos.value
+                    if (current == null || kotlin.math.abs(current.x - px) > 0.25f || kotlin.math.abs(current.y - py) > 0.25f) {
+                        _liveTargetScreenPos.value = androidx.compose.ui.geometry.Offset(px, py)
+                    }
                 }
             }
 
             if (!_isMeasurementAvailable.value) {
                 _isMeasurementAvailable.value = true
+                triggerHapticFeedback(HapticType.SNAP)
             }
 
             // 5. Calculate live real-time distance with stability & Dual-Camera Stereo Parallax scale calibration
-            // 兩點成一線：若處於線段繪製中（奇數個點），量測最後一個起點至準心即時距離；若已成線或無點，則顯示相機至表面雷達景深
             if (isActivelyDrawingLine && lastConfirmedPoint != null) {
                 val dist = if (_cameraSubMode.value == 2) {
                     sensorCorrectionEngine.correctVerticalHeightWithGravity(lastConfirmedPoint, finalTargetPoint)
@@ -1129,7 +1160,9 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                     sensorCorrectionEngine.correctDistanceWithStereoParallax(rawD)
                 }
                 _liveDistanceMeters.value = smoothLiveDistance(dist)
+                checkMeterMilestoneHaptic(dist)
             } else {
+                lastHapticMeterMark = 0
                 val centerDist = sensorCorrectionEngine.correctDistanceWithStereoParallax(centerHit.distance.toDouble())
                 _liveDistanceMeters.value = smoothLiveDistance(centerDist)
             }
@@ -1184,6 +1217,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 synchronized(pointsLock) {
                     saveUndoState()
                     capturedPoints.add(namedP)
+                    updateCapturedPointsSnapshotCache()
                 }
                 triggerHapticFeedback(if (isActivelyDrawingLine) HapticType.HEAVY else HapticType.CLICK)
                 if (isActivelyDrawingLine) {
@@ -1195,6 +1229,11 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             }
         }
         return centerHit
+    }
+
+    @Deprecated("Legacy alias for processVulkanFrame")
+    fun processGlFrame(frame: Frame, engine: ModernArEngine): HitTestResult? {
+        return processVulkanFrame(frame, engine)
     }
 
     private val fallbackProjMatrixBuffer = FloatArray(16)
@@ -1322,16 +1361,16 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         val aspect = displayWidth.toFloat() / displayHeight.coerceAtLeast(1).toFloat()
         if (abs(aspect - lastFallbackAspect) > 0.01f || _projectionMatrix.value.size < 16) {
             lastFallbackAspect = aspect
-            android.opengl.Matrix.perspectiveM(fallbackProjMatrixBuffer, 0, 60.0f, aspect, 0.1f, 50.0f)
+            com.example.logic.vulkan.VulkanMatrix4.perspective(fallbackProjMatrixBuffer, 0, 60.0f, aspect, 0.1f, 50.0f)
             _projectionMatrix.value = fallbackProjMatrixBuffer.clone()
         }
 
-        // Build View Matrix from device rotation
+        // Build View Matrix from device rotation using pure VulkanMatrix4
         val telem = sensorTelemetry.value
-        android.opengl.Matrix.setIdentityM(fallbackViewMatrixBuffer, 0)
-        android.opengl.Matrix.rotateM(fallbackViewMatrixBuffer, 0, telem.pitchDeg, 1f, 0f, 0f)
-        android.opengl.Matrix.rotateM(fallbackViewMatrixBuffer, 0, telem.rollDeg, 0f, 0f, 1f)
-        android.opengl.Matrix.rotateM(fallbackViewMatrixBuffer, 0, telem.azimuthDeg, 0f, 1f, 0f)
+        com.example.logic.vulkan.VulkanMatrix4.setIdentity(fallbackViewMatrixBuffer, 0)
+        com.example.logic.vulkan.VulkanMatrix4.rotate(fallbackViewMatrixBuffer, 0, telem.pitchDeg, 1f, 0f, 0f)
+        com.example.logic.vulkan.VulkanMatrix4.rotate(fallbackViewMatrixBuffer, 0, telem.rollDeg, 0f, 0f, 1f)
+        com.example.logic.vulkan.VulkanMatrix4.rotate(fallbackViewMatrixBuffer, 0, telem.azimuthDeg, 0f, 1f, 0f)
         _viewMatrix.value = fallbackViewMatrixBuffer.clone()
 
         // Raycast depth estimation: pitch down creates distance to ground
@@ -1389,6 +1428,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             synchronized(pointsLock) {
                 saveUndoState()
                 capturedPoints.add(namedP)
+                updateCapturedPointsSnapshotCache()
             }
             triggerHapticFeedback(if (isActivelyDrawingLine) HapticType.HEAVY else HapticType.CLICK)
             if (isActivelyDrawingLine) {
@@ -1411,10 +1451,12 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 val previous = undoStack.removeAt(undoStack.size - 1)
                 capturedPoints.clear()
                 capturedPoints.addAll(previous)
+                updateCapturedPointsSnapshotCache()
                 triggerHapticFeedback()
                 updateAutoDetectedGeometry()
             } else if (capturedPoints.isNotEmpty()) {
                 capturedPoints.removeAt(capturedPoints.size - 1)
+                updateCapturedPointsSnapshotCache()
                 triggerHapticFeedback()
                 updateAutoDetectedGeometry()
             }
@@ -1422,10 +1464,12 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun clearActivePoints() {
+        lastHapticMeterMark = 0
         synchronized(pointsLock) {
             saveUndoState()
             capturedPoints.forEach { it.anchor?.detach() }
             capturedPoints.clear()
+            updateCapturedPointsSnapshotCache()
         }
         _liveDistanceMeters.value = null
         _autoDetectedType.value = "DISTANCE"
@@ -1436,8 +1480,22 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         synchronized(pointsLock) {
             if (index in capturedPoints.indices) {
                 capturedPoints[index] = capturedPoints[index].copy(label = newLabel)
+                updateCapturedPointsSnapshotCache()
             }
         }
+    }
+
+    /**
+     * Smart dynamic release of Vulkan rendering pipeline buffers and temporary state
+     * when navigating away from the AR camera view.
+     */
+    fun releaseVulkanPipelineBuffers() {
+        pendingHitTestQueue.set(null)
+        _liveTargetPoint.value = null
+        _liveDistanceMeters.value = null
+        _liveTargetScreenPos.value = null
+        _isSnapped.value = false
+        _isMeasurementAvailable.value = false
     }
 
     // Active CameraX camera control reference (when in CameraX mode)

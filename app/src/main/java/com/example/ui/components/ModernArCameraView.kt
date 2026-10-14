@@ -39,7 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import com.example.logic.ar.ModernArGlView
+import com.example.logic.vulkan.VulkanArSceneView
 import com.example.logic.ar.StabilityLevel
 import com.example.logic.camera.ArVideoRecorder
 import com.example.logic.camera.HighSpeedCamera2Manager
@@ -90,7 +90,7 @@ fun ModernArCameraView(
     val isWaitingForSecondPoint by remember { derivedStateOf { capturedPoints.size % 2 == 1 } }
 
     var textureViewRef by remember { mutableStateOf<TextureView?>(null) }
-    var modernArGlViewRef by remember { mutableStateOf<ModernArGlView?>(null) }
+    var modernArVulkanViewRef by remember { mutableStateOf<VulkanArSceneView?>(null) }
 
     val cameraAspectRatio by viewModel.cameraAspectRatio.collectAsState()
     val useDisplayP3ColorSpace by viewModel.useDisplayP3ColorSpace.collectAsState()
@@ -133,6 +133,7 @@ fun ModernArCameraView(
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_RESUME -> {
+                    (context as? com.example.MainActivity)?.enforceHighDisplayRefreshRate()
                     viewModel.onResume()
                     if (!viewModel.isArCoreSessionActive) {
                         textureViewRef?.let { tv ->
@@ -153,7 +154,13 @@ fun ModernArCameraView(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+            modernArVulkanViewRef?.apply {
+                onPause()
+                destroy()
+            }
+            modernArVulkanViewRef = null
             viewModel.onPause()
+            viewModel.releaseVulkanPipelineBuffers()
             viewModel.closeHighSpeedCamera()
             if (videoRecorder.isRecording.value) {
                 videoRecorder.stopRecording { _, _, _ -> }
@@ -319,7 +326,7 @@ fun ModernArCameraView(
                 .fillMaxSize()
                 .hardwareBackdropBlur(isArOverlayOpen, arOverlayBlurRadius)
         ) {
-            // 1. OpenGL ARCore View or High-Speed Camera2 View
+            // 1. Pure Vulkan AR Scene View or High-Speed Camera2 View
             val session = remember(cameraPermissionState.status.isGranted) {
                 viewModel.modernArEngine.createSession()
             }
@@ -327,24 +334,27 @@ fun ModernArCameraView(
             if (session != null) {
                 AndroidView(
                     factory = { ctx ->
-                        ModernArGlView(
+                        VulkanArSceneView(
                             context = ctx,
                             session = session,
                             modernArEngine = viewModel.modernArEngine,
                             viewModel = viewModel
                         ).apply {
-                            modernArGlViewRef = this
+                            modernArVulkanViewRef = this
                             onResume()
                         }
                     },
                     update = { view ->
-                        (view as? ModernArGlView)?.let {
-                            modernArGlViewRef = it
+                        (view as? VulkanArSceneView)?.let {
+                            modernArVulkanViewRef = it
                         }
                     },
                     onRelease = { view ->
-                        modernArGlViewRef = null
-                        (view as? android.opengl.GLSurfaceView)?.onPause()
+                        (view as? VulkanArSceneView)?.apply {
+                            onPause()
+                            destroy()
+                        }
+                        modernArVulkanViewRef = null
                     },
                     modifier = Modifier
                         .fillMaxSize()
@@ -460,6 +470,24 @@ fun ModernArCameraView(
                     onShowSettingsClick = onShowSettingsClick,
                     modifier = Modifier.align(Alignment.TopCenter)
                 )
+
+                // 4.5. Dynamic Silent Visual Guidance Pill
+                MeasurementGuidancePill(
+                    viewModel = viewModel,
+                    subMode = subMode,
+                    autoDetectedType = autoDetectedType,
+                    planesCount = planesCount,
+                    hasCapturedPoints = hasCapturedPoints,
+                    isWaitingForSecondPoint = isWaitingForSecondPoint,
+                    capturedPointsCount = capturedPoints.size,
+                    isMeasurementAvailable = isMeasurementAvailable,
+                    isSnapped = isSnapped,
+                    onOpenTutorial = { showHelpDialog = true },
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .statusBarsPadding()
+                        .padding(top = if (trackingStability.level == StabilityLevel.POOR) 152.dp else 56.dp)
+                )
             }
 
             // 5. Bottom Dynamic Control Deck
@@ -476,7 +504,7 @@ fun ModernArCameraView(
                     isRecordingVideo = isRecordingVideo,
                     bottomPadding = bottomPadding,
                     textureViewRef = { textureViewRef },
-                    modernArGlViewRef = { modernArGlViewRef },
+                    modernArVulkanViewRef = { modernArVulkanViewRef },
                     cameraAspectRatio = cameraAspectRatio,
                     useDisplayP3ColorSpace = useDisplayP3ColorSpace,
                     videoRecorder = videoRecorder,

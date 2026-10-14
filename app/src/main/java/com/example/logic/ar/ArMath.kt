@@ -470,8 +470,44 @@ object ArMath {
     }
 
     /**
-     * Project a 3D world coordinate (X, Y, Z) to 2D screen pixel coordinate using View and Projection matrices.
-     * Returns Pair(screenX, screenY) in pixels, or null if the point is behind the camera (W <= 0).
+     * In-place zero-allocation 3D world to 2D screen projection.
+     * Writes resulting (screenX, screenY) into [outScreenPos] at indices [outOffset] and [outOffset + 1].
+     * Returns true if successfully projected and within visible bounds; false otherwise.
+     */
+    fun projectWorldToScreenInPlace(
+        worldPoint: Point3D,
+        viewMatrix: FloatArray,
+        projectionMatrix: FloatArray,
+        screenWidth: Int,
+        screenHeight: Int,
+        outScreenPos: FloatArray,
+        outOffset: Int = 0
+    ): Boolean {
+        if (outOffset == 0) {
+            return projectCoordsToScreen(
+                worldPoint.x,
+                worldPoint.y,
+                worldPoint.z,
+                viewMatrix,
+                projectionMatrix,
+                screenWidth,
+                screenHeight,
+                outScreenPos
+            )
+        }
+        val temp = FloatArray(2)
+        if (projectCoordsToScreen(worldPoint.x, worldPoint.y, worldPoint.z, viewMatrix, projectionMatrix, screenWidth, screenHeight, temp)) {
+            if (outScreenPos.size >= outOffset + 2) {
+                outScreenPos[outOffset] = temp[0]
+                outScreenPos[outOffset + 1] = temp[1]
+                return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * Projects a 3D point in world coordinates onto the 2D screen coordinate system.
      */
     fun projectWorldToScreen(
         worldPoint: Point3D,
@@ -480,48 +516,11 @@ object ArMath {
         screenWidth: Int,
         screenHeight: Int
     ): Pair<Float, Float>? {
-        if (viewMatrix.size < 16 || projectionMatrix.size < 16 || screenWidth <= 0 || screenHeight <= 0) {
-            return null
+        val buffer = FloatArray(2)
+        if (projectCoordsToScreen(worldPoint.x, worldPoint.y, worldPoint.z, viewMatrix, projectionMatrix, screenWidth, screenHeight, buffer)) {
+            return Pair(buffer[0], buffer[1])
         }
-
-        // Multiply ViewMatrix * WorldPoint
-        val vx = viewMatrix[0] * worldPoint.x.toFloat() + viewMatrix[4] * worldPoint.y.toFloat() + viewMatrix[8] * worldPoint.z.toFloat() + viewMatrix[12]
-        val vy = viewMatrix[1] * worldPoint.x.toFloat() + viewMatrix[5] * worldPoint.y.toFloat() + viewMatrix[9] * worldPoint.z.toFloat() + viewMatrix[13]
-        val vz = viewMatrix[2] * worldPoint.x.toFloat() + viewMatrix[6] * worldPoint.y.toFloat() + viewMatrix[10] * worldPoint.z.toFloat() + viewMatrix[14]
-        val vw = viewMatrix[3] * worldPoint.x.toFloat() + viewMatrix[7] * worldPoint.y.toFloat() + viewMatrix[11] * worldPoint.z.toFloat() + viewMatrix[15]
-
-        // Multiply ProjectionMatrix * ViewPoint
-        val clipX = projectionMatrix[0] * vx + projectionMatrix[4] * vy + projectionMatrix[8] * vz + projectionMatrix[12] * vw
-        val clipY = projectionMatrix[1] * vx + projectionMatrix[5] * vy + projectionMatrix[9] * vz + projectionMatrix[13] * vw
-        val clipW = projectionMatrix[3] * vx + projectionMatrix[7] * vy + projectionMatrix[11] * vz + projectionMatrix[15] * vw
-
-        if (clipW <= 0.001f || clipW.isNaN() || clipW.isInfinite()) {
-            return null
-        }
-
-        val ndcX = clipX / clipW
-        val ndcY = clipY / clipW
-
-        if (ndcX.isNaN() || ndcY.isNaN() || ndcX.isInfinite() || ndcY.isInfinite()) {
-            return null
-        }
-
-        val screenX = (ndcX + 1.0f) * 0.5f * screenWidth
-        val screenY = (1.0f - ndcY) * 0.5f * screenHeight
-
-        if (screenX.isNaN() || screenY.isNaN() || screenX.isInfinite() || screenY.isInfinite()) {
-            return null
-        }
-
-        // Clip coordinates that project absurdly far outside the screen bounds to prevent Canvas path allocation freezes
-        val maxMarginX = screenWidth * 3f
-        val maxMarginY = screenHeight * 3f
-        if (screenX < -maxMarginX || screenX > screenWidth + maxMarginX ||
-            screenY < -maxMarginY || screenY > screenHeight + maxMarginY) {
-            return null
-        }
-
-        return Pair(screenX, screenY)
+        return null
     }
 
     /**

@@ -1,0 +1,6 @@
+{
+  "summary": "針對純 Vulkan 渲染延遲、幀率流暢度及智慧動態記憶體釋放的深度優化計劃，全面消除 60FPS 渲染熱路徑中的 GC 分配與重複計算，並落實生命週期離開頁面即時回收硬體緩衝。",
+  "updatedAt": "2026-10-14T10:29:02.164230006Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

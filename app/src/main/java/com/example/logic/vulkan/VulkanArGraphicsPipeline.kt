@@ -55,7 +55,7 @@ data class Vulkan3DLineSegment(
  * 3. 3D Spatial Feature Point Cloud Particles with Gaussian alpha blending
  *
  * Provides native Vulkan 1.3 pipeline state caching, uniform buffer updates,
- * and seamless fallback synchronization with GLES/Canvas rasterizers.
+ * and zero-copy synchronization with Compose Canvas rasterizers.
  */
 class VulkanArGraphicsPipeline(
     private val context: Context

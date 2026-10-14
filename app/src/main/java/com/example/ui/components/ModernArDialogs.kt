@@ -46,34 +46,10 @@ fun ModernArDialogs(
 ) {
     val colorPrimary = MaterialTheme.colorScheme.primary
 
-    // 1. Help Guide Dialog
+    // 1. Help Guide & Step Tutorial Animated Dialog
     if (showHelpDialog) {
-        AlertDialog(
-            onDismissRequest = onDismissHelp,
-            title = {
-                EnableWindowBlur(blurRadiusDp = 50)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Rounded.TipsAndUpdates, null, tint = colorPrimary)
-                    Spacer(Modifier.width(8.dp))
-                    Text("AR 專業測量指南", fontWeight = FontWeight.Bold)
-                }
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("• 3D 空間精準測量：點選空間任意兩點或多點，即時量測直線距離與折線總長。")
-                    Text("• 自動幾何形狀辨識：智慧判斷三點以上封閉多邊形面積、空間垂準高度與圓形直徑。")
-                    Text("• 60 FPS 點雲渲染：相機即時偵測周圍環境的幾何特徵點與表面。")
-                    Text("• 磁吸對齊功能：當準星靠近既有頂點時會自動吸附並震動提示，精準閉合多邊形。")
-                    Text("• 多感應器融合校正：即時結合陀螺儀防抖、重力垂準、氣壓計高度、近接感應與雙鏡頭視差。")
-                    Text("• 多元測量模式：直線/折線距離、封閉面積、垂直高度、圓形半徑與直徑、空間夾角。")
-                    Text("• 物理錨點鎖定：採用實體 ARCore Anchor，走動或轉移視角時完全無漂移。")
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = onDismissHelp) {
-                    Text("我知道了")
-                }
-            }
+        MeasurementTutorialDialog(
+            onDismiss = onDismissHelp
         )
     }
 

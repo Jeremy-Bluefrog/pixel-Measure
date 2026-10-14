@@ -150,6 +150,11 @@ class HighSpeedCamera2Manager(private val context: Context) {
             val texture = textureView.surfaceTexture ?: return
             texture.setDefaultBufferSize(optimalSize.width, optimalSize.height)
             val surface = Surface(texture)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                try {
+                    surface.setFrameRate(60.0f, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
+                } catch (_: Throwable) {}
+            }
             previewSurface = surface
 
             cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {

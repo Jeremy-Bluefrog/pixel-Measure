@@ -21,6 +21,7 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             window.colorMode = android.content.pm.ActivityInfo.COLOR_MODE_WIDE_COLOR_GAMUT
         }
+        enforceHighDisplayRefreshRate()
         super.onCreate(savedInstanceState)
 
         // Initialize the measuring tool viewmodel
@@ -36,8 +37,47 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var viewModel: MeasureViewModel
 
+    /**
+     * Prevents system SurfaceFlinger / DisplayManager from locking the screen
+     * to 30Hz when Camera HAL starts. Explicitly requests 60Hz or higher display mode.
+     */
+    fun enforceHighDisplayRefreshRate() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val currentDisplay = this.display
+                val modes = currentDisplay?.supportedModes ?: emptyArray()
+                val targetMode = modes.filter { it.refreshRate >= 59.5f }.maxByOrNull { it.refreshRate }
+                    ?: modes.maxByOrNull { it.refreshRate }
+
+                targetMode?.let { mode ->
+                    val lp = window.attributes
+                    lp.preferredDisplayModeId = mode.modeId
+                    lp.preferredRefreshRate = mode.refreshRate.coerceAtLeast(60.0f)
+                    window.attributes = lp
+                    android.util.Log.i("MainActivity", "Enforced high refresh rate: ${mode.refreshRate}Hz (modeId=${mode.modeId})")
+                }
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                @Suppress("DEPRECATION")
+                val currentDisplay = windowManager.defaultDisplay
+                val modes = currentDisplay?.supportedModes ?: emptyArray()
+                val targetMode = modes.filter { it.refreshRate >= 59.5f }.maxByOrNull { it.refreshRate }
+                    ?: modes.maxByOrNull { it.refreshRate }
+
+                targetMode?.let { mode ->
+                    val lp = window.attributes
+                    lp.preferredDisplayModeId = mode.modeId
+                    window.attributes = lp
+                    android.util.Log.i("MainActivity", "Enforced high display mode: ${mode.modeId} (${mode.refreshRate}Hz)")
+                }
+            }
+        } catch (e: Throwable) {
+            android.util.Log.w("MainActivity", "Unable to enforce high display refresh rate: ${e.message}")
+        }
+    }
+
     override fun onResume() {
         super.onResume()
+        enforceHighDisplayRefreshRate()
         if (::viewModel.isInitialized) {
             viewModel.syncWithSystemLocale()
             viewModel.onResume()

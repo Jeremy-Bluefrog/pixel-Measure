@@ -122,5 +122,61 @@ class ExampleUnitTest {
     val awaitingSecond2 = points2.size % 2 == 1
     assertFalse("2 points placed should show plus icon", awaitingSecond2)
   }
+
+  @Test
+  fun `verify VulkanMatrix4 identity and multiplication`() {
+    val m = FloatArray(16)
+    com.example.logic.vulkan.VulkanMatrix4.setIdentity(m, 0)
+    for (i in 0 until 4) {
+      for (j in 0 until 4) {
+        val expected = if (i == j) 1.0f else 0.0f
+        assertEquals(expected, m[i * 4 + j], 1e-6f)
+      }
+    }
+
+    val vecIn = floatArrayOf(2.0f, 3.0f, 4.0f, 1.0f)
+    val vecOut = FloatArray(4)
+    com.example.logic.vulkan.VulkanMatrix4.multiplyMV(vecOut, 0, m, 0, vecIn, 0)
+    assertEquals(2.0f, vecOut[0], 1e-6f)
+    assertEquals(3.0f, vecOut[1], 1e-6f)
+    assertEquals(4.0f, vecOut[2], 1e-6f)
+    assertEquals(1.0f, vecOut[3], 1e-6f)
+  }
+
+  @Test
+  fun `verify VulkanMatrix4 perspective projection validity`() {
+    val proj = FloatArray(16)
+    com.example.logic.vulkan.VulkanMatrix4.perspective(proj, 0, 60.0f, 1.777f, 0.1f, 100.0f)
+    // Non-zero diagonal elements
+    assertTrue(proj[0] > 0f)
+    assertTrue(proj[5] > 0f)
+    assertEquals(-1.0f, proj[11], 1e-6f) // Standard clip space perspective entry
+    assertEquals(0.0f, proj[15], 1e-6f)
+  }
+
+  @Test
+  fun `verify ArMath projectWorldToScreenInPlace zero-allocation projection`() {
+    val viewMatrix = FloatArray(16)
+    val projMatrix = FloatArray(16)
+    com.example.logic.vulkan.VulkanMatrix4.setIdentity(viewMatrix, 0)
+    com.example.logic.vulkan.VulkanMatrix4.perspective(projMatrix, 0, 60.0f, 1.0f, 0.1f, 100.0f)
+
+    val worldPoint = com.example.ui.viewmodel.Point3D(0.0, 0.0, -2.0, isArPrecision = true)
+    val outScreenPos = FloatArray(2)
+
+    val success = com.example.logic.ar.ArMath.projectWorldToScreenInPlace(
+      worldPoint = worldPoint,
+      viewMatrix = viewMatrix,
+      projectionMatrix = projMatrix,
+      screenWidth = 1000,
+      screenHeight = 1000,
+      outScreenPos = outScreenPos,
+      outOffset = 0
+    )
+
+    assertTrue("Point along optical center should project successfully", success)
+    assertEquals(500.0f, outScreenPos[0], 2.0f)
+    assertEquals(500.0f, outScreenPos[1], 2.0f)
+  }
 }
 
