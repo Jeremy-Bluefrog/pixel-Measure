@@ -4,13 +4,19 @@ package com.example.ui.components
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
+import android.net.Uri
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.provider.Settings
 import android.view.TextureView
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -21,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -37,6 +44,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.example.logic.vulkan.VulkanArSceneView
@@ -45,19 +53,13 @@ import com.example.logic.camera.ArVideoRecorder
 import com.example.logic.camera.HighSpeedCamera2Manager
 import com.example.ui.viewmodel.HapticType
 import com.example.ui.viewmodel.MeasureViewModel
-import com.google.accompanist.permissions.ExperimentalPermissionsApi
-import com.google.accompanist.permissions.isGranted
-import com.google.accompanist.permissions.rememberPermissionState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-@OptIn(
-    ExperimentalPermissionsApi::class,
-    ExperimentalMaterial3Api::class
-)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ModernArCameraView(
     viewModel: MeasureViewModel,
@@ -71,7 +73,30 @@ fun ModernArCameraView(
     val coroutineScope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
 
-    val cameraPermissionState = rememberPermissionState(Manifest.permission.CAMERA)
+    // Reactive camera permission tracking with automatic lifecycle refresh
+    var hasCameraPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasCameraPermission = granted
+    }
+
+    val openAppSettings = {
+        try {
+            val intent = Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", context.packageName, null)
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (_: Exception) {}
+    }
 
     // ViewModel States
     val trackingStability by viewModel.trackingStability.collectAsState()
@@ -91,6 +116,13 @@ fun ModernArCameraView(
 
     var textureViewRef by remember { mutableStateOf<TextureView?>(null) }
     var modernArVulkanViewRef by remember { mutableStateOf<VulkanArSceneView?>(null) }
+
+    // Dedicated single-instance Camera2 manager
+    val camera2Manager = remember {
+        HighSpeedCamera2Manager(context).also { manager ->
+            viewModel.setHighSpeedCamera2Manager(manager)
+        }
+    }
 
     val cameraAspectRatio by viewModel.cameraAspectRatio.collectAsState()
     val useDisplayP3ColorSpace by viewModel.useDisplayP3ColorSpace.collectAsState()
@@ -127,39 +159,39 @@ fun ModernArCameraView(
         label = "ArOverlayBackdropBlur"
     )
 
-    // Lifecycle sync for ARCore & Camera
+    // Lifecycle sync for Camera2 & Sensor Fusion
     DisposableEffect(lifecycleOwner) {
         viewModel.onResume()
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_RESUME -> {
                     (context as? com.example.MainActivity)?.enforceHighDisplayRefreshRate()
+                    hasCameraPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
                     viewModel.onResume()
-                    if (!viewModel.isArCoreSessionActive) {
+                    if (hasCameraPermission) {
                         textureViewRef?.let { tv ->
                             if (tv.isAvailable) {
-                                val manager = HighSpeedCamera2Manager(context)
-                                viewModel.setHighSpeedCamera2Manager(manager)
-                                manager.openCameraAndStartSession(tv) { isHighSpeed, size ->
+                                viewModel.setHighSpeedCamera2Manager(camera2Manager)
+                                camera2Manager.openCameraAndStartSession(tv) { isHighSpeed, size ->
                                     android.util.Log.i("CameraView", "Session resumed. HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
                                 }
                             }
                         }
                     }
                 }
-                Lifecycle.Event.ON_PAUSE -> viewModel.onPause()
+                Lifecycle.Event.ON_PAUSE -> {
+                    viewModel.onPause()
+                    camera2Manager.closeCamera()
+                }
                 else -> {}
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            modernArVulkanViewRef?.apply {
-                onPause()
-                destroy()
-            }
-            modernArVulkanViewRef = null
+            camera2Manager.closeCamera()
             viewModel.onPause()
+            viewModel.setHighSpeedCamera2Manager(null)
             viewModel.releaseVulkanPipelineBuffers()
             viewModel.closeHighSpeedCamera()
             if (videoRecorder.isRecording.value) {
@@ -179,63 +211,77 @@ fun ModernArCameraView(
                 context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
             }
 
-            var didVibrate = false
-            if (vibrator?.hasVibrator() == true) {
-                try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        val effectId = when (type) {
-                            HapticType.SNAP -> VibrationEffect.EFFECT_TICK
-                            HapticType.CLICK -> VibrationEffect.EFFECT_CLICK
-                            HapticType.HEAVY -> VibrationEffect.EFFECT_HEAVY_CLICK
-                            HapticType.DOUBLE -> VibrationEffect.EFFECT_DOUBLE_CLICK
-                        }
-                        vibrator.vibrate(VibrationEffect.createPredefined(effectId))
-                        didVibrate = true
-                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        val duration = when (type) {
-                            HapticType.SNAP -> 10L
-                            HapticType.CLICK -> 20L
-                            HapticType.HEAVY -> 45L
-                            HapticType.DOUBLE -> 30L
-                        }
-                        vibrator.vibrate(VibrationEffect.createOneShot(duration, VibrationEffect.DEFAULT_AMPLITUDE))
-                        didVibrate = true
+            when (type) {
+                HapticType.SNAP -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        vibrator?.vibrate(
+                            VibrationEffect.createWaveform(
+                                longArrayOf(0, 18, 25, 28),
+                                intArrayOf(0, 255, 0, 160),
+                                -1
+                            )
+                        )
+                    } else {
+                        @Suppress("DEPRECATION")
+                        vibrator?.vibrate(35)
                     }
-                } catch (_: Throwable) {
-                    didVibrate = false
                 }
-            }
-
-            if (!didVibrate) {
-                val feedbackType = when (type) {
-                    HapticType.SNAP, HapticType.CLICK -> androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove
-                    HapticType.HEAVY, HapticType.DOUBLE -> androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress
+                HapticType.CLICK -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        vibrator?.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK))
+                    } else {
+                        @Suppress("DEPRECATION")
+                        vibrator?.vibrate(20)
+                    }
                 }
-                haptic.performHapticFeedback(feedbackType)
+                HapticType.HEAVY -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        vibrator?.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_HEAVY_CLICK))
+                    } else {
+                        @Suppress("DEPRECATION")
+                        vibrator?.vibrate(45)
+                    }
+                }
+                HapticType.DOUBLE -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        vibrator?.vibrate(
+                            VibrationEffect.createWaveform(
+                                longArrayOf(0, 30, 40, 30),
+                                intArrayOf(0, 255, 0, 200),
+                                -1
+                            )
+                        )
+                    } else {
+                        @Suppress("DEPRECATION")
+                        vibrator?.vibrate(60)
+                    }
+                }
             }
         }
     }
 
-    // Reticle & HUD pulse animation
-    val infiniteTransition = rememberInfiniteTransition(label = "ReticlePulse")
+    // Dynamic UI Pulse Animations (passed as State<Float> to ArMeasurementCanvasOverlay)
+    val infiniteTransition = rememberInfiniteTransition(label = "infinitePulse")
     val reticlePulseScale = infiniteTransition.animateFloat(
-        initialValue = 0.96f,
-        targetValue = 1.04f,
+        initialValue = 1.0f,
+        targetValue = 1.05f,
         animationSpec = infiniteRepeatable(
             animation = tween(1200, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
         ),
-        label = "reticlePulse"
+        label = "reticleScale"
     )
+
     val dashPhase = infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 40f,
         animationSpec = infiniteRepeatable(
-            animation = tween(1000, easing = LinearEasing),
+            animation = tween(1400, easing = LinearEasing),
             repeatMode = RepeatMode.Restart
         ),
         label = "dashPhase"
     )
+
     val planeLockedParticleAnim = infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
@@ -263,7 +309,7 @@ fun ModernArCameraView(
     // Shutter Flash State
     var isShutterFlash by remember { mutableStateOf(false) }
 
-    if (!cameraPermissionState.status.isGranted) {
+    if (!hasCameraPermission) {
         // Permission Request UI
         Box(
             modifier = Modifier
@@ -292,7 +338,7 @@ fun ModernArCameraView(
                 }
                 Spacer(modifier = Modifier.height(24.dp))
                 Text(
-                    text = viewModel.getString("perm_camera_title"),
+                    text = viewModel.getString("perm_camera_title").ifEmpty { "需要相機存取權限" },
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface,
@@ -300,14 +346,14 @@ fun ModernArCameraView(
                 )
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
-                    text = viewModel.getString("perm_camera_desc"),
+                    text = viewModel.getString("perm_camera_desc").ifEmpty { "此工具需要相機畫面進行 3D 空間投影。請授予權限以繼續使用測量功能。" },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center
                 )
                 Spacer(modifier = Modifier.height(32.dp))
                 Button(
-                    onClick = { cameraPermissionState.launchPermissionRequest() },
+                    onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier
                         .fillMaxWidth(0.85f)
@@ -315,118 +361,97 @@ fun ModernArCameraView(
                 ) {
                     Icon(Icons.Rounded.Check, null, Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(viewModel.getString("btn_grant_perm"), fontWeight = FontWeight.Bold)
+                    Text(viewModel.getString("btn_grant_perm").ifEmpty { "授與相機權限" }, fontWeight = FontWeight.Bold)
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = openAppSettings,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth(0.85f)
+                        .height(52.dp)
+                ) {
+                    Icon(Icons.Rounded.Settings, null, Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(viewModel.getString("btn_open_settings").ifEmpty { "前往系統設定" }, fontWeight = FontWeight.Medium)
                 }
             }
         }
     } else {
         // Active AR Camera Viewport
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
                 .hardwareBackdropBlur(isArOverlayOpen, arOverlayBlurRadius)
         ) {
-            // 1. Pure Vulkan AR Scene View or High-Speed Camera2 View
-            val session = remember(cameraPermissionState.status.isGranted) {
-                viewModel.modernArEngine.createSession()
+            val localDensity = androidx.compose.ui.platform.LocalDensity.current
+            val viewportPxW = with(localDensity) { maxWidth.roundToPx() }
+            val viewportPxH = with(localDensity) { maxHeight.roundToPx() }
+
+            LaunchedEffect(viewportPxW, viewportPxH) {
+                if (viewportPxW > 0 && viewportPxH > 0) {
+                    viewModel.updateDisplayGeometry(0, viewportPxW, viewportPxH)
+                }
             }
 
-            if (session != null) {
-                AndroidView(
-                    factory = { ctx ->
-                        VulkanArSceneView(
-                            context = ctx,
-                            session = session,
-                            modernArEngine = viewModel.modernArEngine,
-                            viewModel = viewModel
-                        ).apply {
-                            modernArVulkanViewRef = this
-                            onResume()
-                        }
-                    },
-                    update = { view ->
-                        (view as? VulkanArSceneView)?.let {
-                            modernArVulkanViewRef = it
-                        }
-                    },
-                    onRelease = { view ->
-                        (view as? VulkanArSceneView)?.apply {
-                            onPause()
-                            destroy()
-                        }
-                        modernArVulkanViewRef = null
-                    },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .pointerInput(Unit) {
-                            detectTapGestures { offset ->
-                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+            // 1. High-Performance, Rock-Solid Camera2 TextureView Surface
+            AndroidView(
+                factory = { ctx ->
+                    val textureView = TextureView(ctx).apply {
+                        isOpaque = true
+                    }
+                    textureViewRef = textureView
+                    viewModel.setHighSpeedCamera2Manager(camera2Manager)
 
-                                val pingAnim = Animatable(0f)
-                                val pingPair = offset to pingAnim
-                                pings.add(pingPair)
-                                coroutineScope.launch {
-                                    pingAnim.animateTo(1f, animationSpec = tween(600, easing = LinearOutSlowInEasing))
-                                    pings.remove(pingPair)
-                                }
-
-                                viewModel.requestHitTest(offset.x, offset.y)
-                            }
-                        }
-                )
-            } else {
-                AndroidView(
-                    factory = { ctx ->
-                        val textureView = TextureView(ctx).apply {
-                            isOpaque = false
-                        }
-                        textureViewRef = textureView
-                        val camera2Manager = HighSpeedCamera2Manager(ctx)
-                        viewModel.setHighSpeedCamera2Manager(camera2Manager)
-
-                        textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                            override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
-                                camera2Manager.openCameraAndStartSession(textureView) { isHighSpeed, size ->
-                                    android.util.Log.i("CameraView", "Session ready. HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
-                                }
-                            }
-                            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
-                            override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
-                                camera2Manager.closeCamera()
-                                return true
-                            }
-                            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
-                        }
-
-                        if (textureView.isAvailable) {
+                    textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                        override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+                            viewModel.updateDisplayGeometry(0, width, height)
                             camera2Manager.openCameraAndStartSession(textureView) { isHighSpeed, size ->
-                                android.util.Log.i("CameraView", "Session ready (immediate). HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
+                                android.util.Log.i("CameraView", "Session ready. HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
                             }
                         }
+                        override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
+                            viewModel.updateDisplayGeometry(0, width, height)
+                        }
+                        override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                            camera2Manager.closeCamera()
+                            return true
+                        }
+                        override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+                    }
 
-                        textureView
-                    },
-                    onRelease = { _ ->
-                        viewModel.closeHighSpeedCamera()
-                        textureViewRef = null
-                    },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .pointerInput(Unit) {
-                            detectTapGestures { offset ->
-                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                val pingAnim = Animatable(0f)
-                                val pingPair = offset to pingAnim
-                                pings.add(pingPair)
-                                coroutineScope.launch {
-                                    pingAnim.animateTo(1f, animationSpec = tween(600, easing = LinearOutSlowInEasing))
-                                    pings.remove(pingPair)
-                                }
-                                viewModel.requestHitTest(offset.x, offset.y)
-                            }
+                    if (textureView.isAvailable) {
+                        viewModel.updateDisplayGeometry(0, textureView.width, textureView.height)
+                        camera2Manager.openCameraAndStartSession(textureView) { isHighSpeed, size ->
+                            android.util.Log.i("CameraView", "Session ready (immediate). HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
                         }
-                )
-            }
+                    }
+
+                    textureView
+                },
+                update = { tv ->
+                    textureViewRef = tv
+                },
+                onRelease = { _ ->
+                    camera2Manager.closeCamera()
+                    textureViewRef = null
+                },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures { offset ->
+                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                            val pingAnim = Animatable(0f)
+                            val pingPair = offset to pingAnim
+                            pings.add(pingPair)
+                            coroutineScope.launch {
+                                pingAnim.animateTo(1f, animationSpec = tween(600, easing = LinearOutSlowInEasing))
+                                pings.remove(pingPair)
+                            }
+                            viewModel.requestHitTest(offset.x, offset.y)
+                        }
+                    }
+            )
 
             // 2. 3D Augmented Overlay Canvas (Planes, Projected Points, Lines, Measurements, Pings, Reticle)
             ArMeasurementCanvasOverlay(

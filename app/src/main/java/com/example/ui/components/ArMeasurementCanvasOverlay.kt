@@ -38,134 +38,254 @@ private val UNIT_SIN_TABLE = FloatArray(SAMPLES_COUNT) { i ->
 private val TEMP_PROJ_HOLDER = FloatArray(2)
 
 /**
- * Projects a 3D circle lying flat on the floor (horizontal XZ plane, constant Y)
- * into a screen-space Path that accurately exhibits physical perspective foreshortening.
+ * 繪製專業 AR 空間測量準心 (Professional Multi-Style AR HUD Targeting Reticle)
+ * 完美支援四大風格：DOUBLE_RING (經典雙環), PRECISION_CROSSHAIR (高精十字), MINIMAL_DOT (極簡圓點), HOLOGRAPHIC_RADAR (全息雷達)
  */
-private fun buildFloorParallelCirclePath(
-    path: Path,
-    centerX: Double,
-    centerY: Double,
-    centerZ: Double,
-    radiusMeters: Double,
-    viewMatrix: FloatArray,
-    projectionMatrix: FloatArray,
-    screenW: Int,
-    screenH: Int,
-    fallbackCenter: Offset
-): Boolean {
-    path.rewind()
-    if (viewMatrix.size < 16 || projectionMatrix.size < 16 || screenW <= 0 || screenH <= 0) {
-        val rPx = (radiusMeters * 500.0).toFloat().coerceIn(16f, 60f)
-        path.addOval(
-            androidx.compose.ui.geometry.Rect(
-                fallbackCenter.x - rPx,
-                fallbackCenter.y - rPx * 0.50f,
-                fallbackCenter.x + rPx,
-                fallbackCenter.y + rPx * 0.50f
+private fun DrawScope.drawArReticle(
+    center: Offset,
+    style: String,
+    primaryColor: Color,
+    accentColor: Color,
+    isSnapped: Boolean,
+    pulseScale: Float,
+    snapScale: Float,
+    dashPhase: Float
+) {
+    if (center.x.isNaN() || center.y.isNaN() || center.x < -2000f || center.y < -2000f) return
+
+    val activeColor = if (isSnapped) accentColor else primaryColor
+    val basePulse = pulseScale.coerceIn(0.8f, 1.4f)
+    val snapFactor = snapScale.coerceIn(0.85f, 1.35f)
+
+    when (style) {
+        "PRECISION_CROSSHAIR" -> {
+            // 1. 高精度十字準星：中央精準定位光標 + 軸向刻度 + 吸附時鎖定邊角
+            val armLen = 22.dp.toPx() * snapFactor
+            val gap = 7.dp.toPx()
+            val strokeW = if (isSnapped) 2.2.dp.toPx() else 1.8.dp.toPx()
+
+            // 陰影邊界
+            val shadowColor = Color.Black.copy(alpha = 0.35f)
+            val sOffset = 1.0f
+            // 水平軸
+            drawLine(shadowColor, Offset(center.x - armLen, center.y + sOffset), Offset(center.x - gap, center.y + sOffset), strokeW + 1f)
+            drawLine(shadowColor, Offset(center.x + gap, center.y + sOffset), Offset(center.x + armLen, center.y + sOffset), strokeW + 1f)
+            // 垂直軸
+            drawLine(shadowColor, Offset(center.x + sOffset, center.y - armLen), Offset(center.x + sOffset, center.y - gap), strokeW + 1f)
+            drawLine(shadowColor, Offset(center.x + sOffset, center.y + gap), Offset(center.x + sOffset, center.y + armLen), strokeW + 1f)
+
+            // 核心十字線條
+            drawLine(activeColor, Offset(center.x - armLen, center.y), Offset(center.x - gap, center.y), strokeW, cap = StrokeCap.Round)
+            drawLine(activeColor, Offset(center.x + gap, center.y), Offset(center.x + armLen, center.y), strokeW, cap = StrokeCap.Round)
+            drawLine(activeColor, Offset(center.x, center.y - armLen), Offset(center.x, center.y - gap), strokeW, cap = StrokeCap.Round)
+            drawLine(activeColor, Offset(center.x, center.y + gap), Offset(center.x, center.y + armLen), strokeW, cap = StrokeCap.Round)
+
+            // 刻度微標 (Sub-millimeter Ticks)
+            val tickHalf = 3.2.dp.toPx()
+            val t1 = 13.dp.toPx()
+            val t2 = 18.dp.toPx()
+            drawLine(activeColor.copy(alpha = 0.85f), Offset(center.x - t1, center.y - tickHalf), Offset(center.x - t1, center.y + tickHalf), 1.2.dp.toPx())
+            drawLine(activeColor.copy(alpha = 0.85f), Offset(center.x + t1, center.y - tickHalf), Offset(center.x + t1, center.y + tickHalf), 1.2.dp.toPx())
+            drawLine(activeColor.copy(alpha = 0.85f), Offset(center.x - tickHalf, center.y - t1), Offset(center.x + tickHalf, center.y - t1), 1.2.dp.toPx())
+            drawLine(activeColor.copy(alpha = 0.85f), Offset(center.x - tickHalf, center.y + t1), Offset(center.x + tickHalf, center.y + t1), 1.2.dp.toPx())
+
+            // 磁吸鎖定時呈現 45度 戰術防護角
+            if (isSnapped) {
+                val bracketDist = 18.dp.toPx()
+                val bracketLen = 6.dp.toPx()
+                // 左上、右上、左下、右下 L-brackets
+                drawLine(activeColor, Offset(center.x - bracketDist, center.y - bracketDist), Offset(center.x - bracketDist + bracketLen, center.y - bracketDist), 2.dp.toPx())
+                drawLine(activeColor, Offset(center.x - bracketDist, center.y - bracketDist), Offset(center.x - bracketDist, center.y - bracketDist + bracketLen), 2.dp.toPx())
+
+                drawLine(activeColor, Offset(center.x + bracketDist, center.y - bracketDist), Offset(center.x + bracketDist - bracketLen, center.y - bracketDist), 2.dp.toPx())
+                drawLine(activeColor, Offset(center.x + bracketDist, center.y - bracketDist), Offset(center.x + bracketDist, center.y - bracketDist + bracketLen), 2.dp.toPx())
+
+                drawLine(activeColor, Offset(center.x - bracketDist, center.y + bracketDist), Offset(center.x - bracketDist + bracketLen, center.y + bracketDist), 2.dp.toPx())
+                drawLine(activeColor, Offset(center.x - bracketDist, center.y + bracketDist), Offset(center.x - bracketDist, center.y + bracketDist - bracketLen), 2.dp.toPx())
+
+                drawLine(activeColor, Offset(center.x + bracketDist, center.y + bracketDist), Offset(center.x + bracketDist - bracketLen, center.y + bracketDist), 2.dp.toPx())
+                drawLine(activeColor, Offset(center.x + bracketDist, center.y + bracketDist), Offset(center.x + bracketDist, center.y + bracketDist - bracketLen), 2.dp.toPx())
+            }
+
+            // 核心精準實心白點
+            drawCircle(Color.Black.copy(alpha = 0.35f), center = center, radius = 3.6.dp.toPx())
+            drawCircle(Color.White, center = center, radius = 2.8.dp.toPx())
+        }
+        "MINIMAL_DOT" -> {
+            // 2. 極簡精準圓點：乾淨俐落無雜訊、如 Apple/Google Measure 經典設計
+            val dotRadius = if (isSnapped) 5.5.dp.toPx() else 4.6.dp.toPx()
+            // 柔和外圍呼吸光環
+            val haloRadius = (16.dp.toPx() * basePulse).coerceIn(12.dp.toPx(), 26.dp.toPx())
+            drawCircle(
+                color = activeColor.copy(alpha = if (isSnapped) 0.55f else 0.22f),
+                center = center,
+                radius = haloRadius,
+                style = Stroke(width = 1.6.dp.toPx())
             )
-        )
-        return true
-    }
-
-    var allProjected = true
-    for (i in 0 until SAMPLES_COUNT) {
-        val wx = centerX + radiusMeters * UNIT_COS_TABLE[i]
-        val wy = centerY // Horizontal ground plane (parallel to floor)
-        val wz = centerZ + radiusMeters * UNIT_SIN_TABLE[i]
-        val ok = ArMath.projectCoordsToScreen(wx, wy, wz, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER)
-        if (!ok) {
-            allProjected = false
-            break
+            // 核心陰影與白點
+            drawCircle(Color.Black.copy(alpha = 0.30f), center = center + Offset(0f, 1.2f), radius = dotRadius + 0.8.dp.toPx())
+            drawCircle(Color.White, center = center, radius = dotRadius)
+            drawCircle(activeColor, center = center, radius = dotRadius * 0.45f)
         }
-        val px = TEMP_PROJ_HOLDER[0]
-        val py = TEMP_PROJ_HOLDER[1]
-        if (i == 0) {
-            path.moveTo(px, py)
-        } else {
-            path.lineTo(px, py)
+        "HOLOGRAPHIC_RADAR" -> {
+            // 3. 全息雷達準星：科技感環形雷達動態掃描與戰術邊角
+            val radarRadius = (20.dp.toPx() * basePulse * snapFactor).coerceAtLeast(14.dp.toPx())
+            // 旋轉雷達弧段
+            val sweepStart = ((dashPhase * 160f) % 360f)
+            drawArc(
+                color = activeColor,
+                startAngle = sweepStart,
+                sweepAngle = 75f,
+                useCenter = false,
+                topLeft = Offset(center.x - radarRadius, center.y - radarRadius),
+                size = Size(radarRadius * 2f, radarRadius * 2f),
+                style = Stroke(width = 2.2.dp.toPx(), cap = StrokeCap.Round)
+            )
+            drawArc(
+                color = activeColor.copy(alpha = 0.35f),
+                startAngle = sweepStart + 180f,
+                sweepAngle = 75f,
+                useCenter = false,
+                topLeft = Offset(center.x - radarRadius, center.y - radarRadius),
+                size = Size(radarRadius * 2f, radarRadius * 2f),
+                style = Stroke(width = 1.4.dp.toPx(), cap = StrokeCap.Round)
+            )
+            // 內圈點矩陣與外框微標
+            val bSize = 6.dp.toPx()
+            val bDist = radarRadius + 5.dp.toPx()
+            drawLine(activeColor, Offset(center.x - bDist, center.y - bDist), Offset(center.x - bDist + bSize, center.y - bDist), 1.8.dp.toPx())
+            drawLine(activeColor, Offset(center.x - bDist, center.y - bDist), Offset(center.x - bDist, center.y - bDist + bSize), 1.8.dp.toPx())
+            drawLine(activeColor, Offset(center.x + bDist, center.y - bDist), Offset(center.x + bDist - bSize, center.y - bDist), 1.8.dp.toPx())
+            drawLine(activeColor, Offset(center.x + bDist, center.y - bDist), Offset(center.x + bDist, center.y - bDist + bSize), 1.8.dp.toPx())
+            drawLine(activeColor, Offset(center.x - bDist, center.y + bDist), Offset(center.x - bDist + bSize, center.y + bDist), 1.8.dp.toPx())
+            drawLine(activeColor, Offset(center.x - bDist, center.y + bDist), Offset(center.x - bDist, center.y + bDist - bSize), 1.8.dp.toPx())
+            drawLine(activeColor, Offset(center.x + bDist, center.y + bDist), Offset(center.x + bDist - bSize, center.y + bDist), 1.8.dp.toPx())
+            drawLine(activeColor, Offset(center.x + bDist, center.y + bDist), Offset(center.x + bDist, center.y + bDist - bSize), 1.8.dp.toPx())
+
+            // 核心雷達光點
+            drawCircle(Color.Black.copy(alpha = 0.35f), center = center, radius = 4.2.dp.toPx())
+            drawCircle(Color.White, center = center, radius = 3.2.dp.toPx())
+        }
+        else -> { // "DOUBLE_RING" (預設雙同心環)
+            // 外層微脈衝光環
+            val outerRadius = (22.dp.toPx() * basePulse * snapFactor).coerceAtLeast(14.dp.toPx())
+            val innerRadius = (12.dp.toPx() * snapFactor).coerceAtLeast(8.dp.toPx())
+
+            // 陰影微光
+            drawCircle(
+                color = Color.Black.copy(alpha = 0.25f),
+                center = center + Offset(0f, 1.2f),
+                radius = outerRadius + 0.5.dp.toPx(),
+                style = Stroke(width = 2.4.dp.toPx())
+            )
+            // 外環
+            drawCircle(
+                color = activeColor,
+                center = center,
+                radius = outerRadius,
+                style = Stroke(width = 2.4.dp.toPx())
+            )
+            // 內環 (半透明輔助對齊)
+            drawCircle(
+                color = activeColor.copy(alpha = if (isSnapped) 0.85f else 0.40f),
+                center = center,
+                radius = innerRadius,
+                style = Stroke(width = 1.5.dp.toPx())
+            )
+
+            // 核心實心白點
+            val dotRadius = if (isSnapped) 5.2.dp.toPx() else 4.6.dp.toPx()
+            drawCircle(
+                color = Color.Black.copy(alpha = 0.28f),
+                center = center + Offset(0f, 1.0f),
+                radius = dotRadius + 0.6.dp.toPx()
+            )
+            drawCircle(
+                color = Color.White,
+                center = center,
+                radius = dotRadius
+            )
         }
     }
-
-    if (allProjected) {
-        path.close()
-        return true
-    }
-
-    val rPx = (radiusMeters * 500.0).toFloat().coerceIn(16f, 60f)
-    path.rewind()
-    path.addOval(
-        androidx.compose.ui.geometry.Rect(
-            fallbackCenter.x - rPx,
-            fallbackCenter.y - rPx * 0.50f,
-            fallbackCenter.x + rPx,
-            fallbackCenter.y + rPx * 0.50f
-        )
-    )
-    return true
 }
 
 /**
- * 繪製簡約精確的 3D 地面平行圓形測量錨點 (Simplified Clean 3D Floor-Parallel Circular Anchor Disc)
- * 簡化圈圈：單一簡潔地面平行圓環、柔和半透明底色、接地接觸陰影與精確核心圓點，無多重同心環視覺干擾。
+ * 繪製已鎖定測量錨點標記 (Confirmed 3D Spatial Anchor Marker)
  */
-private fun DrawScope.drawFloorParallelAnchorDisc(
-    center3D: Point3D,
-    screenCenter: Offset,
-    viewMatrix: FloatArray,
-    projectionMatrix: FloatArray,
-    screenW: Int,
-    screenH: Int,
+private fun DrawScope.drawArMeasurementAnchor(
+    center: Offset,
+    index: Int,
+    label: String?,
     primaryColor: Color,
-    accentColor: Color,
-    isTarget: Boolean = false,
-    isSnapped: Boolean = false,
-    isOrigin: Boolean = false,
-    pulseScale: Float = 1.0f,
-    circlePath: Path,
-    shadowPath: Path
+    isOrigin: Boolean,
+    nodeLabelPaint: android.graphics.Paint,
+    badgeBgPaint: android.graphics.Paint
 ) {
-    val vz = if (viewMatrix.size >= 16) {
-        -(viewMatrix[2] * center3D.x.toFloat() +
-          viewMatrix[6] * center3D.y.toFloat() +
-          viewMatrix[10] * center3D.z.toFloat() +
-          viewMatrix[14])
-    } else 1.0f
-    val depth = kotlin.math.abs(vz).coerceIn(0.25f, 10.0f)
-    val baseRadiusM = (0.035 * kotlin.math.sqrt(depth.toDouble())).coerceIn(0.020, 0.085)
-    val currentRadiusM = baseRadiusM * (if (isTarget) pulseScale.toDouble() else 1.0)
+    if (center.x.isNaN() || center.y.isNaN() || center.x < -2000f || center.y < -2000f) return
 
-    val hasCircle = buildFloorParallelCirclePath(circlePath, center3D.x, center3D.y, center3D.z, currentRadiusM, viewMatrix, projectionMatrix, screenW, screenH, screenCenter)
-
-    val activeColor = if (isSnapped) accentColor else if (isOrigin) Color(0xFFFFB300) else primaryColor
-
-    // 1. 地面平行圓環 (依使用者附圖：純淨單一的透視圓環線條，無模糊陰影與厚重填色)
-    if (hasCircle) {
-        drawPath(
-            path = circlePath,
-            color = activeColor,
-            style = Stroke(width = 2.6.dp.toPx(), cap = StrokeCap.Round)
-        )
-    } else {
-        drawCircle(
-            color = activeColor,
-            center = screenCenter,
-            radius = (22f * pulseScale).dp.toPx(),
-            style = Stroke(width = 2.6.dp.toPx())
-        )
-    }
-
-    // 2. 核心實心圓點 (依使用者附圖：清晰純淨的實心圓點，如 Google Measure 經典對齊白點)
+    val anchorColor = if (isOrigin) Color(0xFFFFB300) else primaryColor
+    val outerRadius = if (isOrigin) 14.dp.toPx() else 11.dp.toPx()
     val dotRadius = if (isOrigin) 5.6.dp.toPx() else 4.8.dp.toPx()
+
+    // 1. 地面接觸投影陰影 (橢圓接地陰影)
+    drawOval(
+        color = Color.Black.copy(alpha = 0.35f),
+        topLeft = Offset(center.x - outerRadius, center.y + dotRadius * 0.6f),
+        size = Size(outerRadius * 2f, outerRadius * 0.65f)
+    )
+
+    // 2. 外圍立體錨點環
     drawCircle(
-        color = Color.Black.copy(alpha = 0.22f),
-        center = screenCenter,
+        color = Color.Black.copy(alpha = 0.30f),
+        center = center + Offset(0f, 1f),
+        radius = outerRadius + 0.5f,
+        style = Stroke(width = 2.6.dp.toPx())
+    )
+    drawCircle(
+        color = anchorColor,
+        center = center,
+        radius = outerRadius,
+        style = Stroke(width = 2.6.dp.toPx())
+    )
+
+    // 3. 內凹柔光實心底層
+    drawCircle(
+        color = anchorColor.copy(alpha = 0.22f),
+        center = center,
+        radius = outerRadius
+    )
+
+    // 4. 核心白色光斑定位點
+    drawCircle(
+        color = Color.Black.copy(alpha = 0.30f),
+        center = center + Offset(0f, 1f),
         radius = dotRadius + 0.6.dp.toPx()
     )
     drawCircle(
         color = Color.White,
-        center = screenCenter,
+        center = center,
         radius = dotRadius
     )
+
+    // 5. 錨點序號小徽章 (如 "A", "B", "C" 或 "1", "2")
+    val badgeChar = if (index == 0) "原點" else "${index + 1}"
+    drawContext.canvas.nativeCanvas.apply {
+        val tw = nodeLabelPaint.measureText(badgeChar)
+        val th = nodeLabelPaint.textSize
+        val bx = center.x
+        val by = center.y - outerRadius - 12.dp.toPx()
+        val padH = 10f
+        val padV = 5f
+
+        // 膠囊陰影與背景
+        badgeBgPaint.color = 0x88000000.toInt()
+        drawRoundRect(bx - tw / 2f - padH, by - th + 2f - padV, bx + tw / 2f + padH, by + 4f + padV, 14f, 14f, badgeBgPaint)
+        badgeBgPaint.color = anchorColor.toArgb()
+        drawRoundRect(bx - tw / 2f - padH, by - th - padV, bx + tw / 2f + padH, by + 2f + padV, 14f, 14f, badgeBgPaint)
+
+        nodeLabelPaint.color = if (isOrigin) android.graphics.Color.BLACK else android.graphics.Color.WHITE
+        drawText(badgeChar, bx, by, nodeLabelPaint)
+    }
 }
 
 /**
@@ -216,6 +336,8 @@ fun ArMeasurementCanvasOverlay(
     val arFontSize by viewModel.arFontSize.collectAsState()
     val badgeOpacity by viewModel.badgeOpacity.collectAsState()
     val gridOverlayStyle by viewModel.gridOverlayStyle.collectAsState()
+    val detectedPlanes by viewModel.detectedPlanes.collectAsState()
+    val showPointCloud by viewModel.showPointCloud.collectAsState()
 
     val badgeAlpha = when (badgeOpacity) {
         "SOLID" -> 0.95f
@@ -280,13 +402,16 @@ fun ArMeasurementCanvasOverlay(
         val screenH = size.height.toInt()
         val screenCenter = Offset(size.width / 2f, size.height / 2f)
 
+        val hasValidMatrices = viewMatrix.size >= 16 && projectionMatrix.size >= 16 &&
+            ArMath.isMatrixValid(viewMatrix) && ArMath.isMatrixValid(projectionMatrix)
+
         // Calculate real-time projected reticle position from 3D live target point
         val rawTargetReticlePos = if (liveTargetScreenPos != null &&
             liveTargetScreenPos!!.x in (-120f)..(size.width + 120f) &&
             liveTargetScreenPos!!.y in (-120f)..(size.height + 120f)
         ) {
             liveTargetScreenPos!!
-        } else if (liveTargetPoint != null && viewMatrix.size >= 16 && projectionMatrix.size >= 16) {
+        } else if (liveTargetPoint != null && hasValidMatrices) {
             val proj = ArMath.projectWorldToScreen(liveTargetPoint!!, viewMatrix, projectionMatrix, screenW, screenH)
             if (proj != null) Offset(proj.first, proj.second) else screenCenter
         } else {
@@ -374,7 +499,9 @@ fun ArMeasurementCanvasOverlay(
         val isAreaMode = subMode == 1 || (subMode == 0 && autoDetectedType == "AREA")
         val isHeightMode = subMode == 2 || (subMode == 0 && autoDetectedType == "HEIGHT")
         val isAngleMode = subMode == 5 || (subMode == 0 && autoDetectedType == "ANGLE")
-        val isDistanceMode = !isAreaMode && !isHeightMode && !isAngleMode
+        val isCircleMode = subMode == 4 || (subMode == 0 && autoDetectedType == "CIRCLE")
+        val isBoxMode = subMode == 3 || (subMode == 0 && autoDetectedType == "VOLUME")
+        val isDistanceMode = !isAreaMode && !isHeightMode && !isAngleMode && !isCircleMode && !isBoxMode
 
         val effectiveLineThickness = lineThickness.coerceIn(1.5f, 8.0f)
 
@@ -789,16 +916,222 @@ fun ArMeasurementCanvasOverlay(
         }
 
         // -------------------------------------------------------------
-        // 4. ACTIVE DYNAMIC VIRTUAL LINE & RUBBER-BAND PREVIEW
+        // 4. CIRCLE / DIAMETER MODE (SubMode 4)
+        // -------------------------------------------------------------
+        if (isCircleMode && pointsSnapshot.isNotEmpty()) {
+            val pCenter = projectedPoints.getOrNull(0)
+            val pEdge = if (projectedPoints.size >= 2) projectedPoints[1] else Pair(currentReticlePos.x, currentReticlePos.y)
+
+            if (pCenter != null && pEdge != null) {
+                val cOffset = Offset(pCenter.first, pCenter.second)
+                val eOffset = Offset(pEdge.first, pEdge.second)
+                val dx = eOffset.x - cOffset.x
+                val dy = eOffset.y - cOffset.y
+                val rPx = sqrt(dx * dx + dy * dy)
+
+                if (!rPx.isNaN() && rPx > 2f) {
+                    // 半徑輔助虛線
+                    drawLine(
+                        color = colorTertiary,
+                        start = cOffset,
+                        end = eOffset,
+                        strokeWidth = effectiveLineThickness.dp.toPx(),
+                        pathEffect = PathEffect.dashPathEffect(DASH_14_10, dashPhase.value),
+                        cap = StrokeCap.Round
+                    )
+
+                    // 圓形內域半透明填色
+                    drawCircle(
+                        color = colorPrimary.copy(alpha = 0.12f),
+                        center = cOffset,
+                        radius = rPx
+                    )
+
+                    // 圓周外輪廓
+                    drawCircle(
+                        color = colorPrimary,
+                        center = cOffset,
+                        radius = rPx,
+                        style = Stroke(width = effectiveLineThickness.dp.toPx())
+                    )
+
+                    // 計算真實 3D 半徑與直徑
+                    val radiusMeters = if (pointsSnapshot.size >= 2) {
+                        ArMath.distance(pointsSnapshot[0], pointsSnapshot[1])
+                    } else if (liveDistanceMeters != null && liveDistanceMeters!! > 0.0) {
+                        liveDistanceMeters!!
+                    } else {
+                        (rPx / 400.0).coerceIn(0.05, 5.0)
+                    }
+                    val diameterMeters = radiusMeters * 2.0
+                    val circleAreaM2 = Math.PI * radiusMeters * radiusMeters
+
+                    val circleText = "直徑 ${viewModel.formatLength(diameterMeters, selectedUnit)} | 半徑 ${viewModel.formatLength(radiusMeters, selectedUnit)}"
+
+                    drawContext.canvas.nativeCanvas.apply {
+                        val textWidth = badgeTextPaint.measureText(circleText)
+                        val textHeight = badgeTextPaint.textSize
+                        val padH = 32f
+                        val padV = 16f
+                        val midX = (cOffset.x + eOffset.x) / 2f
+                        val midY = (cOffset.y + eOffset.y) / 2f - 24.dp.toPx()
+                        val left = midX - textWidth / 2f - padH
+                        val top = midY - textHeight / 2f - padV
+                        val right = midX + textWidth / 2f + padH
+                        val bottom = midY + textHeight / 2f + padV
+                        val radius = 34f
+
+                        badgeBgPaint.color = 0x66000000
+                        drawRoundRect(left + 2f, top + 4f, right + 2f, bottom + 4f, radius, radius, badgeBgPaint)
+                        badgeBgPaint.color = Color(colorPrimary.red, colorPrimary.green, colorPrimary.blue, badgeAlpha).toArgb()
+                        drawRoundRect(left, top, right, bottom, radius, radius, badgeBgPaint)
+                        badgeBorderPaint.color = Color.White.copy(alpha = 0.85f).toArgb()
+                        drawRoundRect(left, top, right, bottom, radius, radius, badgeBorderPaint)
+                        badgeTextPaint.color = colorOnPrimary.toArgb()
+                        drawText(circleText, midX, midY + textHeight * 0.35f, badgeTextPaint)
+                    }
+                }
+            }
+        }
+
+        // -------------------------------------------------------------
+        // 5. 3D BOX VOLUME MODE (SubMode 3)
+        // -------------------------------------------------------------
+        if (isBoxMode && pointsSnapshot.isNotEmpty()) {
+            val p0 = pointsSnapshot[0]
+            val pTarget = if (pointsSnapshot.size >= 2) pointsSnapshot[1] else (liveTargetPoint ?: p0)
+
+            val minX = min(p0.x, pTarget.x)
+            val maxX = max(p0.x, pTarget.x)
+            val minY = min(p0.y, pTarget.y)
+            val maxY = max(p0.y, pTarget.y)
+            val minZ = min(p0.z, pTarget.z)
+            val maxZ = max(p0.z, pTarget.z)
+
+            val lenX = abs(maxX - minX).coerceAtLeast(0.01)
+            val heightY = abs(maxY - minY).coerceAtLeast(0.01)
+            val depthZ = abs(maxZ - minZ).coerceAtLeast(0.01)
+            val volumeM3 = lenX * heightY * depthZ
+
+            // 8 個空間頂點
+            val box3D = listOf(
+                Point3D(minX, minY, minZ), Point3D(maxX, minY, minZ),
+                Point3D(maxX, minY, maxZ), Point3D(minX, minY, maxZ),
+                Point3D(minX, maxY, minZ), Point3D(maxX, maxY, minZ),
+                Point3D(maxX, maxY, maxZ), Point3D(minX, maxY, maxZ)
+            )
+
+            val box2D = box3D.map { pt ->
+                val ok = ArMath.projectCoordsToScreen(pt.x, pt.y, pt.z, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER)
+                if (ok) Offset(TEMP_PROJ_HOLDER[0], TEMP_PROJ_HOLDER[1]) else null
+            }
+
+            // 12 條立體長方體線段
+            val edges = listOf(
+                0 to 1, 1 to 2, 2 to 3, 3 to 0,
+                4 to 5, 5 to 6, 6 to 7, 7 to 4,
+                0 to 4, 1 to 5, 2 to 6, 3 to 7
+            )
+
+            edges.forEach { (a, b) ->
+                val ptA = box2D[a]
+                val ptB = box2D[b]
+                if (ptA != null && ptB != null) {
+                    drawLine(
+                        color = colorTertiary,
+                        start = ptA,
+                        end = ptB,
+                        strokeWidth = effectiveLineThickness.dp.toPx(),
+                        pathEffect = PathEffect.dashPathEffect(DASH_10_8, dashPhase.value)
+                    )
+                }
+            }
+
+            val validBoxPts = box2D.filterNotNull()
+            val center2D = if (validBoxPts.isNotEmpty()) {
+                Offset(validBoxPts.map { it.x }.average().toFloat(), validBoxPts.map { it.y }.average().toFloat())
+            } else screenCenter
+
+            val volText = "體積 %.3f m³ (長 %.2fm x 寬 %.2fm x 高 %.2fm)".format(
+                java.util.Locale.US, volumeM3, lenX, depthZ, heightY
+            )
+
+            drawContext.canvas.nativeCanvas.apply {
+                val textWidth = badgeTextPaint.measureText(volText)
+                val textHeight = badgeTextPaint.textSize
+                val padH = 30f
+                val padV = 16f
+                val left = center2D.x - textWidth / 2f - padH
+                val top = center2D.y - textHeight / 2f - padV
+                val right = center2D.x + textWidth / 2f + padH
+                val bottom = center2D.y + textHeight / 2f + padV
+                val radius = 34f
+
+                badgeBgPaint.color = 0x66000000
+                drawRoundRect(left + 2f, top + 4f, right + 2f, bottom + 4f, radius, radius, badgeBgPaint)
+                badgeBgPaint.color = Color(colorTertiary.red, colorTertiary.green, colorTertiary.blue, badgeAlpha).toArgb()
+                drawRoundRect(left, top, right, bottom, radius, radius, badgeBgPaint)
+                badgeBorderPaint.color = Color.White.copy(alpha = 0.85f).toArgb()
+                drawRoundRect(left, top, right, bottom, radius, radius, badgeBorderPaint)
+                badgeTextPaint.color = Color.Black.toArgb()
+                drawText(volText, center2D.x, center2D.y + textHeight * 0.35f, badgeTextPaint)
+            }
+        }
+
+        // -------------------------------------------------------------
+        // 6. 3D SPATIAL GROUND GRID OVERLAY (PERSPECTIVE_GRID / DOT_MATRIX)
+        // -------------------------------------------------------------
+        if (gridOverlayStyle == "PERSPECTIVE_GRID" && hasValidMatrices) {
+            val groundY = pointsSnapshot.firstOrNull()?.y ?: -0.45
+            val gridSpan = 2.0
+            val gridStep = 0.5
+            var gx = -gridSpan
+            while (gx <= gridSpan + 0.01) {
+                val ok1 = ArMath.projectCoordsToScreen(gx, groundY, -gridSpan, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER)
+                val p1 = if (ok1) Offset(TEMP_PROJ_HOLDER[0], TEMP_PROJ_HOLDER[1]) else null
+                val ok2 = ArMath.projectCoordsToScreen(gx, groundY, gridSpan, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER)
+                val p2 = if (ok2) Offset(TEMP_PROJ_HOLDER[0], TEMP_PROJ_HOLDER[1]) else null
+                if (p1 != null && p2 != null) {
+                    drawLine(
+                        color = colorPrimary.copy(alpha = 0.20f),
+                        start = p1,
+                        end = p2,
+                        strokeWidth = 1.0.dp.toPx()
+                    )
+                }
+                gx += gridStep
+            }
+            var gz = -gridSpan
+            while (gz <= gridSpan + 0.01) {
+                val ok1 = ArMath.projectCoordsToScreen(-gridSpan, groundY, gz, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER)
+                val p1 = if (ok1) Offset(TEMP_PROJ_HOLDER[0], TEMP_PROJ_HOLDER[1]) else null
+                val ok2 = ArMath.projectCoordsToScreen(gridSpan, groundY, gz, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER)
+                val p2 = if (ok2) Offset(TEMP_PROJ_HOLDER[0], TEMP_PROJ_HOLDER[1]) else null
+                if (p1 != null && p2 != null) {
+                    drawLine(
+                        color = colorPrimary.copy(alpha = 0.20f),
+                        start = p1,
+                        end = p2,
+                        strokeWidth = 1.0.dp.toPx()
+                    )
+                }
+                gz += gridStep
+            }
+        }
+
+        // -------------------------------------------------------------
+        // 7. ACTIVE DYNAMIC VIRTUAL LINE & RUBBER-BAND PREVIEW
         // -------------------------------------------------------------
         val isActivelyDrawingLine = when {
             isAreaMode -> if (subMode == 0 && projectedPoints.size >= 3) false else projectedPoints.isNotEmpty()
             isAngleMode -> projectedPoints.size == 1 || projectedPoints.size == 2
             isHeightMode -> projectedPoints.size == 1
+            isCircleMode -> projectedPoints.size == 1
+            isBoxMode -> projectedPoints.size == 1
             else -> projectedPoints.size % 2 == 1
         }
 
-        if (isActivelyDrawingLine && projectedPoints.isNotEmpty()) {
+        if (isActivelyDrawingLine && projectedPoints.isNotEmpty() && !isCircleMode && !isBoxMode) {
             val anchorIndex = if (isAngleMode && projectedPoints.size == 2) 1 else projectedPoints.size - 1
             val lastPt = projectedPoints.getOrNull(anchorIndex)
             if (lastPt != null) {
@@ -891,54 +1224,37 @@ fun ArMeasurementCanvasOverlay(
         }
 
         // -------------------------------------------------------------
-        // 5. Floor-Parallel Circular Measurement Anchors (簡化地面平行圓形原點)
+        // 8. Confirmed Measurement Anchors
         // -------------------------------------------------------------
         pointsSnapshot.forEachIndexed { index, pt3d ->
             val proj = projectedPoints.getOrNull(index)
             if (proj != null) {
                 val offset = Offset(proj.first, proj.second)
                 val isOrigin = (index == 0)
-                drawFloorParallelAnchorDisc(
-                    center3D = pt3d,
-                    screenCenter = offset,
-                    viewMatrix = viewMatrix,
-                    projectionMatrix = projectionMatrix,
-                    screenW = screenW,
-                    screenH = screenH,
+                drawArMeasurementAnchor(
+                    center = offset,
+                    index = index,
+                    label = pt3d.label,
                     primaryColor = colorPrimary,
-                    accentColor = colorTertiary,
-                    isTarget = false,
-                    isSnapped = false,
                     isOrigin = isOrigin,
-                    circlePath = floorCirclePath,
-                    shadowPath = floorShadowPath
+                    nodeLabelPaint = nodeLabelPaint,
+                    badgeBgPaint = badgeBgPaint
                 )
             }
         }
 
         // -------------------------------------------------------------
-        // 9. Floor-Parallel Active Target Reticle (簡化地面平行圓形準星定位點)
+        // 9. Active Target HUD Reticle (四大風格切換支援)
         // -------------------------------------------------------------
-        val activeTarget3D = liveTargetPoint ?: run {
-            val groundY = pointsSnapshot.firstOrNull()?.y ?: -0.45
-            Point3D(0.0, groundY, -1.2)
-        }
-
-        drawFloorParallelAnchorDisc(
-            center3D = activeTarget3D,
-            screenCenter = currentReticlePos,
-            viewMatrix = viewMatrix,
-            projectionMatrix = projectionMatrix,
-            screenW = screenW,
-            screenH = screenH,
+        drawArReticle(
+            center = currentReticlePos,
+            style = reticleStyle,
             primaryColor = colorPrimary,
             accentColor = colorTertiary,
-            isTarget = true,
             isSnapped = isSnapped,
-            isOrigin = false,
-            pulseScale = reticlePulseScale.value * snapScaleAnimated.value,
-            circlePath = floorCirclePath,
-            shadowPath = floorShadowPath
+            pulseScale = reticlePulseScale.value,
+            snapScale = snapScaleAnimated.value,
+            dashPhase = dashPhase.value
         )
 
         // Multi-Sample Burst Averaging Dynamic Progress Arc (Only visible during active burst measurement)

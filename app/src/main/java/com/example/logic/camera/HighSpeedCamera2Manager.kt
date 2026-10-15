@@ -1,10 +1,14 @@
 package com.example.logic.camera
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
-import android.hardware.camera2.params.StreamConfigurationMap
+import android.hardware.camera2.params.OutputConfiguration
+import android.hardware.camera2.params.SessionConfiguration
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
@@ -12,13 +16,15 @@ import android.util.Range
 import android.util.Size
 import android.view.Surface
 import android.view.TextureView
+import androidx.core.content.ContextCompat
 
 /**
- * High-performance Camera2 Direct Manager supporting:
- * 1. ConstrainedHighSpeedCaptureSession (dedicated 60/120 FPS hardware pipeline).
- * 2. Optimal resolution step-down (1080p / 720p) to satisfy HAL bandwidth constraints.
- * 3. AE / Night / HDR algorithm clamping (CONTROL_SCENE_MODE_DISABLED) preventing frame-drop in dim light.
- * 4. Graceful fallback to Standard 60 FPS Camera2 Session when High Speed is unsupported by HAL.
+ * High-performance, rock-solid Camera2 Direct Manager supporting:
+ * 1. Safe resolution step-down (1080p / 720p) matching HAL buffer constraints.
+ * 2. Dynamic, hardware-supported FPS range selection (60 FPS prioritized, 30 FPS safe fallback).
+ * 3. Graceful hardware feature negotiation (AF, AE, Edge, Noise modes) preventing HAL crashes.
+ * 4. Resilient session configuration with automatic recovery.
+ * 5. Low Light Boost & dynamic torch management.
  */
 class HighSpeedCamera2Manager(private val context: Context) {
 
@@ -40,22 +46,18 @@ class HighSpeedCamera2Manager(private val context: Context) {
 
     private var isClosed = false
     private var openRetryCount = 0
-    private var isHighSpeedForceDisabled = false
+    private var activeCameraId: String? = null
 
     val lowLightBoostEngine = LowLightBoostEngine(context)
-    private val isLowLightBoostEnabled = true
+    private var isLowLightBoostEnabled = true
 
     fun setLowLightBoostEnabled(enabled: Boolean = true) {
+        isLowLightBoostEnabled = enabled
         val session = captureSession ?: return
         val builder = previewRequestBuilder ?: return
         try {
-            lowLightBoostEngine.applyLowLightBoost(builder, true)
-            if (isHighSpeedSessionActive && session is CameraConstrainedHighSpeedCaptureSession) {
-                val list = session.createHighSpeedRequestList(builder.build())
-                session.setRepeatingBurst(list, null, backgroundHandler)
-            } else {
-                session.setRepeatingRequest(builder.build(), null, backgroundHandler)
-            }
+            lowLightBoostEngine.applyLowLightBoost(builder, enabled)
+            session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
         } catch (e: Throwable) {
             Log.w(TAG, "Failed to apply Low Light Boost update: ${e.message}")
         }
@@ -70,6 +72,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
 
     fun stopBackgroundThread() {
         try {
+            backgroundHandler?.removeCallbacksAndMessages(null)
             backgroundThread?.quitSafely()
             backgroundThread?.join(300)
             backgroundThread = null
@@ -80,47 +83,80 @@ class HighSpeedCamera2Manager(private val context: Context) {
     }
 
     /**
-     * Choose optimal 60 FPS resolution (1080p or 720p capped) within High Speed / Standard map limits.
+     * Selects the optimal preview resolution supported by the device's SurfaceTexture map.
+     * Capped at 1080p (1920x1080) for high frame-rate rendering and low GPU memory overhead.
      */
-    fun selectOptimal60FpsSize(characteristics: CameraCharacteristics): Pair<Size, Boolean> {
-        val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return Pair(Size(1920, 1080), false)
-        
-        // Check High Speed Video Sizes for [60, 60] if not explicitly force disabled
-        if (!isHighSpeedForceDisabled) {
-            try {
-                val highSpeedRanges = map.highSpeedVideoFpsRanges
-                val has60FpsHighSpeed = highSpeedRanges?.any { it.upper >= 60 && it.lower >= 30 } == true
-                if (has60FpsHighSpeed) {
-                    val targetRange = highSpeedRanges.firstOrNull { it.lower == 60 && it.upper == 60 }
-                        ?: highSpeedRanges.firstOrNull { it.upper >= 60 }
-                    if (targetRange != null) {
-                        val sizes = map.getHighSpeedVideoSizesFor(targetRange)
-                        if (!sizes.isNullOrEmpty()) {
-                            // Filter to sizes <= 1920x1080 to prevent GPU memory bandwidth throttling
-                            val reasonableSizes = sizes.filter { it.width <= 1920 && it.height <= 1080 }
-                            val chosen = reasonableSizes.firstOrNull { it.width == 1920 && it.height == 1080 }
-                                ?: reasonableSizes.firstOrNull { it.width == 1280 && it.height == 720 }
-                                ?: reasonableSizes.maxByOrNull { it.width * it.height }
-                                ?: sizes.first()
-                            Log.i(TAG, "Found High-Speed 60 FPS Size: ${chosen.width}x${chosen.height} for range $targetRange")
-                            return Pair(chosen, true)
-                        }
-                    }
-                }
-            } catch (e: Throwable) {
-                Log.w(TAG, "Error checking high speed video sizes: ${e.message}")
-            }
+    fun selectOptimalPreviewSize(characteristics: CameraCharacteristics): Size {
+        val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val outputSizes = map?.getOutputSizes(SurfaceTexture::class.java) ?: emptyArray()
+
+        if (outputSizes.isEmpty()) {
+            return Size(1280, 720)
         }
 
-        // Standard 60 FPS fallback: Pick 1080p or 720p size from SurfaceTexture output sizes (never 4K / max texture size)
-        val outputSizes = map.getOutputSizes(SurfaceTexture::class.java) ?: emptyArray()
+        // Filter reasonable sizes under or equal to 1920x1080
         val reasonableOutputs = outputSizes.filter { it.width <= 1920 && it.height <= 1080 }
-        val chosen = reasonableOutputs.firstOrNull { it.width == 1920 && it.height == 1080 }
+
+        // Prefer 1080p 16:9, then 720p 16:9, then highest reasonable, then first available
+        return reasonableOutputs.firstOrNull { it.width == 1920 && it.height == 1080 }
             ?: reasonableOutputs.firstOrNull { it.width == 1280 && it.height == 720 }
             ?: reasonableOutputs.maxByOrNull { it.width * it.height }
-            ?: Size(1920, 1080)
-        Log.i(TAG, "Using Standard 60 FPS Size: ${chosen.width}x${chosen.height}")
-        return Pair(chosen, false)
+            ?: outputSizes.first()
+    }
+
+    /**
+     * Backward & forward-compatible FPS size & capability checker.
+     */
+    fun selectOptimal60FpsSize(characteristics: CameraCharacteristics): Pair<Size, Boolean> {
+        val optimalSize = selectOptimalPreviewSize(characteristics)
+        val fpsRanges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: emptyArray()
+        val supports60 = fpsRanges.any { it.upper >= 60 }
+        return Pair(optimalSize, supports60)
+    }
+
+    /**
+     * Safely queries supported AE target FPS ranges to prevent IllegalArgumentException.
+     */
+    private fun selectOptimalFpsRange(characteristics: CameraCharacteristics): Range<Int> {
+        val fpsRanges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: emptyArray()
+
+        // 1. Prioritize strict [60, 60] if supported
+        fpsRanges.firstOrNull { it.lower == 60 && it.upper == 60 }?.let { return it }
+
+        // 2. Prioritize dynamic high framerate (e.g., [30, 60])
+        fpsRanges.firstOrNull { it.upper >= 60 && it.lower >= 30 }?.let { return it }
+
+        // 3. Fallback to standard smooth [30, 30]
+        fpsRanges.firstOrNull { it.lower == 30 && it.upper == 30 }?.let { return it }
+
+        // 4. Any range with upper >= 30
+        fpsRanges.firstOrNull { it.upper >= 30 }?.let { return it }
+
+        // 5. Default to first hardware reported range or standard [30, 30]
+        return fpsRanges.firstOrNull() ?: Range(30, 30)
+    }
+
+    /**
+     * Safely selects supported Autofocus Mode.
+     */
+    private fun selectOptimalAfMode(characteristics: CameraCharacteristics): Int {
+        val afModes = characteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
+        return when {
+            afModes.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE) -> CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+            afModes.contains(CaptureRequest.CONTROL_AF_MODE_AUTO) -> CaptureRequest.CONTROL_AF_MODE_AUTO
+            else -> CaptureRequest.CONTROL_AF_MODE_OFF
+        }
+    }
+
+    private val captureCallback = object : CameraCaptureSession.CaptureCallback() {
+        override fun onCaptureCompleted(
+            session: CameraCaptureSession,
+            request: CaptureRequest,
+            result: TotalCaptureResult
+        ) {
+            countFrameAndCalculateFps()
+            lowLightBoostEngine.onCaptureResult(result)
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -128,29 +164,53 @@ class HighSpeedCamera2Manager(private val context: Context) {
         textureView: TextureView,
         onSessionConfigured: ((Boolean, Size) -> Unit)? = null
     ) {
-        if (cameraDevice != null && captureSession != null && !isClosed) {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            Log.w(TAG, "Cannot open camera: CAMERA permission not granted.")
             return
         }
+
+        if (cameraDevice != null && captureSession != null && !isClosed) {
+            Log.i(TAG, "Camera session already active.")
+            return
+        }
+
         isClosed = false
         startBackgroundThread()
 
         try {
-            val cameraId = cameraManager.cameraIdList.firstOrNull { id ->
-                cameraManager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) ==
-                        CameraCharacteristics.LENS_FACING_BACK
-            } ?: cameraManager.cameraIdList.firstOrNull() ?: run {
-                Log.e(TAG, "No suitable camera found")
+            val cameraIdList = cameraManager.cameraIdList
+            if (cameraIdList.isEmpty()) {
+                Log.e(TAG, "No camera available on device")
                 return
             }
 
-            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
-            val (optimalSize, isHighSpeedSupported) = selectOptimal60FpsSize(characteristics)
+            // Find best camera: Back camera prioritized, then front camera, then first available
+            val cameraId = cameraIdList.firstOrNull { id ->
+                try {
+                    cameraManager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) ==
+                            CameraCharacteristics.LENS_FACING_BACK
+                } catch (_: Throwable) { false }
+            } ?: cameraIdList.firstOrNull { id ->
+                try {
+                    cameraManager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) ==
+                            CameraCharacteristics.LENS_FACING_FRONT
+                } catch (_: Throwable) { false }
+            } ?: cameraIdList.first()
 
-            // Step 2: Set buffer size to 1080p / 720p (never 4K / max texture size)
-            val texture = textureView.surfaceTexture ?: return
+            activeCameraId = cameraId
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            val optimalSize = selectOptimalPreviewSize(characteristics)
+
+            val texture = textureView.surfaceTexture
+            if (texture == null) {
+                Log.w(TAG, "TextureView surfaceTexture is null, waiting for surface availability.")
+                return
+            }
+
+            // Configure default buffer size matching hardware camera output
             texture.setDefaultBufferSize(optimalSize.width, optimalSize.height)
             val surface = Surface(texture)
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 try {
                     surface.setFrameRate(60.0f, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
                 } catch (_: Throwable) {}
@@ -165,31 +225,27 @@ class HighSpeedCamera2Manager(private val context: Context) {
                     }
                     cameraDevice = camera
                     openRetryCount = 0
-                    if (isHighSpeedSupported && !isHighSpeedForceDisabled) {
-                        tryConfigureHighSpeedSession(camera, surface, optimalSize, characteristics, onSessionConfigured)
-                    } else {
-                        configureStandard60FpsSession(camera, surface, optimalSize, characteristics, onSessionConfigured)
-                    }
+                    configureSession(camera, surface, optimalSize, characteristics, onSessionConfigured)
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
+                    Log.i(TAG, "Camera disconnected")
                     try { camera.close() } catch (_: Exception) {}
-                    cameraDevice = null
+                    if (cameraDevice == camera) {
+                        cameraDevice = null
+                    }
                 }
 
                 override fun onError(camera: CameraDevice, error: Int) {
                     Log.e(TAG, "Camera device error: $error (retry=$openRetryCount)")
                     try { camera.close() } catch (_: Exception) {}
-                    cameraDevice = null
-                    
-                    if (error == ERROR_CAMERA_DEVICE) {
-                        // Device error occurred, force standard mode on retry
-                        isHighSpeedForceDisabled = true
+                    if (cameraDevice == camera) {
+                        cameraDevice = null
                     }
 
-                    if (!isClosed && openRetryCount < 3) {
+                    if (!isClosed && openRetryCount < 2) {
                         openRetryCount++
-                        val backoffMs = 300L * openRetryCount
+                        val backoffMs = 250L * openRetryCount
                         backgroundHandler?.postDelayed({
                             if (!isClosed && textureView.isAvailable) {
                                 openCameraAndStartSession(textureView, onSessionConfigured)
@@ -205,9 +261,9 @@ class HighSpeedCamera2Manager(private val context: Context) {
     }
 
     /**
-     * Step 1: ConstrainedHighSpeedCaptureSession Pipeline
+     * Configures a robust, smooth CameraCaptureSession on the preview surface.
      */
-    private fun tryConfigureHighSpeedSession(
+    private fun configureSession(
         camera: CameraDevice,
         surface: Surface,
         size: Size,
@@ -217,157 +273,92 @@ class HighSpeedCamera2Manager(private val context: Context) {
         try {
             lowLightBoostEngine.checkHardwareSupport(characteristics)
 
-            // High speed capture requests typically use TEMPLATE_RECORD
-            val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-                addTarget(surface)
-
-                // Enforce 60 FPS range
-                set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(60, 60))
-
-                // Clamping AE / Night / HDR algorithm to prevent frame dropping to 30 FPS in dim light
-                set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
-                set(CaptureRequest.CONTROL_SCENE_MODE, CaptureRequest.CONTROL_SCENE_MODE_DISABLED)
-                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
-                
-                // High Performance Fast Processing Tuning (prevents camera HAL frame-drop / stutter)
-                set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
-                set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
-                set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_FAST)
-
-                // Apply Low Light Boost if enabled
-                lowLightBoostEngine.applyLowLightBoost(this, isLowLightBoostEnabled)
-            }
-            previewRequestBuilder = requestBuilder
-
-            camera.createConstrainedHighSpeedCaptureSession(
-                listOf(surface),
-                object : CameraCaptureSession.StateCallback() {
-                    override fun onConfigured(session: CameraCaptureSession) {
-                        captureSession = session
-                        isHighSpeedSessionActive = true
-                        try {
-                            val highSpeedSession = session as CameraConstrainedHighSpeedCaptureSession
-                            val highSpeedRequestList = highSpeedSession.createHighSpeedRequestList(requestBuilder.build())
-                            highSpeedSession.setRepeatingBurst(
-                                highSpeedRequestList,
-                                object : CameraCaptureSession.CaptureCallback() {
-                                    override fun onCaptureCompleted(
-                                        session: CameraCaptureSession,
-                                        request: CaptureRequest,
-                                        result: TotalCaptureResult
-                                    ) {
-                                        countFrameAndCalculateFps()
-                                        lowLightBoostEngine.onCaptureResult(result)
-                                    }
-                                },
-                                backgroundHandler
-                            )
-                            Log.i(TAG, "ConstrainedHighSpeedCaptureSession successfully configured at 60 FPS!")
-                            onSessionConfigured?.invoke(true, size)
-                        } catch (e: Throwable) {
-                            Log.w(TAG, "setRepeatingBurst high speed failed, falling back: ${e.message}")
-                            configureStandard60FpsSession(camera, surface, size, characteristics, onSessionConfigured)
-                        }
-                    }
-
-                    override fun onConfigureFailed(session: CameraCaptureSession) {
-                        Log.w(TAG, "High Speed Session config failed, falling back to Standard 60 FPS Session")
-                        configureStandard60FpsSession(camera, surface, size, characteristics, onSessionConfigured)
-                    }
-                },
-                backgroundHandler
-            )
-        } catch (e: Throwable) {
-            Log.w(TAG, "createConstrainedHighSpeedCaptureSession failed: ${e.message}, falling back")
-            configureStandard60FpsSession(camera, surface, size, characteristics, onSessionConfigured)
-        }
-    }
-
-    /**
-     * Standard 60 FPS Session with AE Scene Mode Off and Strict 60 FPS Target
-     */
-    private fun configureStandard60FpsSession(
-        camera: CameraDevice,
-        surface: Surface,
-        size: Size,
-        characteristics: CameraCharacteristics,
-        onSessionConfigured: ((Boolean, Size) -> Unit)?
-    ) {
-        try {
-            lowLightBoostEngine.checkHardwareSupport(characteristics)
-
-            val fpsRanges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
-            val selectedFpsRange = fpsRanges?.firstOrNull { it.lower == 60 && it.upper == 60 }
-                ?: fpsRanges?.firstOrNull { it.upper >= 60 && it.lower >= 30 }
-                ?: Range(60, 60)
+            val targetFpsRange = selectOptimalFpsRange(characteristics)
+            val targetAfMode = selectOptimalAfMode(characteristics)
 
             val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
                 addTarget(surface)
-                set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, selectedFpsRange)
                 set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
-                // Disable scene mode / night mode auto-stretching exposure
-                set(CaptureRequest.CONTROL_SCENE_MODE, CaptureRequest.CONTROL_SCENE_MODE_DISABLED)
-                set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
+                set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, targetFpsRange)
+                set(CaptureRequest.CONTROL_AF_MODE, targetAfMode)
 
-                // High Performance Fast Processing Tuning (prevents camera HAL frame-drop / stutter)
-                set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
-                set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
-                set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_FAST)
+                // Edge enhancement mode if supported
+                val edgeModes = characteristics.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)
+                if (edgeModes?.contains(CaptureRequest.EDGE_MODE_FAST) == true) {
+                    set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
+                }
+
+                // Noise reduction mode if supported
+                val noiseModes = characteristics.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES)
+                if (noiseModes?.contains(CaptureRequest.NOISE_REDUCTION_MODE_FAST) == true) {
+                    set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
+                }
 
                 // Apply Low Light Boost if enabled
                 lowLightBoostEngine.applyLowLightBoost(this, isLowLightBoostEnabled)
+
+                // Restore torch state if active
+                if (currentTorchState) {
+                    val hasFlash = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                    if (hasFlash) {
+                        set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
+                    }
+                }
             }
             previewRequestBuilder = requestBuilder
 
             val stateCallback = object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
+                    if (isClosed) {
+                        try { session.close() } catch (_: Exception) {}
+                        return
+                    }
                     captureSession = session
-                    isHighSpeedSessionActive = false
+                    isHighSpeedSessionActive = targetFpsRange.upper >= 60
+
                     try {
                         session.setRepeatingRequest(
                             requestBuilder.build(),
-                            object : CameraCaptureSession.CaptureCallback() {
-                                override fun onCaptureCompleted(
-                                    session: CameraCaptureSession,
-                                    request: CaptureRequest,
-                                    result: TotalCaptureResult
-                                ) {
-                                    countFrameAndCalculateFps()
-                                    lowLightBoostEngine.onCaptureResult(result)
-                                }
-                            },
+                            captureCallback,
                             backgroundHandler
                         )
-                        Log.i(TAG, "Standard 60 FPS Session configured with range $selectedFpsRange")
-                        onSessionConfigured?.invoke(false, size)
+                        Log.i(TAG, "CameraCaptureSession successfully started! FPS Range: $targetFpsRange, Size: ${size.width}x${size.height}")
+                        onSessionConfigured?.invoke(isHighSpeedSessionActive, size)
                     } catch (e: Throwable) {
                         Log.e(TAG, "setRepeatingRequest failed: ${e.message}")
                     }
                 }
 
                 override fun onConfigureFailed(session: CameraCaptureSession) {
-                    Log.e(TAG, "Standard CameraCaptureSession configure failed")
+                    Log.e(TAG, "CameraCaptureSession configuration failed")
                 }
             }
 
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-                val outputConfig = android.hardware.camera2.params.OutputConfiguration(surface)
-                val executor = java.util.concurrent.Executor { command ->
-                    backgroundHandler?.post(command) ?: command.run()
+            // API 28+ SessionConfiguration with safe fallback
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                try {
+                    val outputConfig = OutputConfiguration(surface)
+                    val executor = java.util.concurrent.Executor { command ->
+                        backgroundHandler?.post(command) ?: command.run()
+                    }
+                    val sessionConfig = SessionConfiguration(
+                        SessionConfiguration.SESSION_REGULAR,
+                        listOf(outputConfig),
+                        executor,
+                        stateCallback
+                    )
+                    camera.createCaptureSession(sessionConfig)
+                    return
+                } catch (t: Throwable) {
+                    Log.w(TAG, "SessionConfiguration failed, falling back to legacy createCaptureSession: ${t.message}")
                 }
-                val sessionConfig = android.hardware.camera2.params.SessionConfiguration(
-                    android.hardware.camera2.params.SessionConfiguration.SESSION_REGULAR,
-                    listOf(outputConfig),
-                    executor,
-                    stateCallback
-                )
-                camera.createCaptureSession(sessionConfig)
-            } else {
-                @Suppress("DEPRECATION")
-                camera.createCaptureSession(listOf(surface), stateCallback, backgroundHandler)
             }
+
+            @Suppress("DEPRECATION")
+            camera.createCaptureSession(listOf(surface), stateCallback, backgroundHandler)
+
         } catch (e: Throwable) {
-            Log.e(TAG, "configureStandard60FpsSession failed: ${e.message}", e)
+            Log.e(TAG, "configureSession failed: ${e.message}", e)
         }
     }
 
@@ -397,12 +388,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
             } else {
                 builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
             }
-            if (isHighSpeedSessionActive && session is CameraConstrainedHighSpeedCaptureSession) {
-                val list = session.createHighSpeedRequestList(builder.build())
-                session.setRepeatingBurst(list, null, backgroundHandler)
-            } else {
-                session.setRepeatingRequest(builder.build(), null, backgroundHandler)
-            }
+            session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
         } catch (e: Throwable) {
             Log.w(TAG, "Failed to toggle torch: ${e.message}")
         }
@@ -419,6 +405,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
             cameraDevice = null
             previewSurface?.release()
             previewSurface = null
+            previewRequestBuilder = null
         } catch (e: Throwable) {
             Log.w(TAG, "Error closing camera: ${e.message}")
         } finally {

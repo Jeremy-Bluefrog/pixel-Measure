@@ -75,6 +75,7 @@ class VulkanArSceneView(
             } catch (_: Throwable) {}
         }
         session?.setDisplayGeometry(0, width, height)
+        viewModel?.updateDisplayGeometry(0, width, height)
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {

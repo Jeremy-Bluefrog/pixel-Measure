@@ -7,10 +7,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
     <uses-feature android:name="android.hardware.camera.flash" android:required="false" />
-    <!-- Pure Vulkan 1.1+ Hardware Architecture Requirement (Zero OpenGL ES) -->
-    <uses-feature android:name="android.hardware.vulkan.version" android:version="0x401000" android:required="true" />
-    <uses-feature android:name="android.hardware.vulkan.level" android:version="1" android:required="true" />
+    <!-- Vulkan Hardware Feature Optional (permits execution on all devices and emulators) -->
+    <uses-feature android:name="android.hardware.vulkan.version" android:version="0x401000" android:required="false" />
+    <uses-feature android:name="android.hardware.vulkan.level" android:version="1" android:required="false" />
 
     <application
         android:allowBackup="true"

@@ -42,8 +42,11 @@ object VulkanMatrix4 {
         m[offset + 14] = 2.0f * zFar * zNear * rangeReciprocal
     }
 
+    private val scratchR = ThreadLocal.withInitial { FloatArray(16) }
+    private val scratchTemp = ThreadLocal.withInitial { FloatArray(16) }
+
     /**
-     * Rotates matrix in-place along specified axis (angle in degrees).
+     * Rotates matrix in-place along specified axis (angle in degrees) with zero heap allocations.
      */
     fun rotate(
         m: FloatArray,
@@ -65,7 +68,7 @@ object VulkanMatrix4 {
         val ny = y * invLen
         val nz = z * invLen
 
-        val r = FloatArray(16)
+        val r = scratchR.get()
         r[0] = nx * nx * nc + c
         r[1] = ny * nx * nc + nz * s
         r[2] = nz * nx * nc - ny * s
@@ -86,7 +89,7 @@ object VulkanMatrix4 {
         r[14] = 0f
         r[15] = 1f
 
-        val temp = FloatArray(16)
+        val temp = scratchTemp.get()
         multiplyMM(temp, 0, m, offset, r, 0)
         System.arraycopy(temp, 0, m, offset, 16)
     }

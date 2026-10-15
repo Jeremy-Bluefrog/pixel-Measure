@@ -406,6 +406,14 @@ object ArMath {
     }
 
     /**
+     * Checks if a 4x4 matrix is non-null, has at least 16 elements, and is not all zeroes.
+     */
+    fun isMatrixValid(m: FloatArray?): Boolean {
+        if (m == null || m.size < 16) return false
+        return !(m[0] == 0f && m[5] == 0f && m[10] == 0f && m[15] == 0f)
+    }
+
+    /**
      * Project raw 3D world coordinates (X, Y, Z) to 2D screen pixel coordinates without object allocation.
      * Writes into outXY[0] and outXY[1]. Returns true if successfully projected in front of camera, false otherwise.
      */
@@ -420,6 +428,11 @@ object ArMath {
         outXY: FloatArray
     ): Boolean {
         if (viewMatrix.size < 16 || projectionMatrix.size < 16 || screenWidth <= 0 || screenHeight <= 0 || outXY.size < 2) {
+            return false
+        }
+
+        // Fast reject uninitialized / all-zero matrices
+        if (!isMatrixValid(viewMatrix) || !isMatrixValid(projectionMatrix)) {
             return false
         }
 

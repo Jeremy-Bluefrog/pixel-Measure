@@ -1054,6 +1054,10 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         // 2. Real-time live targeting preview at screen center (no anchor creation to avoid GC pauses)
         val centerHit = if (!isTap) hitResult else engine.performHitTest(frame, displayWidth / 2f, displayHeight / 2f, createAnchor = false)
 
+        // 3. Synchronously extract frame data (view/projection matrices, detected planes, light, stability)
+        val frameData = engine.extractFrameData(frame, centerHit)
+        onArFrameUpdated(frameData)
+
         if (centerHit != null) {
             lastValidHitTimestampMs = System.currentTimeMillis()
             val pose = centerHit.pose
@@ -1313,9 +1317,11 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         }
 
         // Update active anchor positions to eliminate world drift with threshold to prevent SnapshotStateList churning
-        if (capturedPoints.isNotEmpty() && data.trackingState == TrackingState.TRACKING) {
-            for (i in capturedPoints.indices) {
-                val pt = capturedPoints[i]
+        val snapshot = capturedPointsSnapshotCache
+        if (snapshot.isNotEmpty() && data.trackingState == TrackingState.TRACKING) {
+            val driftUpdates = mutableListOf<Pair<Int, Point3D>>()
+            for (i in snapshot.indices) {
+                val pt = snapshot[i]
                 val anchor = pt.anchor
                 if (anchor != null && anchor.trackingState == TrackingState.TRACKING) {
                     val pose = anchor.pose
@@ -1329,8 +1335,20 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                         val dy = abs(newY - pt.y)
                         val dz = abs(newZ - pt.z)
                         if (dx > 0.015 || dy > 0.015 || dz > 0.015) {
-                            capturedPoints[i] = candidate
+                            driftUpdates.add(Pair(i, candidate))
                         }
+                    }
+                }
+            }
+            if (driftUpdates.isNotEmpty()) {
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    synchronized(pointsLock) {
+                        for ((idx, cand) in driftUpdates) {
+                            if (idx in capturedPoints.indices) {
+                                capturedPoints[idx] = cand
+                            }
+                        }
+                        updateCapturedPointsSnapshotCache()
                     }
                 }
             }
@@ -1365,12 +1383,12 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             _projectionMatrix.value = fallbackProjMatrixBuffer.clone()
         }
 
-        // Build View Matrix from device rotation using pure VulkanMatrix4
+        // Build View Matrix from device rotation using pure VulkanMatrix4 (Inverse camera rotation R^-1)
         val telem = sensorTelemetry.value
         com.example.logic.vulkan.VulkanMatrix4.setIdentity(fallbackViewMatrixBuffer, 0)
+        com.example.logic.vulkan.VulkanMatrix4.rotate(fallbackViewMatrixBuffer, 0, -telem.rollDeg, 0f, 0f, 1f)
         com.example.logic.vulkan.VulkanMatrix4.rotate(fallbackViewMatrixBuffer, 0, telem.pitchDeg, 1f, 0f, 0f)
-        com.example.logic.vulkan.VulkanMatrix4.rotate(fallbackViewMatrixBuffer, 0, telem.rollDeg, 0f, 0f, 1f)
-        com.example.logic.vulkan.VulkanMatrix4.rotate(fallbackViewMatrixBuffer, 0, telem.azimuthDeg, 0f, 1f, 0f)
+        com.example.logic.vulkan.VulkanMatrix4.rotate(fallbackViewMatrixBuffer, 0, -telem.azimuthDeg, 0f, 1f, 0f)
         _viewMatrix.value = fallbackViewMatrixBuffer.clone()
 
         // Raycast depth estimation: pitch down creates distance to ground
@@ -1389,6 +1407,11 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         val rawTarget = Point3D(forwardX, forwardY, forwardZ, isArPrecision = true)
         val smoothed = ArMath.filterJitterEMA(_liveTargetPoint.value, rawTarget)
         _liveTargetPoint.value = smoothed
+
+        if (displayWidth > 0 && displayHeight > 0) {
+            _liveTargetScreenPos.value = androidx.compose.ui.geometry.Offset(displayWidth / 2f, displayHeight / 2f)
+            _isMeasurementAvailable.value = true
+        }
 
         if (capturedPoints.isNotEmpty()) {
             val dist = ArMath.distance(capturedPoints.last(), smoothed)
