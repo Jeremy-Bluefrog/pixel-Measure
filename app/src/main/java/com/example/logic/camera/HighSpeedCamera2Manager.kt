@@ -47,6 +47,11 @@ class HighSpeedCamera2Manager(private val context: Context) {
     private var isClosed = false
     private var openRetryCount = 0
     private var activeCameraId: String? = null
+    @Volatile
+    private var isOpening = false
+    private var isFlashSupported = false
+    var previewSize: Size? = null
+        private set
 
     val lowLightBoostEngine = LowLightBoostEngine(context)
     private var isLowLightBoostEnabled = true
@@ -169,18 +174,35 @@ class HighSpeedCamera2Manager(private val context: Context) {
             return
         }
 
+        if (isOpening) {
+            Log.i(TAG, "Camera is currently opening, ignoring duplicate request.")
+            return
+        }
+
         if (cameraDevice != null && captureSession != null && !isClosed) {
             Log.i(TAG, "Camera session already active.")
             return
         }
 
+        // If cameraDevice was opened but session is null or stale, safely close it first
+        if (cameraDevice != null) {
+            try {
+                captureSession?.close()
+                captureSession = null
+                cameraDevice?.close()
+                cameraDevice = null
+            } catch (_: Exception) {}
+        }
+
         isClosed = false
+        isOpening = true
         startBackgroundThread()
 
         try {
             val cameraIdList = cameraManager.cameraIdList
             if (cameraIdList.isEmpty()) {
                 Log.e(TAG, "No camera available on device")
+                isOpening = false
                 return
             }
 
@@ -199,16 +221,20 @@ class HighSpeedCamera2Manager(private val context: Context) {
 
             activeCameraId = cameraId
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            isFlashSupported = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
             val optimalSize = selectOptimalPreviewSize(characteristics)
+            previewSize = optimalSize
 
             val texture = textureView.surfaceTexture
             if (texture == null) {
                 Log.w(TAG, "TextureView surfaceTexture is null, waiting for surface availability.")
+                isOpening = false
                 return
             }
 
             // Configure default buffer size matching hardware camera output
             texture.setDefaultBufferSize(optimalSize.width, optimalSize.height)
+            previewSurface?.release()
             val surface = Surface(texture)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 try {
@@ -219,6 +245,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
 
             cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
+                    isOpening = false
                     if (isClosed) {
                         try { camera.close() } catch (_: Exception) {}
                         return
@@ -229,6 +256,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
+                    isOpening = false
                     Log.i(TAG, "Camera disconnected")
                     try { camera.close() } catch (_: Exception) {}
                     if (cameraDevice == camera) {
@@ -237,6 +265,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
                 }
 
                 override fun onError(camera: CameraDevice, error: Int) {
+                    isOpening = false
                     Log.e(TAG, "Camera device error: $error (retry=$openRetryCount)")
                     try { camera.close() } catch (_: Exception) {}
                     if (cameraDevice == camera) {
@@ -256,6 +285,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
             }, backgroundHandler)
 
         } catch (e: Throwable) {
+            isOpening = false
             Log.e(TAG, "Failed to open camera: ${e.message}", e)
         }
     }
@@ -270,6 +300,13 @@ class HighSpeedCamera2Manager(private val context: Context) {
         characteristics: CameraCharacteristics,
         onSessionConfigured: ((Boolean, Size) -> Unit)?
     ) {
+        if (!surface.isValid) {
+            Log.w(TAG, "Surface is invalid, aborting configureSession.")
+            return
+        }
+        if (isClosed || cameraDevice == null) {
+            return
+        }
         try {
             lowLightBoostEngine.checkHardwareSupport(characteristics)
 
@@ -298,11 +335,8 @@ class HighSpeedCamera2Manager(private val context: Context) {
                 lowLightBoostEngine.applyLowLightBoost(this, isLowLightBoostEnabled)
 
                 // Restore torch state if active
-                if (currentTorchState) {
-                    val hasFlash = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
-                    if (hasFlash) {
-                        set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
-                    }
+                if (currentTorchState && isFlashSupported) {
+                    set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
                 }
             }
             previewRequestBuilder = requestBuilder
@@ -331,6 +365,11 @@ class HighSpeedCamera2Manager(private val context: Context) {
 
                 override fun onConfigureFailed(session: CameraCaptureSession) {
                     Log.e(TAG, "CameraCaptureSession configuration failed")
+                    try { session.close() } catch (_: Exception) {}
+                    if (captureSession == session) {
+                        captureSession = null
+                    }
+                    onSessionConfigured?.invoke(false, size)
                 }
             }
 
@@ -362,6 +401,50 @@ class HighSpeedCamera2Manager(private val context: Context) {
         }
     }
 
+    /**
+     * Configures the transformation matrix on TextureView to prevent distortion
+     * and stretch, adapting preview aspect ratio to match the camera sensor.
+     */
+    fun configureTransform(textureView: TextureView, viewWidth: Int, viewHeight: Int) {
+        val size = previewSize ?: return
+        if (viewWidth == 0 || viewHeight == 0) return
+
+        val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            context.display
+        } else {
+            @Suppress("DEPRECATION")
+            (context.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager)?.defaultDisplay
+        }
+        val rotation = display?.rotation ?: Surface.ROTATION_0
+
+        val matrix = android.graphics.Matrix()
+        val viewRect = android.graphics.RectF(0f, 0f, viewWidth.toFloat(), viewHeight.toFloat())
+        val bufferRect = android.graphics.RectF(0f, 0f, size.height.toFloat(), size.width.toFloat())
+        val centerX = viewRect.centerX()
+        val centerY = viewRect.centerY()
+
+        if (rotation == Surface.ROTATION_90 || rotation == Surface.ROTATION_270) {
+            bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY())
+            matrix.setRectToRect(viewRect, bufferRect, android.graphics.Matrix.ScaleToFit.FILL)
+            val scale = maxOf(
+                viewHeight.toFloat() / size.height,
+                viewWidth.toFloat() / size.width
+            )
+            matrix.postScale(scale, scale, centerX, centerY)
+            matrix.postRotate((90f * (rotation - 2)), centerX, centerY)
+        } else if (rotation == Surface.ROTATION_180) {
+            matrix.postRotate(180f, centerX, centerY)
+        } else {
+            // ROTATION_0 (Portrait)
+            // Center crop fill so that camera preview is never stretched or distorted
+            val bufferW = size.height.toFloat()
+            val bufferH = size.width.toFloat()
+            val scale = maxOf(viewWidth.toFloat() / bufferW, viewHeight.toFloat() / bufferH)
+            matrix.postScale((bufferW * scale) / viewWidth, (bufferH * scale) / viewHeight, centerX, centerY)
+        }
+        textureView.setTransform(matrix)
+    }
+
     private fun countFrameAndCalculateFps() {
         val now = System.nanoTime()
         frameCounter++
@@ -380,10 +463,14 @@ class HighSpeedCamera2Manager(private val context: Context) {
 
     fun toggleTorch(enable: Boolean) {
         currentTorchState = enable
+        if (enable && !isFlashSupported) {
+            Log.w(TAG, "Hardware flash is not supported on this camera device.")
+            return
+        }
         val session = captureSession ?: return
         val builder = previewRequestBuilder ?: return
         try {
-            if (enable) {
+            if (enable && isFlashSupported) {
                 builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
             } else {
                 builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
@@ -396,6 +483,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
 
     fun closeCamera() {
         isClosed = true
+        isOpening = false
         openRetryCount = 0
         try {
             backgroundHandler?.removeCallbacksAndMessages(null)

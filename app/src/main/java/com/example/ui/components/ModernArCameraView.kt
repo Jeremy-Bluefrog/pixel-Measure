@@ -174,6 +174,9 @@ fun ModernArCameraView(
                                 viewModel.setHighSpeedCamera2Manager(camera2Manager)
                                 camera2Manager.openCameraAndStartSession(tv) { isHighSpeed, size ->
                                     android.util.Log.i("CameraView", "Session resumed. HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
+                                    tv.post {
+                                        camera2Manager.configureTransform(tv, tv.width, tv.height)
+                                    }
                                 }
                             }
                         }
@@ -405,13 +408,21 @@ fun ModernArCameraView(
 
                     textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                         override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
-                            viewModel.updateDisplayGeometry(0, width, height)
+                            val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) ctx.display else (ctx.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager)?.defaultDisplay
+                            val rot = display?.rotation ?: android.view.Surface.ROTATION_0
+                            viewModel.updateDisplayGeometry(rot, width, height)
                             camera2Manager.openCameraAndStartSession(textureView) { isHighSpeed, size ->
                                 android.util.Log.i("CameraView", "Session ready. HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
+                                textureView.post {
+                                    camera2Manager.configureTransform(textureView, width, height)
+                                }
                             }
                         }
                         override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
-                            viewModel.updateDisplayGeometry(0, width, height)
+                            val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) ctx.display else (ctx.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager)?.defaultDisplay
+                            val rot = display?.rotation ?: android.view.Surface.ROTATION_0
+                            viewModel.updateDisplayGeometry(rot, width, height)
+                            camera2Manager.configureTransform(textureView, width, height)
                         }
                         override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
                             camera2Manager.closeCamera()
@@ -421,9 +432,14 @@ fun ModernArCameraView(
                     }
 
                     if (textureView.isAvailable) {
-                        viewModel.updateDisplayGeometry(0, textureView.width, textureView.height)
+                        val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) ctx.display else (ctx.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager)?.defaultDisplay
+                        val rot = display?.rotation ?: android.view.Surface.ROTATION_0
+                        viewModel.updateDisplayGeometry(rot, textureView.width, textureView.height)
                         camera2Manager.openCameraAndStartSession(textureView) { isHighSpeed, size ->
                             android.util.Log.i("CameraView", "Session ready (immediate). HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
+                            textureView.post {
+                                camera2Manager.configureTransform(textureView, textureView.width, textureView.height)
+                            }
                         }
                     }
 

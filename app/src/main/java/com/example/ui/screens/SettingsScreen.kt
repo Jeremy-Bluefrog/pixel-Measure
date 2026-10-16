@@ -574,10 +574,10 @@ fun SettingsScreen(
                             Spacer(modifier = Modifier.height(8.dp))
 
                             val ratios = listOf(
-                                "4_3" to "4:3",
+                                "FULL" to "全螢幕",
                                 "16_9" to "16:9",
-                                "1_1" to "1:1",
-                                "FULL" to "全螢幕"
+                                "4_3" to "4:3",
+                                "1_1" to "1:1"
                             )
 
                             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
@@ -603,6 +603,12 @@ fun SettingsScreen(
                                     )
                                 }
                             }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = if (cameraAspectRatio == "FULL") "✓ 目前為全螢幕無遮罩模式，視野完整填滿螢幕" else "• 目前啟用 $cameraAspectRatio 取景構圖遮罩（上下或兩側呈現半透明黑邊，可切換為「全螢幕」消除）",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
 
                             HorizontalDivider(
                                 modifier = Modifier.padding(vertical = 12.dp),

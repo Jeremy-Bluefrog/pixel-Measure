@@ -219,6 +219,76 @@ fun ModernArTopBar(
                         }
                     }
                 }
+
+                // Aspect Ratio Selector Pill
+                var showRatioMenu by remember { mutableStateOf(false) }
+                val ratioLabel = when (cameraAspectRatio) {
+                    "16_9" -> "16:9"
+                    "4_3" -> "4:3"
+                    "1_1" -> "1:1"
+                    else -> "全螢幕"
+                }
+
+                Box {
+                    Surface(
+                        onClick = { showRatioMenu = true },
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f),
+                        contentColor = if (cameraAspectRatio == "FULL") colorPrimary else colorOnSurface,
+                        border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f)),
+                        shadowElevation = 2.dp,
+                        modifier = Modifier.testTag("ratio_selector_button")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            Icon(
+                                Icons.Rounded.AspectRatio,
+                                contentDescription = "畫面比例",
+                                tint = if (cameraAspectRatio == "FULL") colorPrimary else colorOnSurfaceVariant,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Text(
+                                text = ratioLabel,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (cameraAspectRatio == "FULL") colorPrimary else colorOnSurface
+                            )
+                        }
+                    }
+
+                    DropdownMenu(
+                        expanded = showRatioMenu,
+                        onDismissRequest = { showRatioMenu = false },
+                        modifier = Modifier.background(colorSurfaceContainer)
+                    ) {
+                        listOf(
+                            "FULL" to "全螢幕 (無遮罩)",
+                            "16_9" to "16:9 寬螢幕",
+                            "4_3" to "4:3 標準構圖",
+                            "1_1" to "1:1 正方形"
+                        ).forEach { (key, label) ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        label,
+                                        fontWeight = if (cameraAspectRatio == key) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (cameraAspectRatio == key) colorPrimary else colorOnSurface
+                                    )
+                                },
+                                onClick = {
+                                    viewModel.setCameraAspectRatio(key)
+                                    showRatioMenu = false
+                                },
+                                leadingIcon = if (cameraAspectRatio == key) {
+                                    { Icon(Icons.Rounded.Check, null, tint = colorPrimary) }
+                                } else null
+                            )
+                        }
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.weight(1f))

@@ -323,6 +323,10 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     private val _toastMessage = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val toastMessage = _toastMessage.asSharedFlow()
 
+    fun showToast(message: String) {
+        _toastMessage.tryEmit(message)
+    }
+
     // Haptic feedback channel with HapticType
     private val _hapticEvent = MutableSharedFlow<HapticType>(extraBufferCapacity = 1)
     val hapticEvent = _hapticEvent.asSharedFlow()
@@ -556,21 +560,54 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         _toastMessage.tryEmit("已變更 AR 操作按鈕大小：$label")
     }
 
-    // Camera Aspect Ratio (4:3, 16:9, 1:1, FULL)
-    private val _cameraAspectRatio = MutableStateFlow(prefs.getString("camera_aspect_ratio", "4_3") ?: "4_3")
+    // Camera Aspect Ratio (4:3, 16:9, 1:1, FULL) - Default to FULL so no mask covers screen
+    private val _cameraAspectRatio = MutableStateFlow(
+        if (prefs.getBoolean("camera_aspect_ratio_user_selected", false)) {
+            prefs.getString("camera_aspect_ratio", "FULL") ?: "FULL"
+        } else {
+            "FULL"
+        }
+    )
     val cameraAspectRatio: StateFlow<String> = _cameraAspectRatio.asStateFlow()
 
     fun setCameraAspectRatio(ratio: String) {
         _cameraAspectRatio.value = ratio
-        prefs.edit().putString("camera_aspect_ratio", ratio).apply()
+        prefs.edit()
+            .putString("camera_aspect_ratio", ratio)
+            .putBoolean("camera_aspect_ratio_user_selected", true)
+            .apply()
         triggerHapticFeedback()
         val label = when (ratio) {
             "16_9" -> "16:9 寬螢幕"
             "1_1" -> "1:1 正方形"
-            "FULL" -> "全螢幕 (Full)"
-            else -> "4:3 標準"
+            "4_3" -> "4:3 標準"
+            else -> "全螢幕 (無遮罩)"
         }
-        _toastMessage.tryEmit("已切換相片/影片構圖比例：$label")
+        _toastMessage.tryEmit("已切換相機畫面比例：$label")
+    }
+
+    fun cycleCameraAspectRatio() {
+        val next = when (_cameraAspectRatio.value) {
+            "FULL" -> "16_9"
+            "16_9" -> "4_3"
+            "4_3" -> "1_1"
+            else -> "FULL"
+        }
+        setCameraAspectRatio(next)
+    }
+
+    // Camera Capture Mode: Photo (false) vs Video (true)
+    private val _isCameraVideoMode = MutableStateFlow(false)
+    val isCameraVideoMode: StateFlow<Boolean> = _isCameraVideoMode.asStateFlow()
+
+    fun setCameraVideoMode(isVideo: Boolean) {
+        _isCameraVideoMode.value = isVideo
+        triggerHapticFeedback()
+        _toastMessage.tryEmit(if (isVideo) "已切換至【錄影模式】(點擊快門按鈕開始錄影)" else "已切換至【拍照模式】")
+    }
+
+    fun toggleCameraVideoMode() {
+        setCameraVideoMode(!_isCameraVideoMode.value)
     }
 
     // Display P3 Wide Color Gamut Profile
@@ -1440,7 +1477,43 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         if (modernArEngine.session != null) {
             pendingHitTestQueue.set(Pair(x, y))
         } else {
-            val target = _liveTargetPoint.value ?: Point3D(0.0, 0.0, -1.2, isArPrecision = true)
+            val telem = sensorTelemetry.value
+            val pitchRad = Math.toRadians(telem.pitchDeg.toDouble().coerceIn(-85.0, 85.0))
+            val estDist = if (pitchRad < -0.1) {
+                (1.35 / kotlin.math.sin(-pitchRad)).coerceIn(0.4, 10.0)
+            } else {
+                1.5
+            }
+            val azimuthRad = Math.toRadians(telem.azimuthDeg.toDouble())
+
+            val fwdX = sin(azimuthRad) * cos(pitchRad)
+            val fwdY = -sin(pitchRad)
+            val fwdZ = -cos(azimuthRad) * cos(pitchRad)
+
+            val rightX = cos(azimuthRad)
+            val rightY = 0.0
+            val rightZ = sin(azimuthRad)
+
+            val upX = -sin(pitchRad) * sin(azimuthRad)
+            val upY = cos(pitchRad)
+            val upZ = sin(pitchRad) * cos(azimuthRad)
+
+            val w = displayWidth.toFloat().coerceAtLeast(1f)
+            val h = displayHeight.toFloat().coerceAtLeast(1f)
+            val ndcX = (2.0f * x) / w - 1.0f
+            val ndcY = 1.0f - (2.0f * y) / h
+
+            val tanFov = tan(Math.toRadians(30.0))
+            val aspect = w / h
+
+            val offsetX = ndcX * tanFov * aspect * estDist
+            val offsetY = ndcY * tanFov * estDist
+
+            val targetX = fwdX * estDist + rightX * offsetX + upX * offsetY
+            val targetY = fwdY * estDist + rightY * offsetX + upY * offsetY
+            val targetZ = fwdZ * estDist + rightZ * offsetX + upZ * offsetY
+
+            val target = Point3D(targetX, targetY, targetZ, isArPrecision = true)
             val isActivelyDrawingLine = capturedPoints.size % 2 == 1
             val nextIndex = capturedPoints.size
             val lineNum = (nextIndex / 2) + 1

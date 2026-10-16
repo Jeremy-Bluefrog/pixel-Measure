@@ -249,16 +249,53 @@ fun ModernArBottomDeck(
                 }
             }
 
-            // Right Slot: Camera Shutter Button
-            Box(
+            // Right Slot: Camera Shutter & Mode Switch
+            val isCameraVideoMode by viewModel.isCameraVideoMode.collectAsState()
+
+            Column(
                 modifier = Modifier
                     .weight(1f)
                     .padding(end = 4.dp),
-                contentAlignment = Alignment.CenterEnd
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
+                // Photo vs Video Mode Selector Pill
+                Surface(
+                    onClick = {
+                        if (!isRecordingVideo) {
+                            viewModel.toggleCameraVideoMode()
+                        }
+                    },
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.70f else 0.90f),
+                    border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                    shadowElevation = 2.dp,
+                    modifier = Modifier.testTag("photo_video_mode_toggle")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isCameraVideoMode) Icons.Rounded.Videocam else Icons.Rounded.PhotoCamera,
+                            contentDescription = if (isCameraVideoMode) "錄影模式" else "拍照模式",
+                            tint = if (isCameraVideoMode) Color(0xFFE53935) else colorPrimary,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Text(
+                            text = if (isCameraVideoMode) "錄影" else "拍照",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isCameraVideoMode) Color(0xFFE53935) else colorPrimary
+                        )
+                    }
+                }
+
                 PixelShutterButton(
                     size = (50 * uiButtonScale).dp,
                     isRecording = isRecordingVideo,
+                    innerCircleColor = if (isCameraVideoMode) Color(0xFFE53935) else Color.White,
                     onClick = {
                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                         if (isRecordingVideo) {
@@ -268,8 +305,36 @@ fun ModernArBottomDeck(
                                         imagePath = thumbPath ?: videoPath,
                                         customNotes = "AR 測量錄影 (${durationSec}秒): $videoPath"
                                     )
+                                    viewModel.showToast("AR 測量錄影已儲存 (${durationSec}秒)")
+                                } else {
+                                    viewModel.showToast("錄影未完成或時間過短")
                                 }
                             }
+                        } else if (isCameraVideoMode) {
+                            val currentTv = textureViewRef()
+                            val currentGl = modernArGlViewRef()
+                            videoRecorder.startRecording(
+                                view = localView,
+                                cameraBitmapProvider = {
+                                    if (currentTv != null && currentTv.isAvailable) {
+                                        try { currentTv.bitmap } catch (_: Throwable) { null }
+                                    } else if (currentGl != null) {
+                                        var glBmp: Bitmap? = null
+                                        val latch = java.util.concurrent.CountDownLatch(1)
+                                        currentGl.captureBitmap { bmp ->
+                                            glBmp = bmp
+                                            latch.countDown()
+                                        }
+                                        latch.await(80, java.util.concurrent.TimeUnit.MILLISECONDS)
+                                        glBmp
+                                    } else {
+                                        null
+                                    }
+                                },
+                                onStarted = {
+                                    viewModel.showToast("開始 AR 測量錄影 (點擊快門按鈕即可停止)")
+                                }
+                            )
                         } else {
                             coroutineScope.launch {
                                 try {
@@ -340,6 +405,9 @@ fun ModernArBottomDeck(
                                     } else {
                                         null
                                     }
+                                },
+                                onStarted = {
+                                    viewModel.showToast("開始 AR 測量錄影 (點擊快門按鈕即可停止)")
                                 }
                             )
                         }
