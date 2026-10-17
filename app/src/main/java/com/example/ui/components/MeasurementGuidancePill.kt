@@ -53,26 +53,34 @@ fun MeasurementGuidancePill(
     val liveDistanceMeters by viewModel.liveDistanceMeters.collectAsState()
     val selectedUnit by viewModel.selectedUnit.collectAsState()
 
-    // Pulse animation for active scanning radar or magnetic aura
+    // Pulse & radar animations strictly active when required (lazy animation state)
     val infiniteTransition = rememberInfiniteTransition(label = "GuidancePillPulse")
-    val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 0.95f,
-        targetValue = 1.05f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1000, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulseScale"
-    )
-    val radarRotation by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(2800, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "radarRotation"
-    )
+    val pulseScale by if (isSnapped) {
+        infiniteTransition.animateFloat(
+            initialValue = 0.95f,
+            targetValue = 1.05f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1000, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "pulseScale"
+        )
+    } else {
+        remember { mutableFloatStateOf(1.0f) }
+    }
+    val radarRotation by if (!hasCapturedPoints && planesCount == 0) {
+        infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(2800, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "radarRotation"
+        )
+    } else {
+        remember { mutableFloatStateOf(0f) }
+    }
 
     // Compute current guidance step state
     val (icon: ImageVector, title: String, subtitle: String, accentColor: Color) = remember(
@@ -165,11 +173,14 @@ fun MeasurementGuidancePill(
                     .size(34.dp)
                     .clip(CircleShape)
                     .background(accentColor.copy(alpha = 0.20f))
-                    .then(
-                        if (icon == Icons.Rounded.Radar) Modifier.rotate(radarRotation)
-                        else if (isSnapped) Modifier.scale(pulseScale)
-                        else Modifier
-                    )
+                    .graphicsLayer {
+                        if (icon == Icons.Rounded.Radar) {
+                            rotationZ = radarRotation
+                        } else if (isSnapped) {
+                            scaleX = pulseScale
+                            scaleY = pulseScale
+                        }
+                    }
             ) {
                 Icon(
                     imageVector = icon,

@@ -36,14 +36,16 @@ object VulkanMatrix4 {
             m[offset + i] = 0f
         }
         m[offset + 0] = f / aspect
-        m[offset + 5] = f
-        m[offset + 10] = (zFar + zNear) * rangeReciprocal
+        // Invert Y axis for Vulkan NDC coordinate system where Y points down
+        m[offset + 5] = -f
+        // Vulkan NDC depth range is [0, 1] instead of OpenGL [-1, 1]
+        m[offset + 10] = zFar * rangeReciprocal
         m[offset + 11] = -1.0f
-        m[offset + 14] = 2.0f * zFar * zNear * rangeReciprocal
+        m[offset + 14] = zNear * zFar * rangeReciprocal
     }
 
-    private val scratchR = ThreadLocal.withInitial { FloatArray(16) }
-    private val scratchTemp = ThreadLocal.withInitial { FloatArray(16) }
+    private val scratchR: ThreadLocal<FloatArray> = ThreadLocal.withInitial { FloatArray(16) }
+    private val scratchTemp: ThreadLocal<FloatArray> = ThreadLocal.withInitial { FloatArray(16) }
 
     /**
      * Rotates matrix in-place along specified axis (angle in degrees) with zero heap allocations.

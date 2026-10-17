@@ -1393,18 +1393,18 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     init {
-        // Start Fallback Sensor-Driven Spatial Engine only when ARCore is unsupported / no active session
-        viewModelScope.launch {
-            while (true) {
-                kotlinx.coroutines.delay(40) // ~25 FPS fallback updater
+        // High-precision reactive Sensor-Driven Spatial Engine:
+        // Synchronously updates on every sensor telemetry emission (0ms lag, matching 60-120 FPS high refresh displays)
+        viewModelScope.launch(Dispatchers.Default) {
+            sensorTelemetry.collect { telem ->
                 if (modernArEngine.session == null) {
-                    updateFallbackSpatialFrame()
+                    updateFallbackSpatialFrame(telem)
                 }
             }
         }
     }
 
-    private fun updateFallbackSpatialFrame() {
+    private fun updateFallbackSpatialFrame(telem: SensorCorrectionTelemetry = sensorTelemetry.value) {
         if (_arTrackingState.value != TrackingState.TRACKING) {
             _arTrackingState.value = TrackingState.TRACKING
         }
@@ -1421,7 +1421,6 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         }
 
         // Build View Matrix from device rotation using pure VulkanMatrix4 (Inverse camera rotation R^-1)
-        val telem = sensorTelemetry.value
         com.example.logic.vulkan.VulkanMatrix4.setIdentity(fallbackViewMatrixBuffer, 0)
         com.example.logic.vulkan.VulkanMatrix4.rotate(fallbackViewMatrixBuffer, 0, -telem.rollDeg, 0f, 0f, 1f)
         com.example.logic.vulkan.VulkanMatrix4.rotate(fallbackViewMatrixBuffer, 0, telem.pitchDeg, 1f, 0f, 0f)
@@ -1450,11 +1449,15 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             _isMeasurementAvailable.value = true
         }
 
-        if (capturedPoints.isNotEmpty()) {
+        val newDist = if (capturedPoints.isNotEmpty()) {
             val dist = ArMath.distance(capturedPoints.last(), smoothed)
-            _liveDistanceMeters.value = smoothLiveDistance(dist)
+            smoothLiveDistance(dist)
         } else {
-            _liveDistanceMeters.value = smoothLiveDistance(estDist)
+            smoothLiveDistance(estDist)
+        }
+        val currentDist = _liveDistanceMeters.value
+        if (currentDist == null || abs(newDist - currentDist) > 0.005) {
+            _liveDistanceMeters.value = newDist
         }
     }
 

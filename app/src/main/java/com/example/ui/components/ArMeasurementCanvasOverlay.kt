@@ -389,6 +389,7 @@ fun ArMeasurementCanvasOverlay(
     val reticleCachedPath = remember { Path() }
     val floorCirclePath = remember { Path() }
     val floorShadowPath = remember { Path() }
+    val cachedProjectedPoints = remember { ArrayList<Pair<Float, Float>?>() }
 
     // Persistent 2D smooth reticle position holder
     val reticlePosHolder = remember { floatArrayOf(-1000f, -1000f) }
@@ -434,8 +435,8 @@ fun ArMeasurementCanvasOverlay(
             if (distSq.isNaN() || distSq.isInfinite()) {
                 Offset(lastX, lastY)
             } else {
-                val d0Sq = 2500f
-                val lerpFactor = (0.10f + 0.85f * (distSq / (distSq + d0Sq))).coerceIn(0.08f, 0.95f)
+                val d0Sq = 400f
+                val lerpFactor = (0.45f + 0.50f * (distSq / (distSq + d0Sq))).coerceIn(0.40f, 0.98f)
                 val nx = lastX + dx * lerpFactor
                 val ny = lastY + dy * lerpFactor
                 if (nx.isNaN() || ny.isNaN() || nx.isInfinite() || ny.isInfinite()) {
@@ -484,16 +485,17 @@ fun ArMeasurementCanvasOverlay(
         // Project 3D points to 2D screen coordinates using indexed access
         val pointsSnapshot = capturedPoints
         val pointsCount = pointsSnapshot.size
-        val projectedPoints = ArrayList<Pair<Float, Float>?>(pointsCount)
+        cachedProjectedPoints.clear()
         for (i in 0 until pointsCount) {
             val pt = pointsSnapshot[i]
             val ok = ArMath.projectCoordsToScreen(pt.x, pt.y, pt.z, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER)
             if (ok) {
-                projectedPoints.add(Pair(TEMP_PROJ_HOLDER[0], TEMP_PROJ_HOLDER[1]))
+                cachedProjectedPoints.add(Pair(TEMP_PROJ_HOLDER[0], TEMP_PROJ_HOLDER[1]))
             } else {
-                projectedPoints.add(null)
+                cachedProjectedPoints.add(null)
             }
         }
+        val projectedPoints = cachedProjectedPoints
 
         // Mode Detection
         val isAreaMode = subMode == 1 || (subMode == 0 && autoDetectedType == "AREA")

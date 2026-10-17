@@ -155,19 +155,22 @@ class HighSpeedCamera2Manager(private val context: Context) {
     private fun selectOptimalFpsRange(characteristics: CameraCharacteristics): Range<Int> {
         val fpsRanges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: emptyArray()
 
-        // 1. Prioritize strict [60, 60] if supported
-        fpsRanges.firstOrNull { it.lower == 60 && it.upper == 60 }?.let { return it }
+        // 1. Fixed 60 FPS: [60, 60] or higher for maximum hardware fluidity
+        fpsRanges.firstOrNull { it.lower >= 60 && it.upper >= 60 }?.let { return it }
 
-        // 2. Prioritize dynamic high framerate (e.g., [30, 60])
-        fpsRanges.firstOrNull { it.upper >= 60 && it.lower >= 30 }?.let { return it }
+        // 2. Dynamic 30-60 FPS: maintains at least 30 FPS while allowing silky 60 FPS
+        fpsRanges.firstOrNull { it.lower >= 30 && it.upper >= 60 }?.let { return it }
 
-        // 3. Fallback to standard smooth [30, 30]
+        // 3. Dynamic wide range up to 60 (e.g., [15, 60], [24, 60])
+        fpsRanges.firstOrNull { it.upper >= 60 }?.let { return it }
+
+        // 4. Standard smooth [30, 30]
         fpsRanges.firstOrNull { it.lower == 30 && it.upper == 30 }?.let { return it }
 
-        // 4. Any range with upper >= 30
+        // 5. Any range with upper >= 30
         fpsRanges.firstOrNull { it.upper >= 30 }?.let { return it }
 
-        // 5. Default to first hardware reported range or standard [30, 30]
+        // 6. Default to first hardware reported range or standard [30, 30]
         return fpsRanges.firstOrNull() ?: Range(30, 30)
     }
 

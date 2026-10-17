@@ -639,9 +639,15 @@ private fun ArHorizonGuidanceIndicator(
     val sensorTelemetry by viewModel.sensorTelemetry.collectAsState()
     val pitch: Float = sensorTelemetry.pitchDeg
     val roll: Float = sensorTelemetry.rollDeg
+    val pitchInt = kotlin.math.round(pitch).toInt()
+    val rollInt = kotlin.math.round(roll).toInt()
     val isRollLevel = kotlin.math.abs(roll) < 2.0f
     val isPitchLevel = kotlin.math.abs(pitch) < 2.5f || kotlin.math.abs(pitch - 90f) < 2.5f || kotlin.math.abs(pitch + 90f) < 2.5f
     val isLevel = isRollLevel && isPitchLevel
+
+    val levelText = remember(isLevel, pitchInt, rollInt) {
+        if (isLevel) "🎯 基準水平對齊 (0°)" else "俯仰 $pitchInt° · 滾轉 $rollInt°"
+    }
 
     val animatedIndicatorColor by animateColorAsState(
         targetValue = if (isLevel) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
@@ -667,7 +673,7 @@ private fun ArHorizonGuidanceIndicator(
                 modifier = Modifier.size(13.dp)
             )
             Text(
-                text = if (isLevel) "🎯 基準水平對齊 (0°)" else "俯仰 ${String.format(Locale.US, "%.0f°", pitch)} · 滾轉 ${String.format(Locale.US, "%.0f°", roll)}",
+                text = levelText,
                 style = MaterialTheme.typography.labelSmall,
                 color = if (isLevel) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
                 fontWeight = if (isLevel) FontWeight.Bold else FontWeight.Normal,

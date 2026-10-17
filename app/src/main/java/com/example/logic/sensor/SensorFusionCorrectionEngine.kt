@@ -12,6 +12,8 @@ import com.google.ar.core.Pose
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import android.os.Handler
+import android.os.HandlerThread
 import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.math.*
 
@@ -213,17 +215,26 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
     }
 
     private var isListening = false
+    private var sensorThread: HandlerThread? = null
+    private var sensorHandler: Handler? = null
 
     fun startListening() {
         if (isListening) return
         isListening = true
-        gravitySensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
-        gyroSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
-        rotationVectorSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
-        linearAccelSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
-        magneticSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
-        barometerSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL) }
-        proximitySensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL) }
+
+        if (sensorThread == null) {
+            sensorThread = HandlerThread("SensorFusionBgThread", android.os.Process.THREAD_PRIORITY_MORE_FAVORABLE).apply { start() }
+            sensorHandler = Handler(sensorThread!!.looper)
+        }
+        val handler = sensorHandler
+
+        gravitySensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME, handler) }
+        gyroSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME, handler) }
+        rotationVectorSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME, handler) }
+        linearAccelSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME, handler) }
+        magneticSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL, handler) }
+        barometerSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL, handler) }
+        proximitySensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL, handler) }
     }
 
     fun stopListening() {
@@ -231,6 +242,12 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
         isListening = false
         try {
             sensorManager.unregisterListener(this)
+        } catch (_: Exception) {}
+        try {
+            sensorHandler?.removeCallbacksAndMessages(null)
+            sensorThread?.quitSafely()
+            sensorThread = null
+            sensorHandler = null
         } catch (_: Exception) {}
     }
 
@@ -305,8 +322,8 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
     private fun updateTelemetryState() {
         val now = android.os.SystemClock.uptimeMillis()
         val timeSinceLastEmit = now - lastTelemetryEmitTimeMs
-        if (timeSinceLastEmit < 16L) {
-            return // Max 60Hz real-time sync matching 60 FPS camera preview
+        if (timeSinceLastEmit < 8L) {
+            return // Max 120Hz sync matching high-refresh rate displays
         }
 
         val azimuth = Math.toDegrees(orientationAngles[0].toDouble()).toFloat()
@@ -322,19 +339,18 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
         val prev = _telemetry.value
         val normAzimuth = (azimuth + 360f) % 360f
 
-        // Deadband filter: only emit StateFlow when noticeable change occurs or heartbeat (350ms)
         val pitchDiff = abs(pitch - prev.pitchDeg)
         val rollDiff = abs(roll - prev.rollDeg)
         val azimDiff = abs(normAzimuth - prev.azimuthDeg)
         val stabDiff = abs(stabilityScore - prev.stabilityScore)
         val burstDiff = abs(burstProgress - prev.multiSampleProgress)
 
-        val hasSignificantChange = pitchDiff >= 0.35f || rollDiff >= 0.35f || azimDiff >= 0.50f ||
-                stabDiff >= 0.06f || isSteady != prev.isHandSteady ||
+        val hasSignificantChange = pitchDiff >= 0.02f || rollDiff >= 0.02f || azimDiff >= 0.02f ||
+                stabDiff >= 0.02f || isSteady != prev.isHandSteady ||
                 isNearContact != prev.isProximityNear || isBurstLocked != prev.isMultiSampleLocked ||
-                burstDiff >= 0.05f || lastOrthogonalSnapped != prev.isOrthogonalSnapped
+                burstDiff >= 0.02f || lastOrthogonalSnapped != prev.isOrthogonalSnapped
 
-        if (!hasSignificantChange && timeSinceLastEmit < 350L) {
+        if (!hasSignificantChange && timeSinceLastEmit < 33L) {
             return
         }
         lastTelemetryEmitTimeMs = now

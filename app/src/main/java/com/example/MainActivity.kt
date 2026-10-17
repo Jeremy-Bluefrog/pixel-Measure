@@ -19,7 +19,15 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            window.colorMode = android.content.pm.ActivityInfo.COLOR_MODE_WIDE_COLOR_GAMUT
+            val isWide = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                this.display?.isWideColorGamut == true
+            } else {
+                @Suppress("DEPRECATION")
+                windowManager.defaultDisplay?.isWideColorGamut == true
+            }
+            if (isWide) {
+                window.colorMode = android.content.pm.ActivityInfo.COLOR_MODE_WIDE_COLOR_GAMUT
+            }
         }
         enforceHighDisplayRefreshRate()
         super.onCreate(savedInstanceState)

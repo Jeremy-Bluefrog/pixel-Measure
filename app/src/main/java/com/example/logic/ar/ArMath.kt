@@ -290,11 +290,11 @@ object ArMath {
 
         // Continuous adaptive low-pass filter with smoothstep transition:
         // Eliminates staircase jumps and freeze-and-pop micro-tremors completely.
-        // For micro-vibrations (< 28mm), alpha stays smoothly around 0.04 for rock-steady holding.
-        // As movement accelerates, alpha smoothly increases to 0.92 for lag-free tracking.
-        val minAlpha = 0.04
-        val maxAlpha = 0.92
-        val d0 = 0.028 // 28mm characteristic transition distance
+        // For micro-vibrations (< 12mm), alpha provides rock-steady holding without drifting.
+        // As movement accelerates, alpha instantly scales to 0.98 for fluid, zero-lag tracking.
+        val minAlpha = 0.32
+        val maxAlpha = 0.98
+        val d0 = 0.012 // 12mm characteristic transition distance
 
         val t = (d / d0).coerceIn(0.0, 1.0)
         val alphaScale = t * t * (3.0 - 2.0 * t) // Cubic smoothstep (zero derivative at t=0 and t=1)

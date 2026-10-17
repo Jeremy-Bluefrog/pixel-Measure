@@ -59,26 +59,35 @@ fun PixelShutterButton(
         label = "PixelShutterPressScale"
     )
 
-    // Pulsing animation during recording
-    val infiniteTransition = rememberInfiniteTransition(label = "RecordingPulse")
-    val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 1.0f,
-        targetValue = if (isRecording) 1.14f else 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(800, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "PulseScale"
-    )
-    val pulseAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.6f,
-        targetValue = if (isRecording) 1.0f else 0.6f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(800, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "PulseAlpha"
-    )
+    // Pulsing animation strictly active ONLY during recording (zero recomposition overhead when idle)
+    val pulseScale: Float
+    val pulseAlpha: Float
+    if (isRecording) {
+        val infiniteTransition = rememberInfiniteTransition(label = "RecordingPulse")
+        val pScale by infiniteTransition.animateFloat(
+            initialValue = 1.0f,
+            targetValue = 1.14f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(800, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "PulseScale"
+        )
+        val pAlpha by infiniteTransition.animateFloat(
+            initialValue = 0.6f,
+            targetValue = 1.0f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(800, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "PulseAlpha"
+        )
+        pulseScale = pScale
+        pulseAlpha = pAlpha
+    } else {
+        pulseScale = 1.0f
+        pulseAlpha = 1.0f
+    }
 
     // Animated inner shape & color
     val animatedBorderColor by animateColorAsState(
