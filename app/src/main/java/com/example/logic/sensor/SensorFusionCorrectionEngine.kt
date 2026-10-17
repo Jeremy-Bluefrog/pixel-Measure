@@ -217,11 +217,11 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
     fun startListening() {
         if (isListening) return
         isListening = true
-        gravitySensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
-        gyroSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
-        rotationVectorSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
-        linearAccelSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
-        magneticSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL) }
+        gravitySensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
+        gyroSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
+        rotationVectorSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
+        linearAccelSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
+        magneticSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
         barometerSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL) }
         proximitySensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL) }
     }
@@ -305,8 +305,8 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
     private fun updateTelemetryState() {
         val now = android.os.SystemClock.uptimeMillis()
         val timeSinceLastEmit = now - lastTelemetryEmitTimeMs
-        if (timeSinceLastEmit < 50L) {
-            return // Throttle to max 20Hz
+        if (timeSinceLastEmit < 16L) {
+            return // Max 60Hz real-time sync matching 60 FPS camera preview
         }
 
         val azimuth = Math.toDegrees(orientationAngles[0].toDouble()).toFloat()

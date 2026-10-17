@@ -53,6 +53,37 @@ class HighSpeedCamera2Manager(private val context: Context) {
     var previewSize: Size? = null
         private set
 
+    var preferredFacing: Int = CameraCharacteristics.LENS_FACING_BACK
+        private set
+    var isFrontFacing: Boolean = false
+        private set
+    var sensorOrientation: Int = 90
+        private set
+    var isHorizontallyMirrored: Boolean = false
+        private set
+
+    fun setHorizontallyMirrored(mirrored: Boolean, textureView: TextureView?) {
+        isHorizontallyMirrored = mirrored
+        textureView?.let { tv ->
+            if (tv.isAvailable && tv.width > 0 && tv.height > 0) {
+                configureTransform(tv, tv.width, tv.height)
+            }
+        }
+    }
+
+    fun switchCamera(
+        textureView: TextureView,
+        onSessionConfigured: ((Boolean, Size) -> Unit)? = null
+    ) {
+        preferredFacing = if (preferredFacing == CameraCharacteristics.LENS_FACING_BACK) {
+            CameraCharacteristics.LENS_FACING_FRONT
+        } else {
+            CameraCharacteristics.LENS_FACING_BACK
+        }
+        closeCamera()
+        openCameraAndStartSession(textureView, onSessionConfigured)
+    }
+
     val lowLightBoostEngine = LowLightBoostEngine(context)
     private var isLowLightBoostEnabled = true
 
@@ -99,13 +130,12 @@ class HighSpeedCamera2Manager(private val context: Context) {
             return Size(1280, 720)
         }
 
-        // Filter reasonable sizes under or equal to 1920x1080
-        val reasonableOutputs = outputSizes.filter { it.width <= 1920 && it.height <= 1080 }
-
-        // Prefer 1080p 16:9, then 720p 16:9, then highest reasonable, then first available
-        return reasonableOutputs.firstOrNull { it.width == 1920 && it.height == 1080 }
-            ?: reasonableOutputs.firstOrNull { it.width == 1280 && it.height == 720 }
-            ?: reasonableOutputs.maxByOrNull { it.width * it.height }
+        // Prioritize 720p (1280x720) for optimal 60 FPS performance and reduced GPU/CPU memory overhead
+        return outputSizes.firstOrNull { it.width == 1280 && it.height == 720 }
+            ?: outputSizes.firstOrNull { it.width == 1920 && it.height == 1080 }
+            ?: outputSizes.firstOrNull { it.width == 960 && it.height == 540 }
+            ?: outputSizes.firstOrNull { it.width in 1000..1400 }
+            ?: outputSizes.maxByOrNull { it.width * it.height }
             ?: outputSizes.first()
     }
 
@@ -206,21 +236,24 @@ class HighSpeedCamera2Manager(private val context: Context) {
                 return
             }
 
-            // Find best camera: Back camera prioritized, then front camera, then first available
+            // Select camera according to preferred facing (Back vs Front)
+            val targetFacing = preferredFacing
             val cameraId = cameraIdList.firstOrNull { id ->
                 try {
-                    cameraManager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) ==
-                            CameraCharacteristics.LENS_FACING_BACK
+                    cameraManager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) == targetFacing
                 } catch (_: Throwable) { false }
             } ?: cameraIdList.firstOrNull { id ->
                 try {
                     cameraManager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) ==
-                            CameraCharacteristics.LENS_FACING_FRONT
+                            CameraCharacteristics.LENS_FACING_BACK
                 } catch (_: Throwable) { false }
             } ?: cameraIdList.first()
 
             activeCameraId = cameraId
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            val facing = characteristics.get(CameraCharacteristics.LENS_FACING)
+            isFrontFacing = facing == CameraCharacteristics.LENS_FACING_FRONT
+            sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
             isFlashSupported = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
             val optimalSize = selectOptimalPreviewSize(characteristics)
             previewSize = optimalSize
@@ -416,32 +449,53 @@ class HighSpeedCamera2Manager(private val context: Context) {
             (context.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager)?.defaultDisplay
         }
         val rotation = display?.rotation ?: Surface.ROTATION_0
-
         val matrix = android.graphics.Matrix()
-        val viewRect = android.graphics.RectF(0f, 0f, viewWidth.toFloat(), viewHeight.toFloat())
-        val bufferRect = android.graphics.RectF(0f, 0f, size.height.toFloat(), size.width.toFloat())
-        val centerX = viewRect.centerX()
-        val centerY = viewRect.centerY()
+        val centerX = viewWidth / 2f
+        val centerY = viewHeight / 2f
 
-        if (rotation == Surface.ROTATION_90 || rotation == Surface.ROTATION_270) {
-            bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY())
-            matrix.setRectToRect(viewRect, bufferRect, android.graphics.Matrix.ScaleToFit.FILL)
-            val scale = maxOf(
-                viewHeight.toFloat() / size.height,
-                viewWidth.toFloat() / size.width
-            )
-            matrix.postScale(scale, scale, centerX, centerY)
-            matrix.postRotate((90f * (rotation - 2)), centerX, centerY)
-        } else if (rotation == Surface.ROTATION_180) {
-            matrix.postRotate(180f, centerX, centerY)
-        } else {
-            // ROTATION_0 (Portrait)
-            // Center crop fill so that camera preview is never stretched or distorted
-            val bufferW = size.height.toFloat()
-            val bufferH = size.width.toFloat()
-            val scale = maxOf(viewWidth.toFloat() / bufferW, viewHeight.toFloat() / bufferH)
-            matrix.postScale((bufferW * scale) / viewWidth, (bufferH * scale) / viewHeight, centerX, centerY)
+        // Camera2 preview buffer dimensions (e.g. 1280x720)
+        // In natural portrait orientation, the buffer effectively has short edge as width, long edge as height
+        val bufferW = minOf(size.width, size.height).toFloat() // e.g. 720f
+        val bufferH = maxOf(size.width, size.height).toFloat() // e.g. 1280f
+
+        when (rotation) {
+            Surface.ROTATION_0 -> {
+                // Natural Portrait orientation:
+                // TextureView automatically displays the sensor buffer aligned to the device.
+                // Apply Center-Crop scale to fill view without stretching or aspect distortion.
+                val scale = maxOf(viewWidth / bufferW, viewHeight / bufferH)
+                val scaleX = scale * (bufferW / viewWidth)
+                val scaleY = scale * (bufferH / viewHeight)
+                matrix.setScale(scaleX, scaleY, centerX, centerY)
+            }
+            Surface.ROTATION_180 -> {
+                val scale = maxOf(viewWidth / bufferW, viewHeight / bufferH)
+                val scaleX = scale * (bufferW / viewWidth)
+                val scaleY = scale * (bufferH / viewHeight)
+                matrix.setScale(scaleX, scaleY, centerX, centerY)
+                matrix.postRotate(180f, centerX, centerY)
+            }
+            Surface.ROTATION_90, Surface.ROTATION_270 -> {
+                // Landscape orientations: buffer width corresponds to view width, buffer height to view height
+                val bufferRect = android.graphics.RectF(0f, 0f, size.height.toFloat(), size.width.toFloat())
+                val viewRect = android.graphics.RectF(0f, 0f, viewWidth.toFloat(), viewHeight.toFloat())
+                bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY())
+                matrix.setRectToRect(viewRect, bufferRect, android.graphics.Matrix.ScaleToFit.FILL)
+                val scale = maxOf(
+                    viewHeight.toFloat() / size.height,
+                    viewWidth.toFloat() / size.width
+                )
+                matrix.postScale(scale, scale, centerX, centerY)
+                matrix.postRotate((90 * (rotation - 2)).toFloat(), centerX, centerY)
+            }
         }
+
+        // Horizontal Mirroring correction (for front-facing selfie mirror or manual toggle)
+        val shouldMirror = isHorizontallyMirrored || isFrontFacing
+        if (shouldMirror) {
+            matrix.postScale(-1f, 1f, centerX, centerY)
+        }
+
         textureView.setTransform(matrix)
     }
 
