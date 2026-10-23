@@ -331,7 +331,8 @@ fun ArMeasurementCanvasOverlay(
     val autoDetectedType by viewModel.autoDetectedType.collectAsState()
     val selectedUnit by viewModel.selectedUnit.collectAsState()
     val planesCount by viewModel.arPlanesCount.collectAsState()
-    val sensorTelemetry by viewModel.sensorTelemetry.collectAsState()
+    val multiSampleProgress by viewModel.multiSampleProgress.collectAsState()
+    val isMultiSampleLocked by viewModel.isMultiSampleLocked.collectAsState()
     val lineThickness by viewModel.lineThickness.collectAsState()
     val reticleStyle by viewModel.reticleStyle.collectAsState()
     val arFontSize by viewModel.arFontSize.collectAsState()
@@ -390,7 +391,11 @@ fun ArMeasurementCanvasOverlay(
     val reticleCachedPath = remember { Path() }
     val floorCirclePath = remember { Path() }
     val floorShadowPath = remember { Path() }
-    val cachedProjectedPoints = remember { ArrayList<Pair<Float, Float>?>() }
+    
+    // Zero-allocation reusable coordinate buffer pools for 60fps canvas drawing
+    val projectedPool = remember { ProjectedPointPool(64) }
+    val reticleHolderProj = remember { ScreenPoint() }
+    val validPtsBuffer = remember { Array(64) { ScreenPoint() } }
 
     // Persistent 2D smooth reticle position holder
     val reticlePosHolder = remember { floatArrayOf(-1000f, -1000f) }
@@ -483,20 +488,16 @@ fun ArMeasurementCanvasOverlay(
             )
         }
 
-        // Project 3D points to 2D screen coordinates using indexed access
+        // Project 3D points to 2D screen coordinates using zero-alloc buffer pool
         val pointsSnapshot = capturedPoints
         val pointsCount = pointsSnapshot.size
-        cachedProjectedPoints.clear()
+        projectedPool.reset(pointsCount)
         for (i in 0 until pointsCount) {
             val pt = pointsSnapshot[i]
             val ok = ArMath.projectCoordsToScreen(pt.x, pt.y, pt.z, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER, isHorizontallyMirrored)
-            if (ok) {
-                cachedProjectedPoints.add(Pair(TEMP_PROJ_HOLDER[0], TEMP_PROJ_HOLDER[1]))
-            } else {
-                cachedProjectedPoints.add(null)
-            }
+            projectedPool.set(i, TEMP_PROJ_HOLDER[0], TEMP_PROJ_HOLDER[1], ok)
         }
-        val projectedPoints = cachedProjectedPoints
+        val projectedPoints = projectedPool
 
         // Mode Detection
         val isAreaMode = subMode == 1 || (subMode == 0 && autoDetectedType == "AREA")
@@ -633,12 +634,22 @@ fun ArMeasurementCanvasOverlay(
                 }
             }
 
-            // Closed Polygon in Area mode
+            // Closed Polygon in Area mode (Zero-allocation reusable buffers)
             if (isAreaMode && projectedPoints.size >= 3) {
-                val validPts = projectedPoints.filterNotNull()
-                if (validPts.size >= 3) {
-                    val first = validPts.first()
-                    val last = validPts.last()
+                var validPtsCount = 0
+                for (k in 0 until pointsCount) {
+                    val pt = projectedPoints.getOrNull(k)
+                    if (pt != null) {
+                        val buf = validPtsBuffer[validPtsCount]
+                        buf.x = pt.x
+                        buf.y = pt.y
+                        buf.isValid = true
+                        validPtsCount++
+                    }
+                }
+                if (validPtsCount >= 3) {
+                    val first = validPtsBuffer[0]
+                    val last = validPtsBuffer[validPtsCount - 1]
 
                     val startOffset = Offset(last.first, last.second)
                     val endOffset = Offset(first.first, first.second)
@@ -701,11 +712,11 @@ fun ArMeasurementCanvasOverlay(
                         }
                     }
 
-                    // Semi-transparent polygon interior mesh fill
+                    // Semi-transparent polygon interior mesh fill (Zero heap allocations)
                     areaCachedPath.reset()
-                    areaCachedPath.moveTo(validPts[0].first, validPts[0].second)
-                    for (k in 1 until validPts.size) {
-                        areaCachedPath.lineTo(validPts[k].first, validPts[k].second)
+                    areaCachedPath.moveTo(validPtsBuffer[0].first, validPtsBuffer[0].second)
+                    for (k in 1 until validPtsCount) {
+                        areaCachedPath.lineTo(validPtsBuffer[k].first, validPtsBuffer[k].second)
                     }
                     areaCachedPath.close()
                     drawPath(
@@ -713,9 +724,15 @@ fun ArMeasurementCanvasOverlay(
                         color = colorPrimary.copy(alpha = 0.18f)
                     )
 
-                    // Visual Centroid & Floating Area Badge
-                    val centroidX = validPts.map { it.first }.average().toFloat()
-                    val centroidY = validPts.map { it.second }.average().toFloat()
+                    // Visual Centroid & Floating Area Badge (Zero heap allocations)
+                    var sumX = 0f
+                    var sumY = 0f
+                    for (k in 0 until validPtsCount) {
+                        sumX += validPtsBuffer[k].first
+                        sumY += validPtsBuffer[k].second
+                    }
+                    val centroidX = sumX / validPtsCount
+                    val centroidY = sumY / validPtsCount
                     val areaVal = viewModel.calculatePolygonArea()
                     val areaText = "面積 ${viewModel.formatArea(areaVal, selectedUnit)}"
 
@@ -836,7 +853,7 @@ fun ArMeasurementCanvasOverlay(
 
             val baseProj = projectedPoints.getOrNull(0)
             val plumbProj = ArMath.projectWorldToScreen(plumb3D, viewMatrix, projectionMatrix, screenW, screenH, isHorizontallyMirrored)
-            val topProj = if (projectedPoints.size >= 2) projectedPoints[1] else Pair(currentReticlePos.x, currentReticlePos.y)
+            val topProj = if (projectedPoints.size >= 2) projectedPoints[1] else reticleHolderProj.apply { x = currentReticlePos.x; y = currentReticlePos.y; isValid = true }
 
             if (baseProj != null && plumbProj != null && topProj != null) {
                 val pBase = Offset(baseProj.first, baseProj.second)
@@ -923,7 +940,7 @@ fun ArMeasurementCanvasOverlay(
         // -------------------------------------------------------------
         if (isCircleMode && pointsSnapshot.isNotEmpty()) {
             val pCenter = projectedPoints.getOrNull(0)
-            val pEdge = if (projectedPoints.size >= 2) projectedPoints[1] else Pair(currentReticlePos.x, currentReticlePos.y)
+            val pEdge = if (projectedPoints.size >= 2) projectedPoints[1] else reticleHolderProj.apply { x = currentReticlePos.x; y = currentReticlePos.y; isValid = true }
 
             if (pCenter != null && pEdge != null) {
                 val cOffset = Offset(pCenter.first, pCenter.second)
@@ -1263,12 +1280,12 @@ fun ArMeasurementCanvasOverlay(
         // Multi-Sample Burst Averaging Dynamic Progress Arc (Only visible during active burst measurement)
         val reticleCenter = currentReticlePos
         val reticleRadiusPx = (24f * snapScaleAnimated.value * reticlePulseScale.value).dp.toPx()
-        if (sensorTelemetry.multiSampleProgress > 0f) {
+        if (multiSampleProgress > 0f) {
             val arcRadius = reticleRadiusPx + 4.dp.toPx()
             drawArc(
-                color = if (sensorTelemetry.isMultiSampleLocked) colorTertiary else colorPrimary,
+                color = if (isMultiSampleLocked) colorTertiary else colorPrimary,
                 startAngle = -90f,
-                sweepAngle = sensorTelemetry.multiSampleProgress * 360f,
+                sweepAngle = multiSampleProgress * 360f,
                 useCenter = false,
                 topLeft = Offset(reticleCenter.x - arcRadius, reticleCenter.y - arcRadius),
                 size = Size(arcRadius * 2f, arcRadius * 2f),
@@ -1277,3 +1294,55 @@ fun ArMeasurementCanvasOverlay(
         }
     }
 }
+
+/**
+ * Reusable zero-allocation 2D screen coordinate holder.
+ * Provides .first and .second getters for backwards compatibility with Pair<Float, Float>.
+ */
+class ScreenPoint(
+    var x: Float = 0f,
+    var y: Float = 0f,
+    var isValid: Boolean = false
+) {
+    val first: Float get() = x
+    val second: Float get() = y
+}
+
+/**
+ * Pre-allocated pool of ScreenPoints to eliminate GC churn inside the 60fps canvas draw loop.
+ */
+class ProjectedPointPool(val capacity: Int = 64) {
+    val pool = Array(capacity) { ScreenPoint() }
+    var size: Int = 0
+
+    fun reset(count: Int) {
+        size = count.coerceAtMost(capacity)
+        for (i in 0 until capacity) {
+            pool[i].isValid = false
+        }
+    }
+
+    fun set(index: Int, x: Float, y: Float, isValid: Boolean) {
+        if (index in 0 until capacity) {
+            val p = pool[index]
+            p.x = x
+            p.y = y
+            p.isValid = isValid
+        }
+    }
+
+    fun getOrNull(index: Int): ScreenPoint? {
+        if (index in 0 until size) {
+            val p = pool[index]
+            return if (p.isValid) p else null
+        }
+        return null
+    }
+
+    operator fun get(index: Int): ScreenPoint? = getOrNull(index)
+
+    fun isNotEmpty(): Boolean = size > 0
+
+    fun first(): ScreenPoint? = getOrNull(0)
+}
+

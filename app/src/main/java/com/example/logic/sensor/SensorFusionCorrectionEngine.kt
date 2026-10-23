@@ -128,6 +128,22 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
     )
     val telemetry: StateFlow<SensorCorrectionTelemetry> = _telemetry.asStateFlow()
 
+    // Isolated, low-frequency Multi-Sample lock states to avoid 60Hz full-composable recompositions
+    private val _multiSampleProgress = MutableStateFlow(0f)
+    val multiSampleProgress: StateFlow<Float> = _multiSampleProgress.asStateFlow()
+
+    private val _isMultiSampleLocked = MutableStateFlow(false)
+    val isMultiSampleLocked: StateFlow<Boolean> = _isMultiSampleLocked.asStateFlow()
+
+    fun syncMultiSampleState() {
+        if (abs(_multiSampleProgress.value - burstProgress) > 0.015f || (burstProgress == 0f && _multiSampleProgress.value != 0f)) {
+            _multiSampleProgress.value = burstProgress
+        }
+        if (_isMultiSampleLocked.value != isBurstLocked) {
+            _isMultiSampleLocked.value = isBurstLocked
+        }
+    }
+
     // Configurable Precision & Correction Parameters
     var isSensorCorrectionEnabled: Boolean = true
     var isAntiJitterEnabled: Boolean = true
@@ -322,8 +338,8 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
     private fun updateTelemetryState() {
         val now = android.os.SystemClock.uptimeMillis()
         val timeSinceLastEmit = now - lastTelemetryEmitTimeMs
-        if (timeSinceLastEmit < 8L) {
-            return // Max 120Hz sync matching high-refresh rate displays
+        if (timeSinceLastEmit < 16L) {
+            return // Max 60Hz sync aligned with standard display V-Sync pacing
         }
 
         val azimuth = Math.toDegrees(orientationAngles[0].toDouble()).toFloat()
@@ -345,8 +361,8 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
         val stabDiff = abs(stabilityScore - prev.stabilityScore)
         val burstDiff = abs(burstProgress - prev.multiSampleProgress)
 
-        val hasSignificantChange = pitchDiff >= 0.02f || rollDiff >= 0.02f || azimDiff >= 0.02f ||
-                stabDiff >= 0.02f || isSteady != prev.isHandSteady ||
+        val hasSignificantChange = pitchDiff >= 0.20f || rollDiff >= 0.20f || azimDiff >= 0.30f ||
+                stabDiff >= 0.05f || isSteady != prev.isHandSteady ||
                 isNearContact != prev.isProximityNear || isBurstLocked != prev.isMultiSampleLocked ||
                 burstDiff >= 0.02f || lastOrthogonalSnapped != prev.isOrthogonalSnapped
 
@@ -393,6 +409,7 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
             isOrthogonalSnapped = lastOrthogonalSnapped,
             sensorFusionActive = isSensorCorrectionEnabled
         )
+        syncMultiSampleState()
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
@@ -465,6 +482,7 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
                 burstSampleWindow.removeFirst()
             }
         }
+        syncMultiSampleState()
 
         // 3. Multi-Sample Cluster Averaging with Outlier Rejection
         var targetX = rawPoint.x

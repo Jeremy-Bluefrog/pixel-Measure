@@ -190,46 +190,30 @@ fun MeasurementGuidancePill(
                 )
             }
 
-            // Step Instructional Texts with smooth AnimatedContent
+            // Step Instructional Texts (Zero-jank immediate rendering without 60fps AnimatedContent thrashing)
             Column(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.Center
             ) {
-                AnimatedContent(
-                    targetState = title,
-                    transitionSpec = {
-                        fadeIn(animationSpec = tween(180)) togetherWith
-                                fadeOut(animationSpec = tween(150))
-                    },
-                    label = "GuidanceTitle"
-                ) { targetTitle ->
-                    Text(
-                        text = targetTitle,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White,
-                        maxLines = 1
-                    )
-                }
+                Text(
+                    text = title,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
 
                 Spacer(modifier = Modifier.height(1.dp))
 
-                AnimatedContent(
-                    targetState = subtitle,
-                    transitionSpec = {
-                        fadeIn(animationSpec = tween(180)) togetherWith
-                                fadeOut(animationSpec = tween(150))
-                    },
-                    label = "GuidanceSubtitle"
-                ) { targetSubtitle ->
-                    Text(
-                        text = targetSubtitle,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Normal,
-                        color = Color(0xFFCBD5E1),
-                        maxLines = 1
-                    )
-                }
+                Text(
+                    text = subtitle,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Normal,
+                    color = Color(0xFFCBD5E1),
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
             }
 
             // Quick Tutorial Access Chip Button

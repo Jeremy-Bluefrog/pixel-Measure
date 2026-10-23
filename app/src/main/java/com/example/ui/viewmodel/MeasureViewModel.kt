@@ -758,9 +758,10 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         prefs.edit().putBoolean("show_point_cloud", enabled).apply()
     }
 
-    // Multi-Sensor Fusion & Measurement Correction Engine
     val sensorCorrectionEngine = SensorFusionCorrectionEngine(app)
     val sensorTelemetry: StateFlow<SensorCorrectionTelemetry> = sensorCorrectionEngine.telemetry
+    val multiSampleProgress: StateFlow<Float> = sensorCorrectionEngine.multiSampleProgress
+    val isMultiSampleLocked: StateFlow<Boolean> = sensorCorrectionEngine.isMultiSampleLocked
 
     val sensorCorrectionEnabled = MutableStateFlow(prefs.getBoolean("sensor_correction_enabled", true))
     val antiJitterEnabled = MutableStateFlow(prefs.getBoolean("sensor_antijitter_enabled", true))
