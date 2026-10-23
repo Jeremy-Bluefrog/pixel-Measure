@@ -178,5 +178,49 @@ class ExampleUnitTest {
     assertEquals(500.0f, outScreenPos[0], 2.0f)
     assertEquals(500.0f, outScreenPos[1], 2.0f)
   }
+
+  @Test
+  fun `verify ArMath projectCoordsToScreen Y-axis elevation alignment`() {
+    val viewMatrix = FloatArray(16)
+    val projMatrix = FloatArray(16)
+    com.example.logic.vulkan.VulkanMatrix4.setIdentity(viewMatrix, 0)
+    com.example.logic.vulkan.VulkanMatrix4.perspective(projMatrix, 0, 60.0f, 1.0f, 0.1f, 100.0f)
+
+    val outXYHigh = FloatArray(2)
+    val outXYLow = FloatArray(2)
+
+    // Point higher in space (wy = +0.5m)
+    val okHigh = com.example.logic.ar.ArMath.projectCoordsToScreen(0.0, 0.5, -2.0, viewMatrix, projMatrix, 1000, 1000, outXYHigh)
+    // Point lower in space (wy = -0.5m)
+    val okLow = com.example.logic.ar.ArMath.projectCoordsToScreen(0.0, -0.5, -2.0, viewMatrix, projMatrix, 1000, 1000, outXYLow)
+
+    assertTrue("High point should project successfully", okHigh)
+    assertTrue("Low point should project successfully", okLow)
+
+    // In screen coordinates: Y=0 is top, Y=1000 is bottom.
+    // Therefore, a higher point in 3D MUST have a smaller screen Y value than a lower point.
+    assertTrue("Higher 3D point must be in upper half of screen (Y < 500)", outXYHigh[1] < 500.0f)
+    assertTrue("Lower 3D point must be in lower half of screen (Y > 500)", outXYLow[1] > 500.0f)
+    assertTrue("Higher 3D point screen Y must be smaller than lower point screen Y", outXYHigh[1] < outXYLow[1])
+  }
+
+  @Test
+  fun `verify ArMath projectCoordsToScreen horizontal selfie mirroring`() {
+    val viewMatrix = FloatArray(16)
+    val projMatrix = FloatArray(16)
+    com.example.logic.vulkan.VulkanMatrix4.setIdentity(viewMatrix, 0)
+    com.example.logic.vulkan.VulkanMatrix4.perspective(projMatrix, 0, 60.0f, 1.0f, 0.1f, 100.0f)
+
+    val outNormal = FloatArray(2)
+    val outMirrored = FloatArray(2)
+
+    // Point to the right in 3D (wx = +0.5m)
+    com.example.logic.ar.ArMath.projectCoordsToScreen(0.5, 0.0, -2.0, viewMatrix, projMatrix, 1000, 1000, outNormal, isHorizontallyMirrored = false)
+    com.example.logic.ar.ArMath.projectCoordsToScreen(0.5, 0.0, -2.0, viewMatrix, projMatrix, 1000, 1000, outMirrored, isHorizontallyMirrored = true)
+
+    assertTrue("Normal point to the right should be on right half (X > 500)", outNormal[0] > 500.0f)
+    assertTrue("Mirrored point should be on left half (X < 500)", outMirrored[0] < 500.0f)
+    assertEquals(1000.0f - outNormal[0], outMirrored[0], 1.0f)
+  }
 }
 

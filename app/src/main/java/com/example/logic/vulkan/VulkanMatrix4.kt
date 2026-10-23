@@ -36,8 +36,7 @@ object VulkanMatrix4 {
             m[offset + i] = 0f
         }
         m[offset + 0] = f / aspect
-        // Invert Y axis for Vulkan NDC coordinate system where Y points down
-        m[offset + 5] = -f
+        m[offset + 5] = f
         // Vulkan NDC depth range is [0, 1] instead of OpenGL [-1, 1]
         m[offset + 10] = zFar * rangeReciprocal
         m[offset + 11] = -1.0f

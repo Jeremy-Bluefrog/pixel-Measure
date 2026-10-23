@@ -425,7 +425,8 @@ object ArMath {
         projectionMatrix: FloatArray,
         screenWidth: Int,
         screenHeight: Int,
-        outXY: FloatArray
+        outXY: FloatArray,
+        isHorizontallyMirrored: Boolean = false
     ): Boolean {
         if (viewMatrix.size < 16 || projectionMatrix.size < 16 || screenWidth <= 0 || screenHeight <= 0 || outXY.size < 2) {
             return false
@@ -449,6 +450,7 @@ object ArMath {
         // Multiply ProjectionMatrix * ViewPoint
         val clipX = projectionMatrix[0] * vx + projectionMatrix[4] * vy + projectionMatrix[8] * vz + projectionMatrix[12] * vw
         val clipY = projectionMatrix[1] * vx + projectionMatrix[5] * vy + projectionMatrix[9] * vz + projectionMatrix[13] * vw
+        val clipZ = projectionMatrix[2] * vx + projectionMatrix[6] * vy + projectionMatrix[10] * vz + projectionMatrix[14] * vw
         val clipW = projectionMatrix[3] * vx + projectionMatrix[7] * vy + projectionMatrix[11] * vz + projectionMatrix[15] * vw
 
         if (clipW <= 0.001f || clipW.isNaN() || clipW.isInfinite()) {
@@ -458,13 +460,27 @@ object ArMath {
         val invW = 1.0f / clipW
         val ndcX = clipX * invW
         val ndcY = clipY * invW
+        val ndcZ = clipZ * invW
 
-        if (ndcX.isNaN() || ndcY.isNaN() || ndcX.isInfinite() || ndcY.isInfinite()) {
+        if (ndcX.isNaN() || ndcY.isNaN() || ndcZ.isNaN() || ndcX.isInfinite() || ndcY.isInfinite() || ndcZ.isInfinite()) {
             return false
         }
 
-        val screenX = (ndcX + 1.0f) * 0.5f * screenWidth
-        val screenY = (1.0f - ndcY) * 0.5f * screenHeight
+        // Clip near/far plane depth with safe margin
+        if (ndcZ < -1.2f || ndcZ > 1.2f) {
+            return false
+        }
+
+        val rawScreenX = (ndcX + 1.0f) * 0.5f * screenWidth
+        val screenX = if (isHorizontallyMirrored) screenWidth - rawScreenX else rawScreenX
+
+        // Automatically adapt to both Vulkan (m[5] < 0) and OpenGL/ARCore (m[5] > 0) NDC conventions:
+        // Ensures 3D points higher in space are always correctly rendered in the upper half of screen
+        val screenY = if (projectionMatrix[5] < 0f) {
+            (ndcY + 1.0f) * 0.5f * screenHeight
+        } else {
+            (1.0f - ndcY) * 0.5f * screenHeight
+        }
 
         if (screenX.isNaN() || screenY.isNaN() || screenX.isInfinite() || screenY.isInfinite()) {
             return false
@@ -527,10 +543,11 @@ object ArMath {
         viewMatrix: FloatArray,
         projectionMatrix: FloatArray,
         screenWidth: Int,
-        screenHeight: Int
+        screenHeight: Int,
+        isHorizontallyMirrored: Boolean = false
     ): Pair<Float, Float>? {
         val buffer = FloatArray(2)
-        if (projectCoordsToScreen(worldPoint.x, worldPoint.y, worldPoint.z, viewMatrix, projectionMatrix, screenWidth, screenHeight, buffer)) {
+        if (projectCoordsToScreen(worldPoint.x, worldPoint.y, worldPoint.z, viewMatrix, projectionMatrix, screenWidth, screenHeight, buffer, isHorizontallyMirrored)) {
             return Pair(buffer[0], buffer[1])
         }
         return null

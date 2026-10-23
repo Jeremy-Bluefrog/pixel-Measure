@@ -1613,11 +1613,39 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private val _isFrontCamera = MutableStateFlow(false)
+    val isFrontCamera: StateFlow<Boolean> = _isFrontCamera.asStateFlow()
+
+    private val _isHorizontallyMirrored = MutableStateFlow(false)
+    val isHorizontallyMirrored: StateFlow<Boolean> = _isHorizontallyMirrored.asStateFlow()
+
     fun setHighSpeedCamera2Manager(manager: com.example.logic.camera.HighSpeedCamera2Manager?) {
         highSpeedCamera2Manager = manager
-        if (_isTorchOn.value && manager != null) {
-            manager.toggleTorch(true)
+        if (manager != null) {
+            _isFrontCamera.value = manager.isFrontFacing
+            _isHorizontallyMirrored.value = manager.isHorizontallyMirrored || manager.isFrontFacing
+            if (_isTorchOn.value) {
+                manager.toggleTorch(true)
+            }
         }
+    }
+
+    fun switchCameraFacing(textureView: android.view.TextureView?, onConfigured: ((Boolean) -> Unit)? = null) {
+        val manager = highSpeedCamera2Manager ?: return
+        if (textureView != null) {
+            manager.switchCamera(textureView) { ok, _ ->
+                _isFrontCamera.value = manager.isFrontFacing
+                _isHorizontallyMirrored.value = manager.isHorizontallyMirrored || manager.isFrontFacing
+                onConfigured?.invoke(ok)
+            }
+        }
+    }
+
+    fun toggleHorizontalMirror(textureView: android.view.TextureView?) {
+        val manager = highSpeedCamera2Manager ?: return
+        val newMirrored = !_isHorizontallyMirrored.value
+        manager.setHorizontallyMirrored(newMirrored, textureView)
+        _isHorizontallyMirrored.value = newMirrored
     }
 
     // Set Torch Brightness (0.1f ~ 1.0f) and apply to hardware if supported

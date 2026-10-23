@@ -326,6 +326,7 @@ fun ArMeasurementCanvasOverlay(
     val liveTargetScreenPos by viewModel.liveTargetScreenPos.collectAsState()
     val liveDistanceMeters by viewModel.liveDistanceMeters.collectAsState()
     val isSnapped by viewModel.isSnapped.collectAsState()
+    val isHorizontallyMirrored by viewModel.isHorizontallyMirrored.collectAsState()
     val subMode by viewModel.cameraSubMode.collectAsState()
     val autoDetectedType by viewModel.autoDetectedType.collectAsState()
     val selectedUnit by viewModel.selectedUnit.collectAsState()
@@ -413,7 +414,7 @@ fun ArMeasurementCanvasOverlay(
         ) {
             liveTargetScreenPos!!
         } else if (liveTargetPoint != null && hasValidMatrices) {
-            val proj = ArMath.projectWorldToScreen(liveTargetPoint!!, viewMatrix, projectionMatrix, screenW, screenH)
+            val proj = ArMath.projectWorldToScreen(liveTargetPoint!!, viewMatrix, projectionMatrix, screenW, screenH, isHorizontallyMirrored)
             if (proj != null) Offset(proj.first, proj.second) else screenCenter
         } else {
             screenCenter
@@ -488,7 +489,7 @@ fun ArMeasurementCanvasOverlay(
         cachedProjectedPoints.clear()
         for (i in 0 until pointsCount) {
             val pt = pointsSnapshot[i]
-            val ok = ArMath.projectCoordsToScreen(pt.x, pt.y, pt.z, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER)
+            val ok = ArMath.projectCoordsToScreen(pt.x, pt.y, pt.z, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER, isHorizontallyMirrored)
             if (ok) {
                 cachedProjectedPoints.add(Pair(TEMP_PROJ_HOLDER[0], TEMP_PROJ_HOLDER[1]))
             } else {
@@ -834,7 +835,7 @@ fun ArMeasurementCanvasOverlay(
             val plumb3D = Point3D(base3D.x, top3D.y, base3D.z)
 
             val baseProj = projectedPoints.getOrNull(0)
-            val plumbProj = ArMath.projectWorldToScreen(plumb3D, viewMatrix, projectionMatrix, screenW, screenH)
+            val plumbProj = ArMath.projectWorldToScreen(plumb3D, viewMatrix, projectionMatrix, screenW, screenH, isHorizontallyMirrored)
             val topProj = if (projectedPoints.size >= 2) projectedPoints[1] else Pair(currentReticlePos.x, currentReticlePos.y)
 
             if (baseProj != null && plumbProj != null && topProj != null) {
@@ -1024,7 +1025,7 @@ fun ArMeasurementCanvasOverlay(
             )
 
             val box2D = box3D.map { pt ->
-                val ok = ArMath.projectCoordsToScreen(pt.x, pt.y, pt.z, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER)
+                val ok = ArMath.projectCoordsToScreen(pt.x, pt.y, pt.z, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER, isHorizontallyMirrored)
                 if (ok) Offset(TEMP_PROJ_HOLDER[0], TEMP_PROJ_HOLDER[1]) else null
             }
 
@@ -1089,9 +1090,9 @@ fun ArMeasurementCanvasOverlay(
             val gridStep = 0.5
             var gx = -gridSpan
             while (gx <= gridSpan + 0.01) {
-                val ok1 = ArMath.projectCoordsToScreen(gx, groundY, -gridSpan, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER)
+                val ok1 = ArMath.projectCoordsToScreen(gx, groundY, -gridSpan, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER, isHorizontallyMirrored)
                 val p1 = if (ok1) Offset(TEMP_PROJ_HOLDER[0], TEMP_PROJ_HOLDER[1]) else null
-                val ok2 = ArMath.projectCoordsToScreen(gx, groundY, gridSpan, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER)
+                val ok2 = ArMath.projectCoordsToScreen(gx, groundY, gridSpan, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER, isHorizontallyMirrored)
                 val p2 = if (ok2) Offset(TEMP_PROJ_HOLDER[0], TEMP_PROJ_HOLDER[1]) else null
                 if (p1 != null && p2 != null) {
                     drawLine(
@@ -1105,9 +1106,9 @@ fun ArMeasurementCanvasOverlay(
             }
             var gz = -gridSpan
             while (gz <= gridSpan + 0.01) {
-                val ok1 = ArMath.projectCoordsToScreen(-gridSpan, groundY, gz, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER)
+                val ok1 = ArMath.projectCoordsToScreen(-gridSpan, groundY, gz, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER, isHorizontallyMirrored)
                 val p1 = if (ok1) Offset(TEMP_PROJ_HOLDER[0], TEMP_PROJ_HOLDER[1]) else null
-                val ok2 = ArMath.projectCoordsToScreen(gridSpan, groundY, gz, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER)
+                val ok2 = ArMath.projectCoordsToScreen(gridSpan, groundY, gz, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER, isHorizontallyMirrored)
                 val p2 = if (ok2) Offset(TEMP_PROJ_HOLDER[0], TEMP_PROJ_HOLDER[1]) else null
                 if (p1 != null && p2 != null) {
                     drawLine(

@@ -44,6 +44,7 @@ fun ModernArTopBar(
     onShowHelp: () -> Unit,
     onShowHistoryClick: () -> Unit,
     onShowSettingsClick: () -> Unit,
+    onSwitchCamera: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val isDark = isSystemInDarkTheme()
@@ -321,6 +322,34 @@ fun ModernArTopBar(
                         tint = colorOnSurface,
                         modifier = Modifier.size(19.dp)
                     )
+                }
+
+                // Camera Flip / Switch Button (Front <-> Rear)
+                onSwitchCamera?.let { switchAction ->
+                    val isFrontCamera by viewModel.isFrontCamera.collectAsState()
+                    IconButton(
+                        onClick = switchAction,
+                        modifier = Modifier
+                            .size(38.dp)
+                            .background(
+                                MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f),
+                                CircleShape
+                            )
+                            .border(
+                                width = 0.8.dp,
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f),
+                                shape = CircleShape
+                            )
+                            .shadow(2.dp, CircleShape)
+                            .testTag("switch_camera_facing_button")
+                    ) {
+                        Icon(
+                            Icons.Rounded.FlipCameraAndroid,
+                            contentDescription = if (isFrontCamera) "切換至後鏡頭" else "切換至前鏡頭",
+                            tint = if (isFrontCamera) colorPrimary else colorOnSurface,
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
                 }
 
                 // Torch Button

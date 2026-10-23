@@ -509,6 +509,7 @@ fun ModernArCameraView(
                     onShowHelp = { showHelpDialog = true },
                     onShowHistoryClick = onShowHistoryClick,
                     onShowSettingsClick = onShowSettingsClick,
+                    onSwitchCamera = { viewModel.switchCameraFacing(textureViewRef) },
                     modifier = Modifier.align(Alignment.TopCenter)
                 )
 
