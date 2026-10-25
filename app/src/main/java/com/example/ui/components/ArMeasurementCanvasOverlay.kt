@@ -14,6 +14,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
+import com.example.logic.ar.ArKalmanFilter3D
 import com.example.logic.ar.ArMath
 import com.example.ui.viewmodel.MeasureViewModel
 import com.example.ui.viewmodel.Point3D
@@ -392,13 +393,27 @@ fun ArMeasurementCanvasOverlay(
     val floorCirclePath = remember { Path() }
     val floorShadowPath = remember { Path() }
     
-    // Zero-allocation reusable coordinate buffer pools for 60fps canvas drawing
+    // Zero-allocation reusable coordinate buffer pools & Kalman filters for 60fps canvas drawing
     val projectedPool = remember { ProjectedPointPool(64) }
+    val smoothScreenBuffer = remember { FloatArray(128) { -1000f } }
+    val liveKalmanFilter = remember { ArKalmanFilter3D() }
+    val capturedKalmanFilters = remember { Array(64) { ArKalmanFilter3D() } }
     val reticleHolderProj = remember { ScreenPoint() }
     val validPtsBuffer = remember { Array(64) { ScreenPoint() } }
 
     // Persistent 2D smooth reticle position holder
     val reticlePosHolder = remember { floatArrayOf(-1000f, -1000f) }
+
+    // Reset filters and screen buffers on measurement clear
+    LaunchedEffect(capturedPoints.size) {
+        if (capturedPoints.isEmpty()) {
+            liveKalmanFilter.reset()
+            for (f in capturedKalmanFilters) {
+                f.reset()
+            }
+            smoothScreenBuffer.fill(-1000f)
+        }
+    }
 
     Canvas(
         modifier = modifier
@@ -412,14 +427,15 @@ fun ArMeasurementCanvasOverlay(
         val hasValidMatrices = viewMatrix.size >= 16 && projectionMatrix.size >= 16 &&
             ArMath.isMatrixValid(viewMatrix) && ArMath.isMatrixValid(projectionMatrix)
 
-        // Calculate real-time projected reticle position from 3D live target point
+        // Calculate real-time projected reticle position from 3D live target point (Kalman filtered)
         val rawTargetReticlePos = if (liveTargetScreenPos != null &&
             liveTargetScreenPos!!.x in (-120f)..(size.width + 120f) &&
             liveTargetScreenPos!!.y in (-120f)..(size.height + 120f)
         ) {
             liveTargetScreenPos!!
         } else if (liveTargetPoint != null && hasValidMatrices) {
-            val proj = ArMath.projectWorldToScreen(liveTargetPoint!!, viewMatrix, projectionMatrix, screenW, screenH, isHorizontallyMirrored)
+            val filteredLive = liveKalmanFilter.update(liveTargetPoint!!)
+            val proj = ArMath.projectWorldToScreen(filteredLive, viewMatrix, projectionMatrix, screenW, screenH, isHorizontallyMirrored)
             if (proj != null) Offset(proj.first, proj.second) else screenCenter
         } else {
             screenCenter
@@ -488,14 +504,38 @@ fun ArMeasurementCanvasOverlay(
             )
         }
 
-        // Project 3D points to 2D screen coordinates using zero-alloc buffer pool
+        // Project 3D points to 2D screen coordinates using Kalman filter, zero-alloc buffer pool & temporal screen smoothing
         val pointsSnapshot = capturedPoints
         val pointsCount = pointsSnapshot.size
         projectedPool.reset(pointsCount)
         for (i in 0 until pointsCount) {
-            val pt = pointsSnapshot[i]
-            val ok = ArMath.projectCoordsToScreen(pt.x, pt.y, pt.z, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER, isHorizontallyMirrored)
-            projectedPool.set(i, TEMP_PROJ_HOLDER[0], TEMP_PROJ_HOLDER[1], ok)
+            val rawPt = pointsSnapshot[i]
+            val filteredPt = capturedKalmanFilters[i].update(rawPt)
+            val ok = ArMath.projectCoordsToScreen(filteredPt.x, filteredPt.y, filteredPt.z, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER, isHorizontallyMirrored)
+            val bufIdx = i * 2
+            if (ok) {
+                val rawX = TEMP_PROJ_HOLDER[0]
+                val rawY = TEMP_PROJ_HOLDER[1]
+                val prevX = smoothScreenBuffer[bufIdx]
+                val prevY = smoothScreenBuffer[bufIdx + 1]
+
+                val finalX = if (prevX < -500f) rawX else prevX + (rawX - prevX) * 0.70f
+                val finalY = if (prevY < -500f) rawY else prevY + (rawY - prevY) * 0.70f
+
+                smoothScreenBuffer[bufIdx] = finalX
+                smoothScreenBuffer[bufIdx + 1] = finalY
+
+                projectedPool.set(i, finalX, finalY, true)
+            } else {
+                // Hold last valid projection briefly to prevent line flickering on temporary tracking loss
+                val prevX = smoothScreenBuffer[bufIdx]
+                val prevY = smoothScreenBuffer[bufIdx + 1]
+                if (prevX > -500f) {
+                    projectedPool.set(i, prevX, prevY, true)
+                } else {
+                    projectedPool.set(i, 0f, 0f, false)
+                }
+            }
         }
         val projectedPoints = projectedPool
 

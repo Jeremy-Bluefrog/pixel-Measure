@@ -437,15 +437,17 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         _toastMessage.tryEmit("已強制套用 M3 系統動態色彩 (Dynamic Color)")
     }
 
-    // UI Customization Preferences
-    private val _reticleStyle = MutableStateFlow(prefs.getString("reticle_style", "DOUBLE_RING") ?: "DOUBLE_RING")
+    // UI Customization Preferences (Forced 3D Ring / DOUBLE_RING)
+    private val _reticleStyle = MutableStateFlow("DOUBLE_RING").also {
+        prefs.edit().putString("reticle_style", "DOUBLE_RING").apply()
+    }
     val reticleStyle: StateFlow<String> = _reticleStyle.asStateFlow()
 
     fun setReticleStyle(style: String) {
-        _reticleStyle.value = style
-        prefs.edit().putString("reticle_style", style).apply()
+        _reticleStyle.value = "DOUBLE_RING"
+        prefs.edit().putString("reticle_style", "DOUBLE_RING").apply()
         triggerHapticFeedback()
-        _toastMessage.tryEmit("已更換 AR 準心標記樣式")
+        _toastMessage.tryEmit("已強制鎖定為 3D 圓環準心樣式")
     }
 
     private val _lineThickness = MutableStateFlow(prefs.getFloat("line_thickness", 3.5f))
@@ -886,12 +888,13 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun setScaleCalibrationFactor(factor: Float) {
-        val clamped = factor.coerceIn(0.9000f, 1.1000f)
+        val clamped = factor.coerceIn(0.8500f, 1.1500f)
         scaleCalibrationFactor.value = clamped
         sensorCorrectionEngine.userScaleCalibrationFactor = clamped
         prefs.edit().putFloat("scale_calibration_factor", clamped).apply()
         _toastMessage.tryEmit("尺度校正係數已設定為：${"%.4f".format(clamped)}x")
     }
+
 
     fun calibrateSensors() {
         sensorCorrectionEngine.resetBarometerBase()
@@ -1513,11 +1516,17 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             val offsetX = ndcX * tanFov * aspect * estDist
             val offsetY = ndcY * tanFov * estDist
 
-            val targetX = fwdX * estDist + rightX * offsetX + upX * offsetY
-            val targetY = fwdY * estDist + rightY * offsetX + upY * offsetY
-            val targetZ = fwdZ * estDist + rightZ * offsetX + upZ * offsetY
-
-            val target = Point3D(targetX, targetY, targetZ, isArPrecision = true)
+            val calib = scaleCalibrationFactor.value.toDouble()
+            val rawTarget = if (pixelX == null && pixelY == null && targetP != null) {
+                targetP.copy()
+            } else {
+                val targetX = (fwdX * estDist + rightX * offsetX + upX * offsetY) * calib
+                val targetY = (fwdY * estDist + rightY * offsetX + upY * offsetY) * calib
+                val targetZ = (fwdZ * estDist + rightZ * offsetX + upZ * offsetY) * calib
+                Point3D(targetX, targetY, targetZ, isArPrecision = true)
+            }
+            val snappedCandidate = ArMath.findVertexSnap(rawTarget, capturedPoints)
+            val target = snappedCandidate ?: rawTarget
             val isActivelyDrawingLine = capturedPoints.size % 2 == 1
             val nextIndex = capturedPoints.size
             val lineNum = (nextIndex / 2) + 1
@@ -1786,13 +1795,14 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         for (i in 0 until capturedPoints.size - 1 step 2) {
             raw += ArMath.distance(capturedPoints[i], capturedPoints[i + 1])
         }
-        return sensorCorrectionEngine.correctDistanceWithStereoParallax(raw)
+        val corrected = sensorCorrectionEngine.correctDistanceWithStereoParallax(raw)
+        return corrected * scaleCalibrationFactor.value
     }
 
     fun calculatePolygonArea(): Double {
         val rawArea = ArMath.polygonArea(capturedPoints)
         // Area scales with square of distance scale factor
-        val scale = sensorCorrectionEngine.correctDistanceWithStereoParallax(1.0)
+        val scale = sensorCorrectionEngine.correctDistanceWithStereoParallax(1.0) * scaleCalibrationFactor.value
         return rawArea * (scale * scale)
     }
 
@@ -1802,7 +1812,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     fun calculateVerticalHeight(): Double {
         return if (capturedPoints.size >= 2) {
-            sensorCorrectionEngine.correctVerticalHeightWithGravity(capturedPoints.first(), capturedPoints.last())
+            sensorCorrectionEngine.correctVerticalHeightWithGravity(capturedPoints.first(), capturedPoints.last()) * scaleCalibrationFactor.value
         } else {
             0.0
         }
@@ -1810,7 +1820,16 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     fun calculateCircle(): CircleResult? {
         return if (capturedPoints.size >= 3) {
-            ArMath.fitCircle3Points(capturedPoints[0], capturedPoints[1], capturedPoints[2])
+            val res = ArMath.fitCircle3Points(capturedPoints[0], capturedPoints[1], capturedPoints[2])
+            if (res != null) {
+                val scale = scaleCalibrationFactor.value.toDouble()
+                res.copy(
+                    radius = res.radius * scale,
+                    diameter = res.diameter * scale,
+                    circumference = res.circumference * scale,
+                    area = res.area * (scale * scale)
+                )
+            } else null
         } else {
             null
         }

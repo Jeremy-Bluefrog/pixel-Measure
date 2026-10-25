@@ -262,11 +262,9 @@ fun SettingsSheet(
                         onClick = {
                             viewModel.setMode(1)
                             viewModel.setRulerCalibrationActive(true)
-                            onDismissRequest()
                         }
                     )
 
-                    M3SettingsDivider()
 
                     // 1.3 High Definition Quality (Ultra HD)
                     M3SettingsSwitchItem(

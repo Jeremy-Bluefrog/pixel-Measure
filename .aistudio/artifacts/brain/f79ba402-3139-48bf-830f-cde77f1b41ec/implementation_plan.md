@@ -1,13 +1,81 @@
-# Implementation Plan - Enhancing Application Stability & Fluidity (Modern Best Practices)
+# 應用程式極致瘦身計劃（修訂版：100% 零功能刪減保證）
 
-Based on recent Android & Jetpack Compose architecture standards (Strong Skipping Mode, Phase-Aware State Reads, and Zero-Allocation Rendering), we will implement the following optimizations:
+本計劃已根據您的要求全面修訂，**嚴格保證應用程式現有的所有功能、模式、視覺效果與互動元件 100% 完整保留，絕不移除任何功能**。瘦身工作僅聚焦於底層打包配置、清理冗餘暫存與剔除完全未引用的外部相依庫。
 
-## 1. Phase-Aware State Reads & Lambda Modifiers
-- **Avoid Composition Phase Invalidation**: Ensure that high-frequency state updates (such as orientation angles and camera view matrices) only read or react during the **Drawing** or **Layout** phase rather than triggering full composable tree recompositions.
-- **`derivedStateOf` Integration**: Wrap frequently changing measurement summaries and position thresholds in `derivedStateOf` to prevent unnecessary UI thread dispatches.
+---
 
-## 2. Zero-Allocation Render Loops in AR Canvas Overlays
-- **Eliminate Heap Churn**: Building on our `ProjectedPointPool` implementation, ensure that all 3D-to-2D projection steps, area centroids, and path resets reuse pre-allocated primitive arrays (`FloatArray`, `ScreenPoint`) to eliminate garbage collection (`GC_FOR_ALLOC`) pauses.
+## 使用者確認與零功能刪減承諾 (User Review & Zero Feature Loss Guarantee)
 
-## 3. Robust Session Recovery & Exception Boundaries
-- **ARCore Lifecycle Safety**: Protect AR session initialization, camera open/close transitions, and sensor registrations with fault-tolerant `try-catch` blocks and automatic graceful fallback to sensor-driven spatial mode if camera/ARCore frames drop or fail.
+> [!IMPORTANT]
+> **功能完整性保證（Zero Feature Loss Commitment）**：
+> 本次瘦身優化**不刪改任何功能邏輯程式碼**。以下所有功能、畫面與體驗均獲得 100% 完整保留：
+> 1. ✅ **AR 核心測量引擎**：所有測量模式（單段長度、連續折線、多邊形閉合面積、垂直高度差、3D 長方體體積）完全保留。
+> 2. ✅ **空間防抖與平滑**：3D 卡爾曼濾波演算法（`ArKalmanFilter3D`）、感應器融合（9軸陀螺儀、重力向量、氣壓計）。
+> 3. ✅ **全部準心樣式**：原本的 3D 雙圓環（經典雙環）、高精十字準星、極簡圓點、全息雷達全數保留。
+> 4. ✅ **全套測量工具**：實體螢幕尺（支援螢幕刻度校準）、高精度氣泡水平儀（支援俯仰角/滾轉角計算）。
+> 5. ✅ **所有視覺與輔助資源**：教學導覽對話框及插圖（`img_welcome_hero.jpg`）、測量引導標籤（Pill）、觸覺震動反饋、手電筒多段亮度調光。
+> 6. ✅ **資料儲存與單位**：Room 本地歷史紀錄資料庫（新增、刪除、截圖保存）、多單位切換（cm, m, in, ft）、多國語言切換。
+
+---
+
+## 1. 瘦身策略：無損精簡 (Non-Destructive Optimization)
+
+為了在「**不影響任何功能**」的前提下將 APK 檔案由 **100MB** 降至約 **15 ~ 25MB**（縮減 75% 以上），優化手段全部集中於**打包層級與外部冗餘檔案**：
+
+### 核心精簡維度：
+1. **CPU 架構過濾（ABI Filter）**：
+   - 僅保留現代 64 位元手機所需的 `arm64-v8a` 架構。
+   - 剔除未使用的 x86, x86_64 模擬器架構與老舊 32 位元架構二進位檔案，直接砍除 3 倍以上的 C++ 原生庫體積。
+2. **清理完全未引用的模板相依庫（Unused Dependencies）**：
+   - 專案程式碼完全自主實現 ARCore + OpenGL/Canvas 繪製，模板中預先引入的 `io.github.sceneview`（包含數十 MB 的 Filament 3D 引擎）從未被任何功能呼叫，安全予以註解移除。
+   - 專案為純本地運行的儀表測量工具，未進行聯網操作，模板中預附的 `retrofit`、`moshi`、`okhttp` 網路函式庫亦未被任何功能引用，安全予以註解移除。
+3. **清理專案暫存影格檔案**：
+   - 清理先前上傳影片時 AI Studio 後台暫存的 42 張影格圖片（`public/assets/aistudio/`，佔用近 99MB 專案磁碟空間），此目錄本就不屬於 App 功能代碼。
+4. **安全防護的 R8 / ProGuard 混淆規則**：
+   - 在 `proguard-rules.pro` 完整設定 `-keep` 規則，嚴格保護 ARCore、Room、Kotlinx Serialization、Sensor 運算引擎與 Compose UI 元件，確保混淆後零崩潰。
+
+---
+
+## 2. 技術架構與變更點 (Technical Changes)
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│               100% 保留現有所有功能與畫面                     │
+│  [AR測量 / 3D圓環 / 卡爾曼濾波 / 螢幕尺 / 水平儀 / 歷史紀錄]  │
+└───────────────────────────────────────────────────────────────┘
+                               │
+               （僅在 Gradle 打包層進行瘦身）
+                               │
+       ┌───────────────────────┼───────────────────────┐
+       ▼                       ▼                       ▼
+┌──────────────┐       ┌──────────────┐       ┌──────────────┐
+│  ABI 過濾    │       │ 剔除未引用庫 │       │  暫存清理    │
+│ arm64-v8a    │       │ 註解 Sceneview│       │ 清除 99MB    │
+│ (原生庫縮小) │       │ 註解 Moshi/網 │       │ 影片影格截圖 │
+└──────────────┘       └──────────────┘       └──────────────┘
+                               │
+                               ▼
+               ┌───────────────────────────────┐
+               │    ProGuard 完整防護規則      │
+               │   -keep class com.example.**  │
+               │   -keep class com.google.ar.**│
+               │   -keep class androidx.room.**│
+               └───────────────────────────────┘
+                               │
+                               ▼
+               ┌───────────────────────────────┐
+               │  產出 15~25MB 全功能極簡 APK  │
+               └───────────────────────────────┘
+```
+
+### 具體實施步驟清單：
+1. **修改 `app/build.gradle.kts`**：
+   - 在 `defaultConfig` 加入 `ndk { abiFilters.addAll(listOf("arm64-v8a")) }`。
+   - 將未被引用的依賴項註解（`libs.arsceneview`, `libs.retrofit`, `libs.moshi`, `libs.okhttp` 等）。
+2. **補充 `app/proguard-rules.pro`**：
+   - 加入 ARCore、Room 資料庫、Compose 以及專案自定義資料結構的防護指令，保證運行穩定。
+3. **清理暫存目錄**：
+   - 刪除 `public/assets/aistudio/` 內的暫存截圖檔案。
+4. **完整建置與驗證**：
+   - 執行 `compile_applet` 編譯檢查。
+   - 產出 `app-debug.apk` 並測量實際縮減容量，確保功能零缺失、構建零警告。

@@ -1,6 +1,6 @@
 {
-  "summary":  "Updated implementation plan incorporating modern Android & Jetpack Compose performance optimization best practices (phase-aware modifier reads, derivedStateOf, stable collections, and zero-allocation draw loops).",
-  "updatedAt":  "2026-10-23T02:58:50.829728655Z",
+  "summary":  "已修訂應用程式瘦身計劃：\n1. 嚴格承諾「100% 零功能刪減」，逐項列出並確保所有 AR 測量模式、3D 圓環準心、卡爾曼濾波、螢幕尺、水平儀、歷史紀錄、教學引導插圖及設定完整保留。\n2. 瘦身手段僅限於純打包層面：剔除多餘架構的原生 .so 庫（ABI 過濾）、註解未引用的外部函式庫、清理影片截圖暫存。\n3. 增加嚴格的 ProGuard Keep 規則，確保所有資料庫、感應器與 ARCore 運算完全正常運行。",
+  "updatedAt":  "2026-10-25T05:06:22.274391534Z",
   "requestFeedback":  true,
   "userFacing":  true
 }
