@@ -1,5 +1,6 @@
 package com.example.ui.viewmodel
 
+import android.app.Activity
 import android.app.Application
 import android.app.LocaleManager
 import android.content.Context
@@ -216,6 +217,30 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     // Modern AR Engine & Session
     val modernArEngine = ModernArEngine(app)
     val arSession: Session? get() = modernArEngine.session
+    val arCoreStatus = modernArEngine.arCoreStatus
+    val arCoreStatusMessage = modernArEngine.arCoreStatusMessage
+
+    private var hasCheckedArCore = false
+
+    fun checkAndInitArCore(activity: Activity? = null, forceRetry: Boolean = false) {
+        if (modernArEngine.session != null) return
+        if (hasCheckedArCore && !forceRetry) return
+        hasCheckedArCore = true
+        viewModelScope.launch(Dispatchers.IO) {
+            val session = modernArEngine.checkAndCreateSession(activity)
+            if (session != null) {
+                _isMeasurementAvailable.value = true
+                Log.i("MeasureViewModel", "Google ARCore session active.")
+            }
+        }
+    }
+
+    fun requestInstallArCore(activity: Activity) {
+        val installed = modernArEngine.requestInstallArCore(activity)
+        if (installed) {
+            checkAndInitArCore(activity, forceRetry = true)
+        }
+    }
 
     private val _arTrackingState = MutableStateFlow(TrackingState.STOPPED)
     val arTrackingState: StateFlow<TrackingState> = _arTrackingState.asStateFlow()
@@ -1281,9 +1306,6 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         return processVulkanFrame(frame, engine)
     }
 
-    private val fallbackProjMatrixBuffer = FloatArray(16)
-    private val fallbackViewMatrixBuffer = FloatArray(16)
-    private var lastFallbackAspect = 0f
 
     private fun smoothLiveDistance(targetDist: Double): Double {
         val prev = _liveDistanceMeters.value ?: return targetDist
@@ -1396,74 +1418,6 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    init {
-        // High-precision reactive Sensor-Driven Spatial Engine:
-        // Synchronously updates on every sensor telemetry emission (0ms lag, matching 60-120 FPS high refresh displays)
-        viewModelScope.launch(Dispatchers.Default) {
-            sensorTelemetry.collect { telem ->
-                if (modernArEngine.session == null) {
-                    updateFallbackSpatialFrame(telem)
-                }
-            }
-        }
-    }
-
-    private fun updateFallbackSpatialFrame(telem: SensorCorrectionTelemetry = sensorTelemetry.value) {
-        if (_arTrackingState.value != TrackingState.TRACKING) {
-            _arTrackingState.value = TrackingState.TRACKING
-        }
-        if (_surfaceTypeAtCenter.value != "感應器空間校正") {
-            _surfaceTypeAtCenter.value = "感應器空間校正"
-        }
-
-        // Build standard perspective projection matrix (only re-generate if aspect ratio changed)
-        val aspect = displayWidth.toFloat() / displayHeight.coerceAtLeast(1).toFloat()
-        if (abs(aspect - lastFallbackAspect) > 0.01f || _projectionMatrix.value.size < 16) {
-            lastFallbackAspect = aspect
-            com.example.logic.vulkan.VulkanMatrix4.perspective(fallbackProjMatrixBuffer, 0, 60.0f, aspect, 0.1f, 50.0f)
-            _projectionMatrix.value = fallbackProjMatrixBuffer.clone()
-        }
-
-        // Build View Matrix from device rotation using pure VulkanMatrix4 (Inverse camera rotation R^-1)
-        com.example.logic.vulkan.VulkanMatrix4.setIdentity(fallbackViewMatrixBuffer, 0)
-        com.example.logic.vulkan.VulkanMatrix4.rotate(fallbackViewMatrixBuffer, 0, -telem.rollDeg, 0f, 0f, 1f)
-        com.example.logic.vulkan.VulkanMatrix4.rotate(fallbackViewMatrixBuffer, 0, telem.pitchDeg, 1f, 0f, 0f)
-        com.example.logic.vulkan.VulkanMatrix4.rotate(fallbackViewMatrixBuffer, 0, -telem.azimuthDeg, 0f, 1f, 0f)
-        _viewMatrix.value = fallbackViewMatrixBuffer.clone()
-
-        // Raycast depth estimation: pitch down creates distance to ground
-        val pitchRad = Math.toRadians(telem.pitchDeg.toDouble().coerceIn(-85.0, 85.0))
-        val estDist = if (pitchRad < -0.1) {
-            (1.35 / kotlin.math.sin(-pitchRad)).coerceIn(0.4, 10.0)
-        } else {
-            1.5
-        }
-
-        // Live target point in front of camera
-        val forwardX = kotlin.math.sin(Math.toRadians(telem.azimuthDeg.toDouble())) * kotlin.math.cos(pitchRad) * estDist
-        val forwardY = -kotlin.math.sin(pitchRad) * estDist
-        val forwardZ = -kotlin.math.cos(Math.toRadians(telem.azimuthDeg.toDouble())) * kotlin.math.cos(pitchRad) * estDist
-
-        val rawTarget = Point3D(forwardX, forwardY, forwardZ, isArPrecision = true)
-        val smoothed = ArMath.filterJitterEMA(_liveTargetPoint.value, rawTarget)
-        _liveTargetPoint.value = smoothed
-
-        if (displayWidth > 0 && displayHeight > 0) {
-            _liveTargetScreenPos.value = androidx.compose.ui.geometry.Offset(displayWidth / 2f, displayHeight / 2f)
-            _isMeasurementAvailable.value = true
-        }
-
-        val newDist = if (capturedPoints.isNotEmpty()) {
-            val dist = ArMath.distance(capturedPoints.last(), smoothed)
-            smoothLiveDistance(dist)
-        } else {
-            smoothLiveDistance(estDist)
-        }
-        val currentDist = _liveDistanceMeters.value
-        if (currentDist == null || abs(newDist - currentDist) > 0.005) {
-            _liveDistanceMeters.value = newDist
-        }
-    }
 
     fun requestHitTest(pixelX: Float? = null, pixelY: Float? = null) {
         val targetP = _liveTargetPoint.value
@@ -1484,69 +1438,9 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         if (modernArEngine.session != null) {
             pendingHitTestQueue.set(Pair(x, y))
         } else {
-            val telem = sensorTelemetry.value
-            val pitchRad = Math.toRadians(telem.pitchDeg.toDouble().coerceIn(-85.0, 85.0))
-            val estDist = if (pitchRad < -0.1) {
-                (1.35 / kotlin.math.sin(-pitchRad)).coerceIn(0.4, 10.0)
-            } else {
-                1.5
-            }
-            val azimuthRad = Math.toRadians(telem.azimuthDeg.toDouble())
-
-            val fwdX = sin(azimuthRad) * cos(pitchRad)
-            val fwdY = -sin(pitchRad)
-            val fwdZ = -cos(azimuthRad) * cos(pitchRad)
-
-            val rightX = cos(azimuthRad)
-            val rightY = 0.0
-            val rightZ = sin(azimuthRad)
-
-            val upX = -sin(pitchRad) * sin(azimuthRad)
-            val upY = cos(pitchRad)
-            val upZ = sin(pitchRad) * cos(azimuthRad)
-
-            val w = displayWidth.toFloat().coerceAtLeast(1f)
-            val h = displayHeight.toFloat().coerceAtLeast(1f)
-            val ndcX = (2.0f * x) / w - 1.0f
-            val ndcY = 1.0f - (2.0f * y) / h
-
-            val tanFov = tan(Math.toRadians(30.0))
-            val aspect = w / h
-
-            val offsetX = ndcX * tanFov * aspect * estDist
-            val offsetY = ndcY * tanFov * estDist
-
-            val calib = scaleCalibrationFactor.value.toDouble()
-            val rawTarget = if (pixelX == null && pixelY == null && targetP != null) {
-                targetP.copy()
-            } else {
-                val targetX = (fwdX * estDist + rightX * offsetX + upX * offsetY) * calib
-                val targetY = (fwdY * estDist + rightY * offsetX + upY * offsetY) * calib
-                val targetZ = (fwdZ * estDist + rightZ * offsetX + upZ * offsetY) * calib
-                Point3D(targetX, targetY, targetZ, isArPrecision = true)
-            }
-            val snappedCandidate = ArMath.findVertexSnap(rawTarget, capturedPoints)
-            val target = snappedCandidate ?: rawTarget
-            val isActivelyDrawingLine = capturedPoints.size % 2 == 1
-            val nextIndex = capturedPoints.size
-            val lineNum = (nextIndex / 2) + 1
-            val role = if (nextIndex % 2 == 0) "起點" else "終點"
-            val charCode = ('A'.code + nextIndex).toChar()
-            val namedP = target.copy(label = "線段$lineNum $role $charCode")
-
-            synchronized(pointsLock) {
-                saveUndoState()
-                capturedPoints.add(namedP)
-                updateCapturedPointsSnapshotCache()
-            }
-            triggerHapticFeedback(if (isActivelyDrawingLine) HapticType.HEAVY else HapticType.CLICK)
-            if (isActivelyDrawingLine) {
-                _toastMessage.tryEmit("線段 $lineNum 完成（兩點成一線）")
-            } else {
-                _toastMessage.tryEmit("已設定線段 $lineNum 起點 ($charCode)，請瞄準終點")
-            }
-            updateAutoDetectedGeometry()
+            _toastMessage.tryEmit("⚠️ 需要 Google ARCore 才能進行 3D 測量")
         }
+
     }
 
     private fun saveUndoState() {
@@ -2185,6 +2079,9 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     fun onResume() {
         syncWithSystemLocale()
+        if (modernArEngine.session == null && !hasCheckedArCore) {
+            checkAndInitArCore(null)
+        }
         modernArEngine.resume()
         sensorCorrectionEngine.startListening()
         updateBatteryStatusAndEvaluate(showToast = false)

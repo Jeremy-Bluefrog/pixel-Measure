@@ -315,6 +315,8 @@ private fun ModernArSensorStatusDialog(
     val rawDepthConfidenceEnabled by viewModel.rawDepthConfidenceEnabled.collectAsState()
     val rawDepthConfidenceThreshold by viewModel.rawDepthConfidenceThreshold.collectAsState()
     val highFpsModeEnabled by viewModel.highFpsModeEnabled.collectAsState()
+    val arCoreStatus by viewModel.arCoreStatus.collectAsState()
+    val arCoreStatusMessage by viewModel.arCoreStatusMessage.collectAsState()
     val colorPrimary = MaterialTheme.colorScheme.primary
 
     val df1 = remember { DecimalFormat("#,##0") }
@@ -335,6 +337,72 @@ private fun ModernArSensorStatusDialog(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                // Google ARCore Perception Engine Status Card
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = when (arCoreStatus) {
+                        com.example.logic.ar.ArCoreEngineStatus.ACTIVE -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                        com.example.logic.ar.ArCoreEngineStatus.NEEDS_INSTALLATION -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
+                        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    },
+                    border = BorderStroke(
+                        1.dp,
+                        when (arCoreStatus) {
+                            com.example.logic.ar.ArCoreEngineStatus.ACTIVE -> MaterialTheme.colorScheme.primary
+                            com.example.logic.ar.ArCoreEngineStatus.NEEDS_INSTALLATION -> MaterialTheme.colorScheme.tertiary
+                            else -> MaterialTheme.colorScheme.outlineVariant
+                        }
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Rounded.ViewInAr,
+                                contentDescription = null,
+                                tint = when (arCoreStatus) {
+                                    com.example.logic.ar.ArCoreEngineStatus.ACTIVE -> MaterialTheme.colorScheme.primary
+                                    com.example.logic.ar.ArCoreEngineStatus.NEEDS_INSTALLATION -> MaterialTheme.colorScheme.tertiary
+                                    else -> MaterialTheme.colorScheme.secondary
+                                },
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                "Google ARCore 核心感知引擎",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Text(
+                            text = arCoreStatusMessage,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (arCoreStatus == com.example.logic.ar.ArCoreEngineStatus.NEEDS_INSTALLATION) {
+                            val activity = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
+                            activity?.let { act ->
+                                Button(
+                                    onClick = { viewModel.requestInstallArCore(act) },
+                                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.tertiary
+                                    )
+                                ) {
+                                    Icon(Icons.Rounded.Download, null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("安裝 Google Play Services for AR", fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 Text(
                     "硬體感應器正在即時校驗 AR 空間座標，修正視角傾斜、手震與高程誤差：",
                     style = MaterialTheme.typography.bodySmall,

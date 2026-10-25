@@ -9,9 +9,22 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
     <uses-feature android:name="android.hardware.camera.flash" android:required="false" />
+    <!-- Google ARCore Camera Feature (Optional so app functions on both AR and non-AR devices) -->
+    <uses-feature android:name="android.hardware.camera.ar" android:required="false" />
     <!-- Vulkan Hardware Feature Optional (permits execution on all devices and emulators) -->
     <uses-feature android:name="android.hardware.vulkan.version" android:version="0x401000" android:required="false" />
     <uses-feature android:name="android.hardware.vulkan.level" android:version="1" android:required="false" />
+
+    <!-- Package visibility declarations for ARCore and Play Store install service on Android 11+ -->
+    <queries>
+        <package android:name="com.google.ar.core" />
+        <package android:name="com.android.vending" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="market" />
+        </intent>
+    </queries>
 
     <application
         android:allowBackup="true"

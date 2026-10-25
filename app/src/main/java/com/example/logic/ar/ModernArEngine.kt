@@ -1,10 +1,21 @@
 package com.example.logic.ar
 
+import android.app.Activity
 import android.content.Context
+import android.opengl.EGL14
+import android.opengl.EGLConfig
+import android.opengl.EGLContext
+import android.opengl.EGLDisplay
+import android.opengl.EGLSurface
+import android.opengl.GLES11Ext
+import android.opengl.GLES20
 import android.util.Log
 import com.example.ui.viewmodel.Point3D
 import com.google.ar.core.*
 import com.google.ar.core.exceptions.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.util.EnumSet
 
 /**
@@ -57,6 +68,18 @@ data class ModernArFrame(
  * multi-tier hit-testing (Planes, Depth, InstantPlacement, Points),
  * and dynamic Anchor management for zero-drift physical tracking.
  */
+enum class ArCoreEngineStatus {
+    ACTIVE,
+    NEEDS_INSTALLATION,
+    UNSUPPORTED,
+    ERROR
+}
+
+/**
+ * Modern AR Engine managing ARCore Session lifecycle, configurations,
+ * multi-tier hit-testing (Planes, Depth, InstantPlacement, Points),
+ * and dynamic Anchor management for zero-drift physical tracking.
+ */
 class ModernArEngine(private val context: Context) {
 
     var session: Session? = null
@@ -64,6 +87,12 @@ class ModernArEngine(private val context: Context) {
 
     var isSupported: Boolean = false
         private set
+
+    private val _arCoreStatus = MutableStateFlow(ArCoreEngineStatus.UNSUPPORTED)
+    val arCoreStatus: StateFlow<ArCoreEngineStatus> = _arCoreStatus.asStateFlow()
+
+    private val _arCoreStatusMessage = MutableStateFlow("正在檢查 Google ARCore 硬體狀態...")
+    val arCoreStatusMessage: StateFlow<String> = _arCoreStatusMessage.asStateFlow()
 
     var is60FpsActive: Boolean = false
         private set
@@ -84,18 +113,255 @@ class ModernArEngine(private val context: Context) {
     private var smoothedSpeedMps: Float = 0.05f
     private var smoothedConfidence: Float = 0.85f
 
+    private var userRequestedInstall = false
+    private var eglHelper: HeadlessEglHelper? = null
+    private val isInitializing = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    companion object {
+        /**
+         * Checks whether Google Play Store is installed and active on the device.
+         */
+        fun isGooglePlayStoreAvailable(context: Context): Boolean {
+            return try {
+                val pm = context.packageManager
+                val info = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                    pm.getPackageInfo("com.android.vending", android.content.pm.PackageManager.PackageInfoFlags.of(0))
+                } else {
+                    @Suppress("DEPRECATION")
+                    pm.getPackageInfo("com.android.vending", 0)
+                }
+                info.applicationInfo?.enabled == true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+
+        /**
+         * Checks whether Google Play Services for AR (ARCore) package is installed on the device.
+         */
+        fun isArCorePackageInstalled(context: Context): Boolean {
+            return try {
+                val pm = context.packageManager
+                val info = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                    pm.getPackageInfo("com.google.ar.core", android.content.pm.PackageManager.PackageInfoFlags.of(0))
+                } else {
+                    @Suppress("DEPRECATION")
+                    pm.getPackageInfo("com.google.ar.core", 0)
+                }
+                info.applicationInfo?.enabled == true
+            } catch (_: Throwable) {
+                false
+            }
+        }
+    }
+
     /**
      * Check device compatibility and create configured ARCore Session safely.
+     * Prevents Play Store install service binding errors when Play Store is absent,
+     * and gracefully falls back to 9-axis sensor fusion without user interruption.
      */
-    fun createSession(): Session? {
+    fun checkAndCreateSession(activity: Activity? = null): Session? {
         if (session != null) return session
+        if (!isInitializing.compareAndSet(false, true)) {
+            return session
+        }
 
-        // In the current architecture, camera preview is rendered directly via TextureView and
-        // HighSpeedCamera2Manager with 3D spatial sensor fusion and Compose Canvas overlays.
-        // ARCore without an OpenGL ES context locks the camera exclusively without displaying frames.
-        Log.i("ModernArEngine", "Activating High-Speed Camera2 Direct Preview & Spatial Sensor Fusion.")
-        isSupported = false
+        try {
+            val arCoreInstalled = isArCorePackageInstalled(context)
+            val playStoreAvailable = isGooglePlayStoreAvailable(context)
+
+            // Case 1: ARCore package is already installed - initialize session directly
+            if (arCoreInstalled) {
+                try {
+                    val newSession = Session(context)
+                    val config = Config(newSession)
+                    config.focusMode = Config.FocusMode.AUTO
+                    config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
+                    config.lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
+
+                    try {
+                        if (newSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
+                            config.depthMode = Config.DepthMode.AUTOMATIC
+                            isDepthModeActive = true
+                        }
+                    } catch (_: Throwable) {}
+
+                    try {
+                        config.instantPlacementMode = Config.InstantPlacementMode.LOCAL_Y_UP
+                    } catch (_: Throwable) {}
+
+                    newSession.configure(config)
+
+                    // Initialize headless EGL context and bind texture so session.update() works flawlessly
+                    val helper = HeadlessEglHelper()
+                    val texId = helper.init()
+                    if (texId > 0) {
+                        newSession.setCameraTextureName(texId)
+                        eglHelper = helper
+                    }
+
+                    session = newSession
+                    isSupported = true
+                    _arCoreStatus.value = ArCoreEngineStatus.ACTIVE
+                    _arCoreStatusMessage.value = "Google ARCore 已就緒 (水平/垂直平面與深度追蹤)"
+                    Log.i("ModernArEngine", "Google ARCore Session successfully created & configured.")
+                    return newSession
+                } catch (e: UnavailableDeviceNotCompatibleException) {
+                    isSupported = false
+                    _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
+                    _arCoreStatusMessage.value = "此硬體不相容 Google ARCore"
+                    return null
+                } catch (e: UnavailableApkTooOldException) {
+                    isSupported = false
+                    _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
+                    _arCoreStatusMessage.value = "Google Play Services for AR 版本過舊，請前往商店更新"
+                    return null
+                } catch (t: Throwable) {
+                    Log.w("ModernArEngine", "Direct ARCore Session init failed: ${t.message}")
+                }
+            }
+
+            // Case 2: ARCore is NOT installed, and Google Play Store is not present (e.g. streaming emulator, AOSP)
+            // Do NOT attempt to query or bind Play Store InstallService, avoid E/ARCore-InstallService error logs.
+            if (!playStoreAvailable) {
+                isSupported = false
+                _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
+                _arCoreStatusMessage.value = "此環境未安裝 Google Play 商店，無法使用 ARCore"
+                Log.i("ModernArEngine", "Google Play Store not found. ARCore not available.")
+                return null
+            }
+
+            // Case 3: Google Play Store is present, avoid calling checkAvailability if ARCore package is not installed
+            // to prevent E/ARCore-InstallService Play Store install service could not be bound errors.
+            val availability = if (arCoreInstalled) {
+                try {
+                    ArCoreApk.getInstance().checkAvailability(context)
+                } catch (e: Throwable) {
+                    Log.w("ModernArEngine", "checkAvailability error: ${e.message}")
+                    ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE
+                }
+            } else {
+                ArCoreApk.Availability.SUPPORTED_NOT_INSTALLED
+            }
+            Log.i("ModernArEngine", "ARCore hardware availability: $availability")
+
+            when {
+                availability == ArCoreApk.Availability.SUPPORTED_INSTALLED -> {
+                    val newSession = Session(context)
+                    val config = Config(newSession)
+                    config.focusMode = Config.FocusMode.AUTO
+                    config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
+                    config.lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
+
+                    try {
+                        if (newSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
+                            config.depthMode = Config.DepthMode.AUTOMATIC
+                            isDepthModeActive = true
+                        }
+                    } catch (_: Throwable) {}
+
+                    try {
+                        config.instantPlacementMode = Config.InstantPlacementMode.LOCAL_Y_UP
+                    } catch (_: Throwable) {}
+
+                    newSession.configure(config)
+
+                    val helper = HeadlessEglHelper()
+                    val texId = helper.init()
+                    if (texId > 0) {
+                        newSession.setCameraTextureName(texId)
+                        eglHelper = helper
+                    }
+
+                    session = newSession
+                    isSupported = true
+                    _arCoreStatus.value = ArCoreEngineStatus.ACTIVE
+                    _arCoreStatusMessage.value = "Google ARCore 已就緒 (水平/垂直平面與深度追蹤)"
+                    Log.i("ModernArEngine", "Google ARCore Session successfully created & configured.")
+                    return newSession
+                }
+                availability == ArCoreApk.Availability.SUPPORTED_NOT_INSTALLED || availability == ArCoreApk.Availability.SUPPORTED_APK_TOO_OLD -> {
+                    // Do not auto-launch installation popup during app launch without user trigger.
+                    // Keep status ready for manual installation in the sensor status dialog.
+                    isSupported = false
+                    _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
+                    _arCoreStatusMessage.value = "裝置支援 ARCore，可於感應器面板點擊安裝以啟用 3D 空間追蹤"
+                    return null
+                }
+                availability == ArCoreApk.Availability.UNKNOWN_CHECKING -> {
+                    _arCoreStatusMessage.value = "正在確認 ARCore 硬體相容性..."
+                    return null
+                }
+                else -> {
+                    isSupported = false
+                    _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
+                    _arCoreStatusMessage.value = "此環境或裝置不支援 ARCore"
+                    Log.i("ModernArEngine", "ARCore unsupported on device.")
+                    return null
+                }
+            }
+        } catch (e: UnavailableArcoreNotInstalledException) {
+            _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
+            _arCoreStatusMessage.value = "尚未安裝 Google Play Services for AR"
+            isSupported = false
+        } catch (e: UnavailableDeviceNotCompatibleException) {
+            _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
+            _arCoreStatusMessage.value = "此硬體不相容 Google ARCore"
+            isSupported = false
+        } catch (e: UnavailableApkTooOldException) {
+            _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
+            _arCoreStatusMessage.value = "Google Play Services for AR 版本過舊，請前往商店更新"
+            isSupported = false
+        } catch (e: UnavailableSdkTooOldException) {
+            _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
+            _arCoreStatusMessage.value = "應用程式 ARCore SDK 版本不相容"
+            isSupported = false
+        } catch (e: UnavailableUserDeclinedInstallationException) {
+            _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
+            _arCoreStatusMessage.value = "使用者已取消安裝 ARCore"
+            isSupported = false
+        } catch (t: Throwable) {
+            Log.e("ModernArEngine", "ARCore Session init exception: ${t.message}", t)
+            _arCoreStatus.value = ArCoreEngineStatus.ERROR
+            _arCoreStatusMessage.value = "ARCore 初始化失敗 (${t.localizedMessage ?: "未知"})"
+            isSupported = false
+        } finally {
+            isInitializing.set(false)
+        }
         return null
+    }
+
+    /**
+     * User-requested explicit installation of Google Play Services for AR.
+     */
+    fun requestInstallArCore(activity: Activity): Boolean {
+        if (!isGooglePlayStoreAvailable(activity)) {
+            _arCoreStatusMessage.value = "裝置未安裝 Google Play 商店，無法安裝 ARCore"
+            Log.i("ModernArEngine", "Cannot request install: Play Store not available on device.")
+            return false
+        }
+        return try {
+            val status = ArCoreApk.getInstance().requestInstall(activity, true)
+            if (status == ArCoreApk.InstallStatus.INSTALLED) {
+                checkAndCreateSession(activity)
+                true
+            } else {
+                false
+            }
+        } catch (e: Throwable) {
+            Log.w("ModernArEngine", "Error requesting ARCore install: ${e.message}")
+            false
+        }
+    }
+
+    fun makeGlContextCurrent() {
+        try {
+            eglHelper?.makeCurrent()
+        } catch (_: Throwable) {}
+    }
+
+    fun createSession(): Session? {
+        return checkAndCreateSession(null)
     }
 
     fun setTorchMode(enabled: Boolean): Boolean {
@@ -126,7 +392,10 @@ class ModernArEngine(private val context: Context) {
 
     fun resume() {
         try {
+            eglHelper?.makeCurrent()
             session?.resume()
+        } catch (e: CameraNotAvailableException) {
+            Log.w("ModernArEngine", "Camera not available for ARCore: ${e.message}")
         } catch (e: Exception) {
             Log.e("ModernArEngine", "Failed to resume ARCore session", e)
         }
@@ -154,6 +423,8 @@ class ModernArEngine(private val context: Context) {
         }
         session = null
         isTorchActive = false
+        eglHelper?.release()
+        eglHelper = null
     }
 
     /**
@@ -710,3 +981,87 @@ data class HitTestResult(
     val planeType: Plane.Type? = null,
     val isSnappedToFeature: Boolean = false
 )
+
+/**
+ * Headless EGL context providing an OpenGL ES texture ID for ARCore camera streaming.
+ * Operates purely offscreen without requiring a GLSurfaceView.
+ */
+private class HeadlessEglHelper {
+    private var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
+    private var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
+    private var eglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
+    var textureId: Int = 0
+        private set
+
+    fun init(): Int {
+        try {
+            eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
+            if (eglDisplay == EGL14.EGL_NO_DISPLAY) return 0
+
+            val version = IntArray(2)
+            if (!EGL14.eglInitialize(eglDisplay, version, 0, version, 1)) return 0
+
+            val attribList = intArrayOf(
+                EGL14.EGL_RED_SIZE, 8,
+                EGL14.EGL_GREEN_SIZE, 8,
+                EGL14.EGL_BLUE_SIZE, 8,
+                EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
+                EGL14.EGL_SURFACE_TYPE, EGL14.EGL_PBUFFER_BIT,
+                EGL14.EGL_NONE
+            )
+            val configs = arrayOfNulls<EGLConfig>(1)
+            val numConfigs = IntArray(1)
+            EGL14.eglChooseConfig(eglDisplay, attribList, 0, configs, 0, 1, numConfigs, 0)
+            if (numConfigs[0] <= 0 || configs[0] == null) return 0
+
+            val contextAttribs = intArrayOf(
+                EGL14.EGL_CONTEXT_CLIENT_VERSION, 2,
+                EGL14.EGL_NONE
+            )
+            eglContext = EGL14.eglCreateContext(eglDisplay, configs[0], EGL14.EGL_NO_CONTEXT, contextAttribs, 0)
+            if (eglContext == EGL14.EGL_NO_CONTEXT) return 0
+
+            val pbufferAttribs = intArrayOf(
+                EGL14.EGL_WIDTH, 1,
+                EGL14.EGL_HEIGHT, 1,
+                EGL14.EGL_NONE
+            )
+            eglSurface = EGL14.eglCreatePbufferSurface(eglDisplay, configs[0], pbufferAttribs, 0)
+            if (eglSurface == EGL14.EGL_NO_SURFACE) return 0
+
+            EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
+
+            val textures = IntArray(1)
+            GLES20.glGenTextures(1, textures, 0)
+            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textures[0])
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST)
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_NEAREST)
+            textureId = textures[0]
+            return textureId
+        } catch (e: Throwable) {
+            Log.w("HeadlessEglHelper", "Headless EGL setup skipped: ${e.message}")
+            return 0
+        }
+    }
+
+    fun makeCurrent() {
+        if (eglDisplay != EGL14.EGL_NO_DISPLAY && eglSurface != EGL14.EGL_NO_SURFACE && eglContext != EGL14.EGL_NO_CONTEXT) {
+            EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
+        }
+    }
+
+    fun release() {
+        try {
+            if (textureId != 0) {
+                GLES20.glDeleteTextures(1, intArrayOf(textureId), 0)
+                textureId = 0
+            }
+            if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
+                EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
+                if (eglSurface != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(eglDisplay, eglSurface)
+                if (eglContext != EGL14.EGL_NO_CONTEXT) EGL14.eglDestroyContext(eglDisplay, eglContext)
+                EGL14.eglTerminate(eglDisplay)
+            }
+        } catch (_: Throwable) {}
+    }
+}

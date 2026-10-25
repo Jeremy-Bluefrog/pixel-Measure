@@ -136,15 +136,15 @@ class VulkanArSceneView(
 
     private fun processVulkanFrame() {
         try {
-            val arSession = session ?: return
             val arEngine = modernArEngine ?: return
+            val arSession = session ?: arEngine.session ?: return
 
-            // Pump ARCore session update on Vulkan pipeline
+            arEngine.makeGlContextCurrent()
             val frame = arSession.update()
             viewModel?.let { vm ->
                 vm.processVulkanFrame(frame, arEngine)
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             // Expected during pause/resume transitions
         }
     }

@@ -397,6 +397,24 @@ fun ModernArCameraView(
                 }
             }
 
+            // 0. ARCore / Vulkan 60 FPS Frame Driver Companion
+            AndroidView(
+                factory = { ctx ->
+                    VulkanArSceneView(
+                        context = ctx,
+                        session = viewModel.arSession,
+                        modernArEngine = viewModel.modernArEngine,
+                        viewModel = viewModel
+                    ).also {
+                        modernArVulkanViewRef = it
+                    }
+                },
+                update = { v ->
+                    modernArVulkanViewRef = v
+                },
+                modifier = Modifier.size(1.dp)
+            )
+
             // 1. High-Performance, Rock-Solid Camera2 TextureView Surface
             AndroidView(
                 factory = { ctx ->

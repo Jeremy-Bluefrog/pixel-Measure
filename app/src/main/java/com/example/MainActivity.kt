@@ -34,6 +34,7 @@ class MainActivity : ComponentActivity() {
 
         // Initialize the measuring tool viewmodel
         viewModel = ViewModelProvider(this)[MeasureViewModel::class.java]
+        viewModel.checkAndInitArCore(this)
         
         setContent {
             val dynamicColor by viewModel.dynamicColorEnabled.collectAsState()
