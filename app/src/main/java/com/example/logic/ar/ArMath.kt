@@ -288,15 +288,20 @@ object ArMath {
         val d = distance(previous, current)
         if (d.isNaN() || d.isInfinite()) return current
 
-        // Advanced adaptive low-pass filter with velocity prediction and smoothstep transition:
-        // Eliminates micro-tremors, shaking, and tracking latency.
-        // For micro-vibrations (< 15mm), alpha = 0.22 provides rock-solid holding without drift.
-        // As movement accelerates, alpha scales up to 0.98 for zero-lag tracking.
-        val minAlpha = 0.22
-        val maxAlpha = 0.98
-        val d0 = 0.015 // 15mm characteristic transition distance
+        // Quad-tier anti-jitter filter with true zero-drift deadband:
+        // 1. Holding still (< 3.0mm): complete zero-drift deadband lock (stops hand tremor buzzing)
+        if (d < 0.0030) {
+            return previous
+        }
 
-        val t = (d / d0).coerceIn(0.0, 1.0)
+        // 2. Micro-aiming adjustment (3.0mm .. 35mm): gentle, silky smooth interpolation
+        // 3. Normal motion (35mm .. 80mm): responsive smoothstep tracking
+        // 4. Fast sweeping (> 80mm): instantaneous zero-lag response
+        val minAlpha = 0.08
+        val maxAlpha = 0.96
+        val d0 = 0.035 // 35mm characteristic transition distance
+
+        val t = ((d - 0.0030) / (d0 - 0.0030)).coerceIn(0.0, 1.0)
         val alphaScale = t * t * (3.0 - 2.0 * t)
         val finalAlpha = minAlpha + (maxAlpha - minAlpha) * alphaScale
 

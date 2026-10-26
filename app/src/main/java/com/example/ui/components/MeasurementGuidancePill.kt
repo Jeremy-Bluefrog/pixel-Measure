@@ -162,9 +162,9 @@ fun MeasurementGuidancePill(
     ) {
         Row(
             modifier = Modifier
-                .padding(horizontal = 14.dp, vertical = 9.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             // Animated Icon Box
             Box(

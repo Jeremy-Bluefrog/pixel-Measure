@@ -278,6 +278,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private val vulkanViewMatrixBuffer = FloatArray(16)
     private val vulkanProjMatrixBuffer = FloatArray(16)
+    private var lastTapTimestampMs = 0L
     @Deprecated("Legacy alias for Vulkan view matrix buffer")
     private val glViewMatrixBuffer: FloatArray get() = vulkanViewMatrixBuffer
     @Deprecated("Legacy alias for Vulkan projection matrix buffer")
@@ -1195,7 +1196,10 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 _isSnapped.value = false
             }
 
-            _liveTargetPoint.value = finalTargetPoint
+            val prevTarget = _liveTargetPoint.value
+            if (prevTarget == null || ArMath.distance(prevTarget, finalTargetPoint) > 0.0020) {
+                _liveTargetPoint.value = finalTargetPoint
+            }
             if (displayWidth > 0 && displayHeight > 0) {
                 if (ArMath.projectWorldToScreenInPlace(
                         worldPoint = finalTargetPoint,
@@ -1307,6 +1311,8 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
 
+
+
     private fun smoothLiveDistance(targetDist: Double): Double {
         val prev = _liveDistanceMeters.value ?: return targetDist
         val diff = abs(targetDist - prev)
@@ -1314,15 +1320,15 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
         // Continuous 1-Euro style distance filter with smoothstep curve:
         // Gently stabilizes micro-fluctuations without digit flickering or sudden jumps
-        val minAlpha = 0.03
-        val maxAlpha = 0.90
+        val minAlpha = 0.04
+        val maxAlpha = 0.92
         val t = (diff / 0.04).coerceIn(0.0, 1.0)
         val alphaScale = t * t * (3.0 - 2.0 * t) // smoothstep
         val alpha = minAlpha + (maxAlpha - minAlpha) * alphaScale
 
         val filtered = prev * (1.0 - alpha) + targetDist * alpha
-        // Deadband: if distance difference is under 2.5mm, retain previous value to avoid StateFlow recomposition churn
-        return if (abs(filtered - prev) < 0.0025) prev else filtered
+        // Deadband: if distance difference is under 3.5mm, retain previous value to avoid StateFlow recomposition churn
+        return if (abs(filtered - prev) < 0.0035) prev else filtered
     }
 
     private fun updateAutoDetectedGeometry() {
@@ -1353,7 +1359,9 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         if (_arTrackingState.value != data.trackingState) _arTrackingState.value = data.trackingState
         if (_trackingFailureReason.value != data.trackingFailureReason) _trackingFailureReason.value = data.trackingFailureReason
         _viewMatrix.value = data.viewMatrix
-        _projectionMatrix.value = data.projectionMatrix
+        if (!data.projectionMatrix.contentEquals(_projectionMatrix.value)) {
+            _projectionMatrix.value = data.projectionMatrix
+        }
         if (_isDepthAvailable.value != data.isDepthAvailable) _isDepthAvailable.value = data.isDepthAvailable
         if (_detectedPlanes.value !== data.planes) {
             _detectedPlanes.value = data.planes
@@ -1420,6 +1428,12 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
 
     fun requestHitTest(pixelX: Float? = null, pixelY: Float? = null) {
+        val now = System.currentTimeMillis()
+        if (now - lastTapTimestampMs < 180L) {
+            return // Debounce rapid double taps to avoid duplicate points
+        }
+        lastTapTimestampMs = now
+
         val targetP = _liveTargetPoint.value
         val proj = if (pixelX == null && pixelY == null && targetP != null && _viewMatrix.value.size >= 16 && _projectionMatrix.value.size >= 16) {
             ArMath.projectWorldToScreen(targetP, _viewMatrix.value, _projectionMatrix.value, displayWidth.toInt(), displayHeight.toInt())
@@ -1438,7 +1452,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         if (modernArEngine.session != null) {
             pendingHitTestQueue.set(Pair(x, y))
         } else {
-            _toastMessage.tryEmit("⚠️ 需要 Google ARCore 才能進行 3D 測量")
+            _toastMessage.tryEmit("⚠️ 警告：Google ARCore 未就緒或不受支援，無法進行 3D 測量")
         }
 
     }

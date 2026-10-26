@@ -20,14 +20,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CameraAlt
-import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -48,6 +47,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.example.logic.vulkan.VulkanArSceneView
+import com.example.logic.ar.ArCoreEngineStatus
 import com.example.logic.ar.StabilityLevel
 import com.example.logic.camera.ArVideoRecorder
 import com.example.logic.camera.HighSpeedCamera2Manager
@@ -129,6 +129,7 @@ fun ModernArCameraView(
     val isLensSmudged by viewModel.isLensSmudged.collectAsState()
     val simulatedAlert by viewModel.simulatedAlert.collectAsState()
     val uiButtonScale by viewModel.uiButtonScale.collectAsState()
+    val arCoreStatus by viewModel.arCoreStatus.collectAsState()
 
     // Video Recorder
     val videoRecorder = remember { ArVideoRecorder(context) }
@@ -508,6 +509,25 @@ fun ModernArCameraView(
                         .statusBarsPadding()
                         .padding(top = 96.dp, start = 16.dp, end = 16.dp)
                 )
+            }
+            
+            if (arCoreStatus != ArCoreEngineStatus.ACTIVE && arCoreStatus != ArCoreEngineStatus.UNSUPPORTED) {
+                 // Non-intrusive status warning
+                 Surface(
+                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .statusBarsPadding()
+                        .padding(top = 16.dp)
+                        .clickable { showSensorStatusDialog = true }
+                 ) {
+                     Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                         Icon(Icons.Rounded.HelpOutline, null, tint = MaterialTheme.colorScheme.onTertiaryContainer)
+                         Spacer(Modifier.width(8.dp))
+                         Text("AR 功能受限，點擊檢查狀態", color = MaterialTheme.colorScheme.onTertiaryContainer, fontWeight = FontWeight.Bold)
+                     }
+                 }
             }
 
             // 4. Clean Minimal Top Bar

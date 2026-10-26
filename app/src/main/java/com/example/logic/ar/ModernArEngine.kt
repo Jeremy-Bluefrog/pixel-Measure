@@ -281,11 +281,9 @@ class ModernArEngine(private val context: Context) {
                     return newSession
                 }
                 availability == ArCoreApk.Availability.SUPPORTED_NOT_INSTALLED || availability == ArCoreApk.Availability.SUPPORTED_APK_TOO_OLD -> {
-                    // Do not auto-launch installation popup during app launch without user trigger.
-                    // Keep status ready for manual installation in the sensor status dialog.
                     isSupported = false
                     _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
-                    _arCoreStatusMessage.value = "裝置支援 ARCore，可於感應器面板點擊安裝以啟用 3D 空間追蹤"
+                    _arCoreStatusMessage.value = "⚠️ 警告：裝置支援 ARCore 但尚未安裝，請安裝 Google Play Services for AR 才能進行測量"
                     return null
                 }
                 availability == ArCoreApk.Availability.UNKNOWN_CHECKING -> {
@@ -295,35 +293,35 @@ class ModernArEngine(private val context: Context) {
                 else -> {
                     isSupported = false
                     _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
-                    _arCoreStatusMessage.value = "此環境或裝置不支援 ARCore"
-                    Log.i("ModernArEngine", "ARCore unsupported on device.")
+                    _arCoreStatusMessage.value = "⚠️ 警告：此裝置或環境不支援 Google ARCore，無法進行 3D 空間測量"
+                    Log.i("ModernArEngine", "ARCore unsupported on device. No fallback active.")
                     return null
                 }
             }
         } catch (e: UnavailableArcoreNotInstalledException) {
             _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
-            _arCoreStatusMessage.value = "尚未安裝 Google Play Services for AR"
+            _arCoreStatusMessage.value = "⚠️ 警告：尚未安裝 Google Play Services for AR"
             isSupported = false
         } catch (e: UnavailableDeviceNotCompatibleException) {
             _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
-            _arCoreStatusMessage.value = "此硬體不相容 Google ARCore"
+            _arCoreStatusMessage.value = "⚠️ 警告：此硬體不相容 Google ARCore"
             isSupported = false
         } catch (e: UnavailableApkTooOldException) {
             _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
-            _arCoreStatusMessage.value = "Google Play Services for AR 版本過舊，請前往商店更新"
+            _arCoreStatusMessage.value = "⚠️ 警告：Google Play Services for AR 版本過舊"
             isSupported = false
         } catch (e: UnavailableSdkTooOldException) {
             _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
-            _arCoreStatusMessage.value = "應用程式 ARCore SDK 版本不相容"
+            _arCoreStatusMessage.value = "⚠️ 警告：應用程式 ARCore SDK 版本不相容"
             isSupported = false
         } catch (e: UnavailableUserDeclinedInstallationException) {
             _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
-            _arCoreStatusMessage.value = "使用者已取消安裝 ARCore"
+            _arCoreStatusMessage.value = "⚠️ 警告：使用者已取消安裝 ARCore"
             isSupported = false
         } catch (t: Throwable) {
             Log.e("ModernArEngine", "ARCore Session init exception: ${t.message}", t)
             _arCoreStatus.value = ArCoreEngineStatus.ERROR
-            _arCoreStatusMessage.value = "ARCore 初始化失敗 (${t.localizedMessage ?: "未知"})"
+            _arCoreStatusMessage.value = "⚠️ 警告：ARCore 初始化失敗 (${t.localizedMessage ?: "未知"})"
             isSupported = false
         } finally {
             isInitializing.set(false)

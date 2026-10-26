@@ -156,7 +156,7 @@ fun ModernArBottomDeck(
                                 viewModel.undo()
                             },
                             modifier = Modifier
-                                .size((44 * uiButtonScale).dp)
+                                .size((48 * uiButtonScale).dp)
                                 .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.70f else 0.88f), CircleShape)
                                 .border(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f), CircleShape)
                                 .shadow(3.dp, CircleShape)
@@ -166,7 +166,7 @@ fun ModernArBottomDeck(
                                 Icons.Rounded.Undo,
                                 contentDescription = "復原上一點",
                                 tint = colorOnSurface,
-                                modifier = Modifier.size((20 * uiButtonScale).dp)
+                                modifier = Modifier.size((24 * uiButtonScale).dp)
                             )
                         }
 
@@ -176,7 +176,7 @@ fun ModernArBottomDeck(
                                 viewModel.clearActivePoints()
                             },
                             modifier = Modifier
-                                .size((44 * uiButtonScale).dp)
+                                .size((48 * uiButtonScale).dp)
                                 .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.85f), CircleShape)
                                 .border(0.8.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.55f), CircleShape)
                                 .shadow(3.dp, CircleShape)
@@ -186,7 +186,7 @@ fun ModernArBottomDeck(
                                 Icons.Rounded.DeleteOutline,
                                 contentDescription = "全部清除",
                                 tint = MaterialTheme.colorScheme.onErrorContainer,
-                                modifier = Modifier.size((20 * uiButtonScale).dp)
+                                modifier = Modifier.size((24 * uiButtonScale).dp)
                             )
                         }
                     }
@@ -432,9 +432,10 @@ private fun LiveDistanceBadge(
         modifier = Modifier.shadow(4.dp, RoundedCornerShape(18.dp))
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            modifier = Modifier
+                .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Icon(Icons.Rounded.Straighten, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(15.dp))
             val liveDistText = liveDistanceMeters?.let { viewModel.formatLength(it, selectedUnit) } ?: "量測中..."
@@ -515,7 +516,7 @@ private fun MeasurementLiveSummaryCard(
             .testTag("measurement_live_summary_card")
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {

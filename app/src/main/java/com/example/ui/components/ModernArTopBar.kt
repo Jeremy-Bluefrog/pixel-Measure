@@ -66,14 +66,14 @@ fun ModernArTopBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .statusBarsPadding()
-                .padding(horizontal = 14.dp, vertical = 6.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Left: Quick SubMode Selector & Unit Selector
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 // SubMode Selector Pill
                 var showSubModeMenu by remember { mutableStateOf(false) }
@@ -95,9 +95,9 @@ fun ModernArTopBar(
                         modifier = Modifier.testTag("submode_selector_button")
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             Icon(
                                 when (subMode) {
@@ -221,75 +221,7 @@ fun ModernArTopBar(
                     }
                 }
 
-                // Aspect Ratio Selector Pill
-                var showRatioMenu by remember { mutableStateOf(false) }
-                val ratioLabel = when (cameraAspectRatio) {
-                    "16_9" -> "16:9"
-                    "4_3" -> "4:3"
-                    "1_1" -> "1:1"
-                    else -> "全螢幕"
-                }
 
-                Box {
-                    Surface(
-                        onClick = { showRatioMenu = true },
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f),
-                        contentColor = if (cameraAspectRatio == "FULL") colorPrimary else colorOnSurface,
-                        border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f)),
-                        shadowElevation = 2.dp,
-                        modifier = Modifier.testTag("ratio_selector_button")
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(3.dp)
-                        ) {
-                            Icon(
-                                Icons.Rounded.AspectRatio,
-                                contentDescription = "畫面比例",
-                                tint = if (cameraAspectRatio == "FULL") colorPrimary else colorOnSurfaceVariant,
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Text(
-                                text = ratioLabel,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (cameraAspectRatio == "FULL") colorPrimary else colorOnSurface
-                            )
-                        }
-                    }
-
-                    DropdownMenu(
-                        expanded = showRatioMenu,
-                        onDismissRequest = { showRatioMenu = false },
-                        modifier = Modifier.background(colorSurfaceContainer)
-                    ) {
-                        listOf(
-                            "FULL" to "全螢幕 (無遮罩)",
-                            "16_9" to "16:9 寬螢幕",
-                            "4_3" to "4:3 標準構圖",
-                            "1_1" to "1:1 正方形"
-                        ).forEach { (key, label) ->
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        label,
-                                        fontWeight = if (cameraAspectRatio == key) FontWeight.Bold else FontWeight.Normal,
-                                        color = if (cameraAspectRatio == key) colorPrimary else colorOnSurface
-                                    )
-                                },
-                                onClick = {
-                                    viewModel.setCameraAspectRatio(key)
-                                    showRatioMenu = false
-                                },
-                                leadingIcon = if (cameraAspectRatio == key) {
-                                    { Icon(Icons.Rounded.Check, null, tint = colorPrimary) }
-                                } else null
-                            )
-                        }
-                    }
-                }
             }
 
             Spacer(modifier = Modifier.weight(1f))
@@ -299,30 +231,7 @@ fun ModernArTopBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                // Help Button
-                IconButton(
-                    onClick = onShowHelp,
-                    modifier = Modifier
-                        .size(38.dp)
-                        .background(
-                            MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f),
-                            CircleShape
-                        )
-                        .border(
-                            width = 0.8.dp,
-                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f),
-                            shape = CircleShape
-                        )
-                        .shadow(2.dp, CircleShape)
-                        .testTag("help_guide_button")
-                ) {
-                    Icon(
-                        Icons.Rounded.HelpOutline,
-                        contentDescription = "測量指南",
-                        tint = colorOnSurface,
-                        modifier = Modifier.size(19.dp)
-                    )
-                }
+
 
                 // Camera Flip / Switch Button (Front <-> Rear)
                 onSwitchCamera?.let { switchAction ->
@@ -552,68 +461,7 @@ fun ModernArTopBar(
                 .padding(top = 54.dp)
         )
 
-        // 3. Aspect Ratio Framing Overlay
-        if (cameraAspectRatio != "FULL") {
-            val targetRatio = when (cameraAspectRatio) {
-                "4_3" -> 3f / 4f
-                "16_9" -> 9f / 16f
-                "1_1" -> 1.0f
-                else -> 0f
-            }
-            if (targetRatio > 0f) {
-                BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                    val totalW = maxWidth
-                    val totalH = maxHeight
-                    if (totalW.value > 0f && totalH.value > 0f) {
-                        val currentRatio = totalW.value / totalH.value
-                        var padH = 0.dp
-                        var padV = 0.dp
 
-                        if (currentRatio > targetRatio) {
-                            val frameW = totalH.value * targetRatio
-                            padH = ((totalW.value - frameW) / 2f).coerceAtLeast(0f).dp
-                        } else {
-                            val frameH = totalW.value / targetRatio
-                            padV = ((totalH.value - frameH) / 2f).coerceAtLeast(0f).dp
-                        }
-
-                        val maskColor = Color.Black.copy(alpha = 0.45f)
-                        if (padV > 0.dp) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(padV)
-                                    .align(Alignment.TopCenter)
-                                    .background(maskColor)
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(padV)
-                                    .align(Alignment.BottomCenter)
-                                    .background(maskColor)
-                            )
-                        }
-                        if (padH > 0.dp) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxHeight()
-                                    .width(padH)
-                                    .align(Alignment.CenterStart)
-                                    .background(maskColor)
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxHeight()
-                                    .width(padH)
-                                    .align(Alignment.CenterEnd)
-                                    .background(maskColor)
-                            )
-                        }
-                    }
-                }
-            }
-        }
 
         // 4. Video Recording Active HUD
         if (isRecordingVideo) {
