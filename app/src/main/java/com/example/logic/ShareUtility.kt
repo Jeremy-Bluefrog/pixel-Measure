@@ -117,6 +117,12 @@ object ShareUtility {
         // 4. Crop to Aspect Ratio and save
         val croppedBitmap = cropBitmapToAspectRatio(compositeBitmap, aspectRatio)
         val savedPath = saveBitmapToInternalStorage(view.context, croppedBitmap, useDisplayP3)
+        try {
+            if (croppedBitmap != compositeBitmap) {
+                compositeBitmap.recycle()
+            }
+            croppedBitmap.recycle()
+        } catch (_: Throwable) {}
         onComplete(savedPath)
     }
 

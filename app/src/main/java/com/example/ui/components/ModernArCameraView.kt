@@ -173,8 +173,10 @@ fun ModernArCameraView(
                         textureViewRef?.let { tv ->
                             if (tv.isAvailable) {
                                 viewModel.setHighSpeedCamera2Manager(camera2Manager)
+                                viewModel.modernArEngine.sharedCamera?.let { camera2Manager.sharedCamera = it }
                                 camera2Manager.openCameraAndStartSession(tv) { isHighSpeed, size ->
                                     android.util.Log.i("CameraView", "Session resumed. HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
+                                    viewModel.modernArEngine.resume()
                                     tv.post {
                                         camera2Manager.configureTransform(tv, tv.width, tv.height)
                                     }
@@ -194,6 +196,7 @@ fun ModernArCameraView(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             camera2Manager.closeCamera()
+            modernArVulkanViewRef?.destroy()
             viewModel.onPause()
             viewModel.setHighSpeedCamera2Manager(null)
             viewModel.releaseVulkanPipelineBuffers()
@@ -413,6 +416,12 @@ fun ModernArCameraView(
                 update = { v ->
                     modernArVulkanViewRef = v
                 },
+                onRelease = { v ->
+                    v.destroy()
+                    if (modernArVulkanViewRef == v) {
+                        modernArVulkanViewRef = null
+                    }
+                },
                 modifier = Modifier.size(1.dp)
             )
 
@@ -424,14 +433,17 @@ fun ModernArCameraView(
                     }
                     textureViewRef = textureView
                     viewModel.setHighSpeedCamera2Manager(camera2Manager)
+                    viewModel.modernArEngine.sharedCamera?.let { camera2Manager.sharedCamera = it }
 
                     textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
                         override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
                             val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) ctx.display else (ctx.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager)?.defaultDisplay
                             val rot = display?.rotation ?: android.view.Surface.ROTATION_0
                             viewModel.updateDisplayGeometry(rot, width, height)
+                            viewModel.modernArEngine.sharedCamera?.let { camera2Manager.sharedCamera = it }
                             camera2Manager.openCameraAndStartSession(textureView) { isHighSpeed, size ->
                                 android.util.Log.i("CameraView", "Session ready. HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
+                                viewModel.modernArEngine.resume()
                                 textureView.post {
                                     camera2Manager.configureTransform(textureView, width, height)
                                 }
@@ -454,8 +466,10 @@ fun ModernArCameraView(
                         val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) ctx.display else (ctx.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager)?.defaultDisplay
                         val rot = display?.rotation ?: android.view.Surface.ROTATION_0
                         viewModel.updateDisplayGeometry(rot, textureView.width, textureView.height)
+                        viewModel.modernArEngine.sharedCamera?.let { camera2Manager.sharedCamera = it }
                         camera2Manager.openCameraAndStartSession(textureView) { isHighSpeed, size ->
                             android.util.Log.i("CameraView", "Session ready (immediate). HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
+                            viewModel.modernArEngine.resume()
                             textureView.post {
                                 camera2Manager.configureTransform(textureView, textureView.width, textureView.height)
                             }

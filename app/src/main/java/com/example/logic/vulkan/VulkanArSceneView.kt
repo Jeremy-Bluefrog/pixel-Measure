@@ -35,17 +35,28 @@ class VulkanArSceneView(
         private const val TAG = "VulkanArSceneView"
     }
 
+    // Deterministic Lifecycle State Machine
+    private val _renderState = java.util.concurrent.atomic.AtomicReference(VulkanRenderState.UNINITIALIZED)
+    val renderState: VulkanRenderState get() = _renderState.get()
+
+    @Volatile
     private var isRendering = false
     private var renderThread: HandlerThread? = null
     private var renderHandler: Handler? = null
     private var surfaceWidth = 0
     private var surfaceHeight = 0
 
+    // Frame synchronization & watchdog
+    val frameSyncManager = VulkanFrameSyncManager(maxFramesInFlight = 2)
+
     // Zero-copy HardwareBuffer manager for direct Vulkan memory sharing
     val hardwareBufferManager = VulkanHardwareBufferManager()
 
     init {
         holder.addCallback(this)
+        frameSyncManager.onWatchdogTriggered = {
+            handleWatchdogTimeoutRecovery()
+        }
         // Request 60Hz frame rate on the Vulkan surface directly
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             try {
@@ -57,7 +68,8 @@ class VulkanArSceneView(
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
-        Log.i(TAG, "Vulkan Surface created. Initializing pure Vulkan pipeline.")
+        Log.i(TAG, "Vulkan Surface created. Transitioning to SURFACE_ATTACHED.")
+        _renderState.set(VulkanRenderState.SURFACE_ATTACHED)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             try {
                 holder.surface?.setFrameRate(60.0f, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
@@ -67,27 +79,41 @@ class VulkanArSceneView(
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-        surfaceWidth = width
-        surfaceHeight = height
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            try {
-                holder.surface?.setFrameRate(60.0f, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
-            } catch (_: Throwable) {}
+        if (width > 1 && height > 1) {
+            surfaceWidth = width
+            surfaceHeight = height
+            _renderState.set(VulkanRenderState.SWAPCHAIN_CONFIGURED)
+            Log.i(TAG, "Vulkan Swapchain configured: ${width}x${height}")
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                try {
+                    holder.surface?.setFrameRate(60.0f, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
+                } catch (_: Throwable) {}
+            }
+            session?.setDisplayGeometry(0, width, height)
+            viewModel?.updateDisplayGeometry(0, width, height)
+
+            if (isRendering) {
+                _renderState.set(VulkanRenderState.ACTIVE_RENDER_LOOP)
+            }
         }
-        session?.setDisplayGeometry(0, width, height)
-        viewModel?.updateDisplayGeometry(0, width, height)
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
-        Log.i(TAG, "Vulkan Surface destroyed.")
+        Log.i(TAG, "Vulkan Surface destroyed. Transitioning to SAFE_SUSPENDED.")
+        _renderState.set(VulkanRenderState.SAFE_SUSPENDED)
         stopRenderLoop()
     }
 
     fun onResume() {
+        if (_renderState.get() == VulkanRenderState.SAFE_SUSPENDED && holder.surface.isValid) {
+            _renderState.set(VulkanRenderState.SWAPCHAIN_CONFIGURED)
+        }
         startRenderLoop()
     }
 
     fun onPause() {
+        _renderState.set(VulkanRenderState.SAFE_SUSPENDED)
         stopRenderLoop()
     }
 
@@ -98,6 +124,7 @@ class VulkanArSceneView(
     private fun startRenderLoop() {
         if (isRendering) return
         isRendering = true
+        _renderState.set(VulkanRenderState.ACTIVE_RENDER_LOOP)
 
         renderThread = HandlerThread("VulkanRenderThread").apply {
             start()
@@ -109,11 +136,41 @@ class VulkanArSceneView(
 
     private fun stopRenderLoop() {
         isRendering = false
+        _renderState.set(VulkanRenderState.SAFE_SUSPENDED)
         Choreographer.getInstance().removeFrameCallback(this)
+
+        // Enforce synchronous GPU idle wait before destroying window context
+        frameSyncManager.waitAllFencesIdle(timeoutMs = 150L)
+
+        renderHandler?.post {
+            modernArEngine?.detachGlContext()
+        }
+        val thread = renderThread
         renderThread?.quitSafely()
+        try {
+            thread?.join(250)
+        } catch (_: InterruptedException) {}
         renderThread = null
         renderHandler = null
-        hardwareBufferManager.release()
+
+        frameSyncManager.reset()
+    }
+
+    private fun handleWatchdogTimeoutRecovery() {
+        Log.w(TAG, "Watchdog triggered pipeline rebuild.")
+        _renderState.set(VulkanRenderState.REBUILDING_PIPELINE)
+        renderHandler?.post {
+            frameSyncManager.reset()
+            modernArEngine?.detachGlContext()
+            if (holder.surface.isValid && surfaceWidth > 0 && surfaceHeight > 0) {
+                _renderState.set(VulkanRenderState.SWAPCHAIN_CONFIGURED)
+                if (isRendering) {
+                    _renderState.set(VulkanRenderState.ACTIVE_RENDER_LOOP)
+                }
+            } else {
+                _renderState.set(VulkanRenderState.SAFE_SUSPENDED)
+            }
+        }
     }
 
     /**
@@ -121,31 +178,55 @@ class VulkanArSceneView(
      */
     fun destroy() {
         stopRenderLoop()
+        hardwareBufferManager.release()
+        frameSyncManager.reset()
+        _renderState.set(VulkanRenderState.UNINITIALIZED)
     }
 
     override fun doFrame(frameTimeNanos: Long) {
-        if (!isRendering) return
+        if (!isRendering || !_renderState.get().canRender) return
 
         // Zero-allocation post using reusable Runnable
         renderHandler?.post(frameProcessRunnable)
 
-        if (isRendering) {
+        if (isRendering && _renderState.get().canRender) {
             Choreographer.getInstance().postFrameCallback(this)
         }
     }
 
+    private var logThrottleCounter = 0
+
     private fun processVulkanFrame() {
+        if (!isRendering || !holder.surface.isValid || !_renderState.get().canRender) {
+            return
+        }
+
+        val slot = frameSyncManager.acquireNextFrameSlot(timeoutMs = 50L)
+        if (slot < 0) {
+            // Drop frame gracefully when GPU is currently rendering
+            return
+        }
+
         try {
             val arEngine = modernArEngine ?: return
             val arSession = session ?: arEngine.session ?: return
 
-            arEngine.makeGlContextCurrent()
-            val frame = arSession.update()
-            viewModel?.let { vm ->
-                vm.processVulkanFrame(frame, arEngine)
+            if (arEngine.makeGlContextCurrent()) {
+                try {
+                    val frame = arSession.update()
+                    viewModel?.let { vm ->
+                        vm.processVulkanFrame(frame, arEngine)
+                    }
+                } finally {
+                    arEngine.detachGlContext()
+                }
             }
-        } catch (_: Exception) {
-            // Expected during pause/resume transitions
+        } catch (e: Exception) {
+            if (logThrottleCounter++ % 180 == 0) {
+                Log.d(TAG, "ARCore update state: ${e.message}")
+            }
+        } finally {
+            frameSyncManager.signalFrameCompleted(slot)
         }
     }
 

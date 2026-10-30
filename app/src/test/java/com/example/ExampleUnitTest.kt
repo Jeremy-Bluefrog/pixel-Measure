@@ -222,5 +222,147 @@ class ExampleUnitTest {
     assertTrue("Mirrored point should be on left half (X < 500)", outMirrored[0] < 500.0f)
     assertEquals(1000.0f - outNormal[0], outMirrored[0], 1.0f)
   }
+
+  @Test
+  fun `verify ArMath verticalHeight calculates true height without depth bias`() {
+    val base = com.example.ui.viewmodel.Point3D(0.0, 0.0, -1.0)
+    // Top point with 1.2m height difference and 3.0m depth difference
+    val top = com.example.ui.viewmodel.Point3D(0.0, 1.2, -4.0)
+
+    val height = com.example.logic.ar.ArMath.verticalHeight(base, top)
+    assertEquals(1.2, height, 1e-6)
+  }
+
+  @Test
+  fun `verify ArMath fitCircle3Points rejects collinear degenerate points`() {
+    val p1 = com.example.ui.viewmodel.Point3D(0.0, 0.0, 0.0)
+    val p2 = com.example.ui.viewmodel.Point3D(1.0, 0.0, 0.0)
+    val p3 = com.example.ui.viewmodel.Point3D(2.0, 0.0, 0.0) // perfectly straight line
+
+    val circle = com.example.logic.ar.ArMath.fitCircle3Points(p1, p2, p3)
+    assertNull("Collinear points must return null circle to prevent radius explosion", circle)
+  }
+
+  @Test
+  fun `verify ArMath polygonArea calculates square area accurately`() {
+    val p1 = com.example.ui.viewmodel.Point3D(0.0, 0.0, 0.0)
+    val p2 = com.example.ui.viewmodel.Point3D(2.0, 0.0, 0.0)
+    val p3 = com.example.ui.viewmodel.Point3D(2.0, 2.0, 0.0)
+    val p4 = com.example.ui.viewmodel.Point3D(0.0, 2.0, 0.0)
+
+    val area = com.example.logic.ar.ArMath.polygonArea(listOf(p1, p2, p3, p4))
+    assertEquals(4.0, area, 1e-4)
+  }
+
+  @Test
+  fun `verify ProjectedPointPool capacity is at least 128`() {
+    val pool = com.example.ui.components.ProjectedPointPool()
+    assertEquals(128, pool.capacity)
+    assertEquals(128, pool.pool.size)
+  }
+
+  @Test
+  fun `verify VulkanRenderState canRender capability`() {
+    assertTrue(com.example.logic.vulkan.VulkanRenderState.ACTIVE_RENDER_LOOP.canRender)
+    assertTrue(com.example.logic.vulkan.VulkanRenderState.SWAPCHAIN_CONFIGURED.canRender)
+    assertFalse(com.example.logic.vulkan.VulkanRenderState.UNINITIALIZED.canRender)
+    assertFalse(com.example.logic.vulkan.VulkanRenderState.SURFACE_ATTACHED.canRender)
+    assertFalse(com.example.logic.vulkan.VulkanRenderState.SAFE_SUSPENDED.canRender)
+    assertFalse(com.example.logic.vulkan.VulkanRenderState.REBUILDING_PIPELINE.canRender)
+  }
+
+  @Test
+  fun `verify VulkanFrameSyncManager double-buffering fences and idle draining`() {
+    val sync = com.example.logic.vulkan.VulkanFrameSyncManager(maxFramesInFlight = 2)
+
+    // Acquire slot 0
+    val slot0 = sync.acquireNextFrameSlot(timeoutMs = 50L)
+    assertEquals(0, slot0)
+
+    // Acquire slot 1
+    val slot1 = sync.acquireNextFrameSlot(timeoutMs = 50L)
+    assertEquals(1, slot1)
+
+    // Next acquire should wait for slot 0 to be signaled
+    // Simulate async GPU completion for slot 0
+    sync.signalFrameCompleted(slot0)
+    val slot0Reused = sync.acquireNextFrameSlot(timeoutMs = 50L)
+    assertEquals(0, slot0Reused)
+
+    // Draining all fences
+    sync.signalFrameCompleted(slot1)
+    sync.signalFrameCompleted(slot0Reused)
+    val idleDrained = sync.waitAllFencesIdle(timeoutMs = 100L)
+    assertTrue("All fences must drain cleanly to idle", idleDrained)
+  }
+
+  @Test
+  fun `verify VulkanFrameSyncManager watchdog triggers on consecutive timeouts`() {
+    val sync = com.example.logic.vulkan.VulkanFrameSyncManager(maxFramesInFlight = 1)
+    var watchdogFired = false
+    sync.onWatchdogTriggered = {
+      watchdogFired = true
+    }
+
+    // Acquire the only slot without signaling completion
+    val slot = sync.acquireNextFrameSlot(timeoutMs = 20L)
+    assertEquals(0, slot)
+
+    // Consecutive timed out acquisitions
+    sync.acquireNextFrameSlot(timeoutMs = 5L)
+    sync.acquireNextFrameSlot(timeoutMs = 5L)
+    sync.acquireNextFrameSlot(timeoutMs = 5L)
+
+    assertTrue("Watchdog should trigger after 3 consecutive frame timeouts", watchdogFired)
+    sync.reset()
+  }
+
+  @Test
+  fun `verify ArMath detects self-intersecting polygon`() {
+    // Bow-tie / figure-8 polygon: (0,0) -> (2,2) -> (2,0) -> (0,2)
+    // Edge (0,0)->(2,2) crosses edge (2,0)->(0,2) at (1,1)
+    val bowTie = listOf(
+      com.example.ui.viewmodel.Point3D(0.0, 0.0, 0.0),
+      com.example.ui.viewmodel.Point3D(2.0, 2.0, 0.0),
+      com.example.ui.viewmodel.Point3D(2.0, 0.0, 0.0),
+      com.example.ui.viewmodel.Point3D(0.0, 2.0, 0.0)
+    )
+    assertTrue("Bow-tie polygon must be detected as self-intersecting", com.example.logic.ar.ArMath.isPolygonSelfIntersecting(bowTie))
+
+    // Regular convex square: (0,0) -> (2,0) -> (2,2) -> (0,2)
+    val square = listOf(
+      com.example.ui.viewmodel.Point3D(0.0, 0.0, 0.0),
+      com.example.ui.viewmodel.Point3D(2.0, 0.0, 0.0),
+      com.example.ui.viewmodel.Point3D(2.0, 2.0, 0.0),
+      com.example.ui.viewmodel.Point3D(0.0, 2.0, 0.0)
+    )
+    assertFalse("Convex square should NOT be self-intersecting", com.example.logic.ar.ArMath.isPolygonSelfIntersecting(square))
+  }
+
+  @Test
+  fun `verify ArMath calculateBoundingBox with empty and single point`() {
+    val emptyResult = com.example.logic.ar.ArMath.calculateBoundingBox(emptyList())
+    assertEquals(0.0, emptyResult.volume, 1e-6)
+    assertEquals(0.0, emptyResult.surfaceArea, 1e-6)
+
+    val singlePoint = listOf(com.example.ui.viewmodel.Point3D(1.5, 2.5, 3.5))
+    val singleResult = com.example.logic.ar.ArMath.calculateBoundingBox(singlePoint)
+    assertEquals(0.0, singleResult.volume, 1e-6)
+    assertEquals(0.0, singleResult.surfaceArea, 1e-6)
+    assertEquals(1.5, singleResult.minX, 1e-6)
+    assertEquals(1.5, singleResult.maxX, 1e-6)
+  }
+
+  @Test
+  fun `verify ArMath fitCircle3Points near-collinear points rejection`() {
+    // 3 points with a tiny 0.00001m perturbation off a 2-meter line
+    val p1 = com.example.ui.viewmodel.Point3D(0.0, 0.0, 0.0)
+    val p2 = com.example.ui.viewmodel.Point3D(1.0, 0.00001, 0.0)
+    val p3 = com.example.ui.viewmodel.Point3D(2.0, 0.0, 0.0)
+
+    val circle = com.example.logic.ar.ArMath.fitCircle3Points(p1, p2, p3)
+    assertNull("Near-collinear points must be rejected to prevent giant radius explosion", circle)
+  }
 }
+
 

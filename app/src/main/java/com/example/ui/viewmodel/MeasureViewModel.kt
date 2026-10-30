@@ -223,13 +223,26 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     private var hasCheckedArCore = false
 
     fun checkAndInitArCore(activity: Activity? = null, forceRetry: Boolean = false) {
-        if (modernArEngine.session != null) return
+        if (modernArEngine.session != null) {
+            modernArEngine.resume()
+            return
+        }
         if (hasCheckedArCore && !forceRetry) return
         hasCheckedArCore = true
         viewModelScope.launch(Dispatchers.IO) {
             val session = modernArEngine.checkAndCreateSession(activity)
             if (session != null) {
-                _isMeasurementAvailable.value = true
+                withContext(Dispatchers.Main) {
+                    _isMeasurementAvailable.value = true
+                    val sc = modernArEngine.sharedCamera
+                    if (sc != null && highSpeedCamera2Manager != null) {
+                        highSpeedCamera2Manager?.reconnectWithSharedCamera(sc) { _, _ ->
+                            modernArEngine.resume()
+                        }
+                    } else {
+                        modernArEngine.resume()
+                    }
+                }
                 Log.i("MeasureViewModel", "Google ARCore session active.")
             }
         }
@@ -686,6 +699,9 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 var pixelCount = 0
                 val pixels = IntArray(48 * 48)
                 scaled.getPixels(pixels, 0, 48, 0, 0, 48, 48)
+                if (scaled != bitmap) {
+                    try { scaled.recycle() } catch (_: Throwable) {}
+                }
 
                 for (y in 1 until 47) {
                     val rowIdx = y * 48
@@ -1289,6 +1305,10 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
             android.os.Handler(android.os.Looper.getMainLooper()).post {
                 synchronized(pointsLock) {
+                    if (capturedPoints.size >= 256) {
+                        _toastMessage.tryEmit("已達最大測量點上限 (256點)，請儲存或清除後再繼續")
+                        return@post
+                    }
                     saveUndoState()
                     capturedPoints.add(namedP)
                     updateCapturedPointsSnapshotCache()
@@ -1540,6 +1560,10 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun setHighSpeedCamera2Manager(manager: com.example.logic.camera.HighSpeedCamera2Manager?) {
         highSpeedCamera2Manager = manager
         if (manager != null) {
+            val sc = modernArEngine.sharedCamera
+            if (sc != null) {
+                manager.sharedCamera = sc
+            }
             _isFrontCamera.value = manager.isFrontFacing
             _isHorizontallyMirrored.value = manager.isHorizontallyMirrored || manager.isFrontFacing
             if (_isTorchOn.value) {

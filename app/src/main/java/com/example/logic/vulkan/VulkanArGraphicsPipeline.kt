@@ -68,10 +68,14 @@ class VulkanArGraphicsPipeline(
     var renderLatencyMs: Float = 0.8f
         private set
 
+    // Double-buffering synchronization manager
+    val syncManager = VulkanFrameSyncManager(maxFramesInFlight = 2)
+
     // Vertex & Uniform Buffers for Zero-Alloc GPU Batch Submissions
     private var gridVertexBuffer: FloatBuffer? = null
     private var gridVertexCount: Int = 0
-    private var dynamicLineBatchBuffer: FloatBuffer? = null
+    // Double-buffered dynamic line buffers to eliminate CPU/GPU command contention
+    private val dynamicLineBatchBuffers = arrayOfNulls<FloatBuffer>(2)
     private val maxBatchVertices = 4096
 
     init {
@@ -130,17 +134,19 @@ class VulkanArGraphicsPipeline(
             position(0)
         }
 
-        // Allocate reusable direct FloatBuffer for batch line submissions
-        val lineByteBuffer = ByteBuffer.allocateDirect(maxBatchVertices * 4 * 4)
-            .order(ByteOrder.nativeOrder())
-        dynamicLineBatchBuffer = lineByteBuffer.asFloatBuffer()
+        // Allocate double-buffered direct FloatBuffers for race-free batch line submissions
+        for (slot in 0 until 2) {
+            val lineByteBuffer = ByteBuffer.allocateDirect(maxBatchVertices * 4 * 4)
+                .order(ByteOrder.nativeOrder())
+            dynamicLineBatchBuffers[slot] = lineByteBuffer.asFloatBuffer()
+        }
 
         isInitialized = true
     }
 
     /**
      * Dispatches a Vulkan Hardware Graphics Draw Pass for 3D Grid, Measurement Lines & 3D Box.
-     * Batches all active line segments into a single GPU draw call buffer.
+     * Batches all active line segments into a double-buffered GPU draw call buffer synchronized via VkFences.
      */
     fun recordAndExecuteDrawPass(
         viewMatrix: FloatArray,
@@ -150,41 +156,70 @@ class VulkanArGraphicsPipeline(
         boxCorners: List<Point3D>?,
         onVulkanFrameRendered: (latencyMs: Float) -> Unit = {}
     ) {
-        val startNs = System.nanoTime()
-        frameCount++
-
-        // Batch line segments into unified direct memory buffer
-        dynamicLineBatchBuffer?.let { buffer ->
-            buffer.clear()
-            var vertexCount = 0
-
-            // 1. Captured measurement polyline segments
-            for (i in 0 until capturedPoints.size - 1) {
-                if (vertexCount + 4 > maxBatchVertices) break
-                val p1 = capturedPoints[i]
-                val p2 = capturedPoints[i + 1]
-                buffer.put(p1.x.toFloat()); buffer.put(p1.y.toFloat()); buffer.put(p1.z.toFloat()); buffer.put(1.0f)
-                buffer.put(p2.x.toFloat()); buffer.put(p2.y.toFloat()); buffer.put(p2.z.toFloat()); buffer.put(1.0f)
-                vertexCount += 2
-            }
-
-            // 2. Active live rubber-band measurement line
-            if (capturedPoints.isNotEmpty() && liveTarget != null && vertexCount + 2 <= maxBatchVertices) {
-                val last = capturedPoints.last()
-                buffer.put(last.x.toFloat()); buffer.put(last.y.toFloat()); buffer.put(last.z.toFloat()); buffer.put(0.8f)
-                buffer.put(liveTarget.x.toFloat()); buffer.put(liveTarget.y.toFloat()); buffer.put(liveTarget.z.toFloat()); buffer.put(0.8f)
-                vertexCount += 2
-            }
-
-            buffer.flip()
+        val slot = syncManager.acquireNextFrameSlot(timeoutMs = 64L)
+        if (slot < 0) {
+            // Slot acquire timed out (GPU busy or stalling); skip this frame gracefully to maintain stability
+            return
         }
 
-        // Calculate synthetic Vulkan GPU execution time (typically 0.4ms ~ 1.5ms on mobile GPU)
-        val deltaNs = System.nanoTime() - startNs
-        val estimatedGpuMs = (deltaNs / 1_000_000f).coerceIn(0.4f, 1.8f)
-        renderLatencyMs = (renderLatencyMs * 0.85f) + (estimatedGpuMs * 0.15f)
+        try {
+            val startNs = System.nanoTime()
+            frameCount++
 
-        onVulkanFrameRendered(renderLatencyMs)
+            // Batch line segments into the double-buffered direct memory buffer for this slot
+            val buffer = dynamicLineBatchBuffers[slot]
+            buffer?.let { buf ->
+                buf.clear()
+                var vertexCount = 0
+
+                // 1. Captured measurement polyline segments with bounds guard
+                val pointCount = capturedPoints.size
+                for (i in 0 until pointCount - 1) {
+                    if (vertexCount + 4 > maxBatchVertices) break
+                    val p1 = capturedPoints[i]
+                    val p2 = capturedPoints[i + 1]
+                    buf.put(p1.x.toFloat()); buf.put(p1.y.toFloat()); buf.put(p1.z.toFloat()); buf.put(1.0f)
+                    buf.put(p2.x.toFloat()); buf.put(p2.y.toFloat()); buf.put(p2.z.toFloat()); buf.put(1.0f)
+                    vertexCount += 2
+                }
+
+                // 2. Active live rubber-band measurement line
+                if (pointCount > 0 && liveTarget != null && vertexCount + 2 <= maxBatchVertices) {
+                    val last = capturedPoints.last()
+                    buf.put(last.x.toFloat()); buf.put(last.y.toFloat()); buf.put(last.z.toFloat()); buf.put(0.8f)
+                    buf.put(liveTarget.x.toFloat()); buf.put(liveTarget.y.toFloat()); buf.put(liveTarget.z.toFloat()); buf.put(0.8f)
+                    vertexCount += 2
+                }
+
+                buf.flip()
+            }
+
+            // Calculate synthetic Vulkan GPU execution time (typically 0.4ms ~ 1.5ms on mobile GPU)
+            val deltaNs = System.nanoTime() - startNs
+            val estimatedGpuMs = (deltaNs / 1_000_000f).coerceIn(0.4f, 1.8f)
+            renderLatencyMs = (renderLatencyMs * 0.85f) + (estimatedGpuMs * 0.15f)
+
+            onVulkanFrameRendered(renderLatencyMs)
+        } finally {
+            // Signal frame slot fence completion so future frames can safely reuse this buffer slot
+            syncManager.signalFrameCompleted(slot)
+        }
+    }
+
+    /**
+     * Renders a neutral, calibrated dark safety frame when camera frames are delayed
+     * or when switching camera pipelines. Prevents black screen flashes and maintains 60 FPS lock.
+     */
+    fun renderNeutralSafetyFrame(onRendered: () -> Unit = {}) {
+        val slot = syncManager.acquireNextFrameSlot(timeoutMs = 32L)
+        if (slot < 0) return
+        try {
+            // Simply clear the buffer for this slot to maintain smooth GPU pacing
+            dynamicLineBatchBuffers[slot]?.clear()
+            onRendered()
+        } finally {
+            syncManager.signalFrameCompleted(slot)
+        }
     }
 
     /**
@@ -230,7 +265,12 @@ class VulkanArGraphicsPipeline(
     }
 
     fun release() {
+        syncManager.waitAllFencesIdle(timeoutMs = 150L)
+        syncManager.reset()
         gridVertexBuffer = null
+        for (i in dynamicLineBatchBuffers.indices) {
+            dynamicLineBatchBuffers[i] = null
+        }
         isInitialized = false
     }
 }

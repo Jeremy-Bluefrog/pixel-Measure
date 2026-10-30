@@ -393,13 +393,13 @@ fun ArMeasurementCanvasOverlay(
     val floorCirclePath = remember { Path() }
     val floorShadowPath = remember { Path() }
     
-    // Zero-allocation reusable coordinate buffer pools & Kalman filters for 60fps canvas drawing
-    val projectedPool = remember { ProjectedPointPool(64) }
-    val smoothScreenBuffer = remember { FloatArray(128) { -1000f } }
+    // Zero-allocation reusable coordinate buffer pools & Kalman filters for 60fps canvas drawing (expanded to 128 elements)
+    val projectedPool = remember { ProjectedPointPool(128) }
+    val smoothScreenBuffer = remember { FloatArray(256) { -1000f } }
     val liveKalmanFilter = remember { ArKalmanFilter3D() }
-    val capturedKalmanFilters = remember { Array(64) { ArKalmanFilter3D() } }
+    val capturedKalmanFilters = remember { Array(128) { ArKalmanFilter3D() } }
     val reticleHolderProj = remember { ScreenPoint() }
-    val validPtsBuffer = remember { Array(64) { ScreenPoint() } }
+    val validPtsBuffer = remember { Array(128) { ScreenPoint() } }
 
     // Persistent 2D smooth reticle position holder
     val reticlePosHolder = remember { floatArrayOf(-1000f, -1000f) }
@@ -507,12 +507,14 @@ fun ArMeasurementCanvasOverlay(
         // Project 3D points to 2D screen coordinates using Kalman filter, zero-alloc buffer pool & temporal screen smoothing
         val pointsSnapshot = capturedPoints
         val pointsCount = pointsSnapshot.size
-        projectedPool.reset(pointsCount)
-        for (i in 0 until pointsCount) {
+        val safePointsCount = minOf(pointsCount, projectedPool.capacity)
+        projectedPool.reset(safePointsCount)
+        for (i in 0 until safePointsCount) {
             val rawPt = pointsSnapshot[i]
-            val filteredPt = capturedKalmanFilters[i].update(rawPt)
+            val filteredPt = if (i < capturedKalmanFilters.size) capturedKalmanFilters[i].update(rawPt) else rawPt
             val ok = ArMath.projectCoordsToScreen(filteredPt.x, filteredPt.y, filteredPt.z, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER, isHorizontallyMirrored)
             val bufIdx = i * 2
+            if (bufIdx + 1 >= smoothScreenBuffer.size) break
             if (ok) {
                 val rawX = TEMP_PROJ_HOLDER[0]
                 val rawY = TEMP_PROJ_HOLDER[1]
@@ -677,7 +679,8 @@ fun ArMeasurementCanvasOverlay(
             // Closed Polygon in Area mode (Zero-allocation reusable buffers)
             if (isAreaMode && projectedPoints.size >= 3) {
                 var validPtsCount = 0
-                for (k in 0 until pointsCount) {
+                for (k in 0 until projectedPoints.size) {
+                    if (validPtsCount >= validPtsBuffer.size) break
                     val pt = projectedPoints.getOrNull(k)
                     if (pt != null) {
                         val buf = validPtsBuffer[validPtsCount]
@@ -1351,7 +1354,7 @@ class ScreenPoint(
 /**
  * Pre-allocated pool of ScreenPoints to eliminate GC churn inside the 60fps canvas draw loop.
  */
-class ProjectedPointPool(val capacity: Int = 64) {
+class ProjectedPointPool(val capacity: Int = 128) {
     val pool = Array(capacity) { ScreenPoint() }
     var size: Int = 0
 

@@ -17,6 +17,8 @@ import android.util.Size
 import android.view.Surface
 import android.view.TextureView
 import androidx.core.content.ContextCompat
+import com.google.ar.core.SharedCamera
+import java.lang.ref.WeakReference
 
 /**
  * High-performance, rock-solid Camera2 Direct Manager supporting:
@@ -34,6 +36,9 @@ class HighSpeedCamera2Manager(private val context: Context) {
 
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
+
+    var sharedCamera: SharedCamera? = null
+    private var activeTextureView: WeakReference<TextureView>? = null
 
     private var currentTorchState = false
     private var previewRequestBuilder: CaptureRequest.Builder? = null
@@ -71,17 +76,40 @@ class HighSpeedCamera2Manager(private val context: Context) {
         }
     }
 
+    private val isSwitchingCamera = java.util.concurrent.atomic.AtomicBoolean(false)
+
     fun switchCamera(
         textureView: TextureView,
         onSessionConfigured: ((Boolean, Size) -> Unit)? = null
     ) {
+        if (!isSwitchingCamera.compareAndSet(false, true)) {
+            Log.w(TAG, "Camera switch already in progress, ignoring duplicate tap.")
+            return
+        }
+
         preferredFacing = if (preferredFacing == CameraCharacteristics.LENS_FACING_BACK) {
             CameraCharacteristics.LENS_FACING_FRONT
         } else {
             CameraCharacteristics.LENS_FACING_BACK
         }
         closeCamera()
-        openCameraAndStartSession(textureView, onSessionConfigured)
+
+        // Allow HAL hardware pipe 120ms to completely tear down previous camera instance
+        val mainHandler = Handler(android.os.Looper.getMainLooper())
+        mainHandler.postDelayed({
+            try {
+                if (textureView.isAvailable) {
+                    openCameraAndStartSession(textureView) { success, size ->
+                        isSwitchingCamera.set(false)
+                        onSessionConfigured?.invoke(success, size)
+                    }
+                } else {
+                    isSwitchingCamera.set(false)
+                }
+            } catch (e: Throwable) {
+                isSwitchingCamera.set(false)
+            }
+        }, 120L)
     }
 
     val lowLightBoostEngine = LowLightBoostEngine(context)
@@ -268,6 +296,8 @@ class HighSpeedCamera2Manager(private val context: Context) {
                 return
             }
 
+            activeTextureView = WeakReference(textureView)
+
             // Configure default buffer size matching hardware camera output
             texture.setDefaultBufferSize(optimalSize.width, optimalSize.height)
             previewSurface?.release()
@@ -279,7 +309,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
             }
             previewSurface = surface
 
-            cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
+            val stateCallback = object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
                     isOpening = false
                     if (isClosed) {
@@ -318,7 +348,10 @@ class HighSpeedCamera2Manager(private val context: Context) {
                         }, backoffMs)
                     }
                 }
-            }, backgroundHandler)
+            }
+
+            val wrappedCallback = sharedCamera?.createARDeviceStateCallback(stateCallback, backgroundHandler) ?: stateCallback
+            cameraManager.openCamera(cameraId, wrappedCallback, backgroundHandler)
 
         } catch (e: Throwable) {
             isOpening = false
@@ -377,6 +410,19 @@ class HighSpeedCamera2Manager(private val context: Context) {
             }
             previewRequestBuilder = requestBuilder
 
+            val surfaceList = ArrayList<Surface>()
+            surfaceList.add(surface)
+            val currentSharedCamera = sharedCamera
+            if (currentSharedCamera != null) {
+                try {
+                    surfaceList.addAll(currentSharedCamera.arCoreSurfaces)
+                    currentSharedCamera.setAppSurfaces(activeCameraId ?: "0", listOf(surface))
+                    Log.i(TAG, "Configured SharedCamera with ${currentSharedCamera.arCoreSurfaces.size} ARCore surfaces.")
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Error binding SharedCamera surfaces: ${t.message}")
+                }
+            }
+
             val stateCallback = object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
                     if (isClosed) {
@@ -395,7 +441,8 @@ class HighSpeedCamera2Manager(private val context: Context) {
                         Log.i(TAG, "CameraCaptureSession successfully started! FPS Range: $targetFpsRange, Size: ${size.width}x${size.height}")
                         onSessionConfigured?.invoke(isHighSpeedSessionActive, size)
                     } catch (e: Throwable) {
-                        Log.e(TAG, "setRepeatingRequest failed: ${e.message}")
+                        Log.i(TAG, "setRepeatingRequest note (handled by ARCore when tracking): ${e.message}")
+                        onSessionConfigured?.invoke(isHighSpeedSessionActive, size)
                     }
                 }
 
@@ -409,18 +456,20 @@ class HighSpeedCamera2Manager(private val context: Context) {
                 }
             }
 
+            val wrappedSessionCallback = currentSharedCamera?.createARSessionStateCallback(stateCallback, backgroundHandler) ?: stateCallback
+
             // API 28+ SessionConfiguration with safe fallback
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 try {
-                    val outputConfig = OutputConfiguration(surface)
+                    val outputConfigs = surfaceList.map { OutputConfiguration(it) }
                     val executor = java.util.concurrent.Executor { command ->
                         backgroundHandler?.post(command) ?: command.run()
                     }
                     val sessionConfig = SessionConfiguration(
                         SessionConfiguration.SESSION_REGULAR,
-                        listOf(outputConfig),
+                        outputConfigs,
                         executor,
-                        stateCallback
+                        wrappedSessionCallback
                     )
                     camera.createCaptureSession(sessionConfig)
                     return
@@ -430,10 +479,24 @@ class HighSpeedCamera2Manager(private val context: Context) {
             }
 
             @Suppress("DEPRECATION")
-            camera.createCaptureSession(listOf(surface), stateCallback, backgroundHandler)
+            camera.createCaptureSession(surfaceList, wrappedSessionCallback, backgroundHandler)
 
         } catch (e: Throwable) {
             Log.e(TAG, "configureSession failed: ${e.message}", e)
+        }
+    }
+
+    fun reconnectWithSharedCamera(sharedCam: SharedCamera, onConfigured: ((Boolean, Size) -> Unit)? = null) {
+        sharedCamera = sharedCam
+        val tv = activeTextureView?.get() ?: return
+        if (tv.isAvailable) {
+            closeCamera()
+            val mainHandler = Handler(android.os.Looper.getMainLooper())
+            mainHandler.postDelayed({
+                if (tv.isAvailable) {
+                    openCameraAndStartSession(tv, onConfigured)
+                }
+            }, 120L)
         }
     }
 

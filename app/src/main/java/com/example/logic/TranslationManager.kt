@@ -235,10 +235,20 @@ object TranslationManager {
             "ruler_right" to "移至右側"
         ),
         "zh-CN" to mapOf(
+            "system_lang_title" to "系统应用程序语言设置",
+            "system_lang_desc" to "允许直接通过 Android 系统设置变更此应用程序语言（支持 Android 13+ 应用程序专属语言设置），设置将自动双向即时同步。",
+            "system_lang_btn" to "前往系统设置切换",
+            "system_lang_status_tag" to "系统设置同步",
             "app_title" to "相机 AR 测量仪",
             "nav_camera" to "相机 AR",
             "nav_ruler" to "屏幕尺",
             "nav_level" to "水平仪",
+            "perm_camera_title" to "需要相机访问权限",
+            "perm_camera_desc" to "此工具需要相机画面进行 3D 空间投影。请授予权限以继续使用测量功能。",
+            "perm_camera_rationale" to "测量仪必须透过相机侦测环境特征点。我们保证不会储存或传输任何影像数据，仅用于即时运算。",
+            "perm_camera_denied" to "权限已被永久拒绝。请前往系统设置手动开启相机存取，否则无法使用相机 AR 测量功能。",
+            "btn_grant_perm" to "授予相机权限",
+            "btn_open_settings" to "前往系统设置",
             "history_title" to "历史测量记录",
             "no_records" to "暂无测量记录",
             "search_placeholder" to "搜索名称或备注描述...",
@@ -252,6 +262,10 @@ object TranslationManager {
             "height_preset_desc" to "稳定持机时的高度，用于空间深度起点估算",
             "sensor_alpha" to "传感器平滑系数",
             "vibrate_on_align" to "对齐振动反馈",
+            "vulkan_graphics_title" to "Vulkan 3D 空间渲染架构",
+            "vulkan_graphics_desc" to "硬件光栅化 3D 空间网格、多边形与抗锯齿线段",
+            "low_light_boost_title" to "Android 15 暗光实时增强",
+            "low_light_boost_desc" to "在微光或昏暗环境下自动提升预览亮度与 SNR 噪讯比",
             "dynamic_color" to "M3 动态配色",
             "select_lang" to "选择语言 (Language)",
             "toast_calibrated" to "当前位置已成功校准为参考零点！",
@@ -470,7 +484,13 @@ object TranslationManager {
             "clear_confirm_title" to "すべての測定データを削除しますか？",
             "clear_confirm_desc" to "この操作は元に戻せません。履歴データが消去されます。",
             "ok_clear" to "削除確定",
-            "cancel" to "キャンセル"
+            "cancel" to "キャンセル",
+            "perm_camera_title" to "カメラへのアクセスが必要です",
+            "perm_camera_desc" to "3D空間投影のためカメラへのアクセスが必要です。測定機能を使用するには権限を許可してください。",
+            "perm_camera_rationale" to "測定ツールはカメラを使用して環境の特徴点を検出します。画像データは保存・送信されず、リアルタイム計算にのみ使用されます。",
+            "perm_camera_denied" to "権限が拒否されました。設定からカメラアクセスを手動で有効にしてください。",
+            "btn_grant_perm" to "カメラ権限を許可",
+            "btn_open_settings" to "システム設定を開く"
         ),
         "ko" to mapOf(
             "app_title" to "카메라 AR 측정기",
@@ -498,7 +518,13 @@ object TranslationManager {
             "clear_confirm_title" to "모든 데이터를 영구 삭제할까요?",
             "clear_confirm_desc" to "이 작업은 취os할 수 없으며 저장된 기록이 모두 삭제됩니다.",
             "ok_clear" to "삭제 확인",
-            "cancel" to "취소"
+            "cancel" to "취소",
+            "perm_camera_title" to "카메라 접근 권한 필요",
+            "perm_camera_desc" to "3D 공간 투영을 위해 카메라 접근이 필요합니다. 측정 기능을 사용하려면 권한을 허용해주세요.",
+            "perm_camera_rationale" to "측정 도구는 카메라를 사용하여 환경의 특징점을 감지합니다. 이미지 데이터는 저장되거나 전송되지 않으며 실시간 계산에만 사용됩니다.",
+            "perm_camera_denied" to "권한이 영구적으로 거부되었습니다. 시스템 설정에서 카메라 접근을 수동으로 활성화해주세요.",
+            "btn_grant_perm" to "카메라 권한 허용",
+            "btn_open_settings" to "시스템 설정으로 이동"
         ),
         "es" to mapOf(
             "app_title" to "Cámara AR Medida",
@@ -526,7 +552,13 @@ object TranslationManager {
             "clear_confirm_title" to "¿Desea borrar todo el historial?",
             "clear_confirm_desc" to "Esta acción eliminará de forma permanente los registros guardados.",
             "ok_clear" to "Confirmar Borrado",
-            "cancel" to "Cancelar"
+            "cancel" to "Cancelar",
+            "perm_camera_title" to "Acceso a la cámara requerido",
+            "perm_camera_desc" to "Esta herramienta necesita acceso a la cámara para la proyección espacial 3D. Por favor, conceda el permiso para continuar.",
+            "perm_camera_rationale" to "La herramienta de medición usa la cámara para detectar puntos de referencia del entorno. No almacenamos ni transmitimos imágenes.",
+            "perm_camera_denied" to "Permiso denegado permanentemente. Por favor, active el acceso a la cámara en los ajustes del sistema.",
+            "btn_grant_perm" to "Conceder permiso",
+            "btn_open_settings" to "Abrir Ajustes"
         ),
         "fr" to mapOf(
             "app_title" to "Mètre Caméra AR",
@@ -554,7 +586,13 @@ object TranslationManager {
             "clear_confirm_title" to "Supprimer tout l\'historique ?",
             "clear_confirm_desc" to "Cette action supprimera définitivement vos relevés.",
             "ok_clear" to "Confirmer l\'effacement",
-            "cancel" to "Annuler"
+            "cancel" to "Annuler",
+            "perm_camera_title" to "Accès caméra requis",
+            "perm_camera_desc" to "Cette outil nécessite l'accès à la caméra pour la projection spatiale 3D. Veuillez autoriser l'accès.",
+            "perm_camera_rationale" to "L'outil de mesure utilise la caméra pour détecter les points de l'environnement. Aucune donnée d'image n'est stockée ou transmise.",
+            "perm_camera_denied" to "Permission refusée. Veuillez activer l'accès à la caméra dans les paramètres système.",
+            "btn_grant_perm" to "Autoriser la caméra",
+            "btn_open_settings" to "Ouvrir les paramètres"
         ),
         "de" to mapOf(
             "app_title" to "Kamera AR Messgerät",
@@ -582,7 +620,13 @@ object TranslationManager {
             "clear_confirm_title" to "Gesamten Verlauf löschen?",
             "clear_confirm_desc" to "Dieser Vorgang löscht alle gespeicherten Messungen.",
             "ok_clear" to "Löschen bestätigen",
-            "cancel" to "Abbrechen"
+            "cancel" to "Abbrechen",
+            "perm_camera_title" to "Kamerazugriff erforderlich",
+            "perm_camera_desc" to "Dieses Werkzeug benötigt Kamerazugriff für die 3D-Raumprojektion. Bitte erlauben Sie den Zugriff.",
+            "perm_camera_rationale" to "Das Messwerkzeug verwendet die Kamera zur Erkennung von Umgebungspunkten. Keine Bilddaten werden gespeichert oder übertragen.",
+            "perm_camera_denied" to "Berechtigung verweigert. Bitte aktivieren Sie den Kamerazugriff in den Systemeinstellungen.",
+            "btn_grant_perm" to "Kamera berechtigen",
+            "btn_open_settings" to "Einstellungen öffnen"
         ),
         "it" to mapOf(
             "app_title" to "Camera AR Misura",
@@ -610,7 +654,13 @@ object TranslationManager {
             "clear_confirm_title" to "Sicuro di voler cancellare tutto?",
             "clear_confirm_desc" to "Questa azione eliminerà per sempre tutti i dettagli.",
             "ok_clear" to "Conferma",
-            "cancel" to "Annulla"
+            "cancel" to "Annulla",
+            "perm_camera_title" to "Accesso fotocamera richiesto",
+            "perm_camera_desc" to "Questo strumento necessita dell'accesso alla fotocamera per la proiezione spaziale 3D. Si prega di concedere l'accesso.",
+            "perm_camera_rationale" to "Lo strumento di misurazione usa la fotocamera per rilevare punti ambientali. Nessun dato immagine viene archiviato o trasmesso.",
+            "perm_camera_denied" to "Autorizzazione negata. Si prega di attivare l'accesso alla fotocamera nelle impostazioni di sistema.",
+            "btn_grant_perm" to "Concedi autorizzazione",
+            "btn_open_settings" to "Apri Impostazioni"
         ),
         "pt" to mapOf(
             "app_title" to "Câmera AR Medição",
@@ -638,7 +688,13 @@ object TranslationManager {
             "clear_confirm_title" to "Deseja limpar todos os registros?",
             "clear_confirm_desc" to "Esta ação apagará de forma permanente todos os registros.",
             "ok_clear" to "Confirmar Limpeza",
-            "cancel" to "Cancelar"
+            "cancel" to "Cancelar",
+            "perm_camera_title" to "Acesso à câmera necessário",
+            "perm_camera_desc" to "Esta ferramenta precisa de acesso à câmera para projeção espacial 3D. Por favor, conceda o acesso.",
+            "perm_camera_rationale" to "A ferramenta de medição usa a câmera para detectar pontos ambientais. Nenhuma imagem é armazenada ou transmitida.",
+            "perm_camera_denied" to "Permissão negada. Por favor, ative o acesso à câmera nas configurações do sistema.",
+            "btn_grant_perm" to "Conceder permissão",
+            "btn_open_settings" to "Abrir Configurações"
         ),
         "ru" to mapOf(
             "app_title" to "Камера AR Измерение",
@@ -666,7 +722,13 @@ object TranslationManager {
             "clear_confirm_title" to "Удалить все данные измерений?",
             "clear_confirm_desc" to "Это действие навсегда сотрет все записи истории.",
             "ok_clear" to "Подтвердить",
-            "cancel" to "Отмена"
+            "cancel" to "Отмена",
+            "perm_camera_title" to "Требуется доступ к камере",
+            "perm_camera_desc" to "Для 3D-проекции пространства требуется доступ к камере. Пожалуйста, предоставьте доступ.",
+            "perm_camera_rationale" to "Инструмент измерения использует камеру для обнаружения точек. Данные изображений не сохраняются и не передаются.",
+            "perm_camera_denied" to "Разрешение отклонено. Пожалуйста, включите доступ к камере в настройках системы.",
+            "btn_grant_perm" to "Предоставить доступ",
+            "btn_open_settings" to "Открыть настройки"
         ),
         "ar" to mapOf(
             "app_title" to "مقياس الكاميرا AR",
@@ -694,7 +756,13 @@ object TranslationManager {
             "clear_confirm_title" to "مسح كافة قياسات السجل؟",
             "clear_confirm_desc" to "سيؤدي هذا الإجراء إلى حذف جميع قياسات السجل بشكل نهائي.",
             "ok_clear" to "تأكيد الحذف",
-            "cancel" to "إلغاء"
+            "cancel" to "إلغاء",
+            "perm_camera_title" to "مطلوب الوصول إلى الكاميرا",
+            "perm_camera_desc" to "تحتاج هذه الأداة إلى الوصول إلى الكاميرا للإسقاط المكاني ثلاثي الأبعاد. يرجى منح الإذن.",
+            "perm_camera_rationale" to "تستخدم أداة القياس الكاميرا لاكتشاف نقاط البيئة. لا يتم تخزين بيانات الصور أو نقلها.",
+            "perm_camera_denied" to "تم رفض الإذن. يرجى تفعيل الوصول إلى الكاميرا في إعدادات النظام.",
+            "btn_grant_perm" to "منح الإذن",
+            "btn_open_settings" to "فتح الإعدادات"
         ),
         "hi" to mapOf(
             "app_title" to "कैमरा एआर मापन",

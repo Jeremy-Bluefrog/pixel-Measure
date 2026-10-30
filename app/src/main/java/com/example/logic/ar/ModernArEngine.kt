@@ -85,6 +85,13 @@ class ModernArEngine(private val context: Context) {
     var session: Session? = null
         private set
 
+    val sharedCamera: SharedCamera?
+        get() = try {
+            session?.sharedCamera
+        } catch (_: Throwable) {
+            null
+        }
+
     var isSupported: Boolean = false
         private set
 
@@ -173,7 +180,12 @@ class ModernArEngine(private val context: Context) {
             // Case 1: ARCore package is already installed - initialize session directly
             if (arCoreInstalled) {
                 try {
-                    val newSession = Session(context)
+                    val newSession = try {
+                        Session(context, EnumSet.of(Session.Feature.SHARED_CAMERA))
+                    } catch (e: Throwable) {
+                        Log.w("ModernArEngine", "SharedCamera session creation failed, fallback: ${e.message}")
+                        Session(context)
+                    }
                     val config = Config(newSession)
                     config.focusMode = Config.FocusMode.AUTO
                     config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
@@ -247,7 +259,12 @@ class ModernArEngine(private val context: Context) {
 
             when {
                 availability == ArCoreApk.Availability.SUPPORTED_INSTALLED -> {
-                    val newSession = Session(context)
+                    val newSession = try {
+                        Session(context, EnumSet.of(Session.Feature.SHARED_CAMERA))
+                    } catch (e: Throwable) {
+                        Log.w("ModernArEngine", "SharedCamera session creation failed, fallback: ${e.message}")
+                        Session(context)
+                    }
                     val config = Config(newSession)
                     config.focusMode = Config.FocusMode.AUTO
                     config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
@@ -352,9 +369,18 @@ class ModernArEngine(private val context: Context) {
         }
     }
 
-    fun makeGlContextCurrent() {
+    fun makeGlContextCurrent(): Boolean {
+        return try {
+            eglHelper?.makeCurrent() ?: false
+        } catch (t: Throwable) {
+            Log.w("ModernArEngine", "makeGlContextCurrent error: ${t.message}")
+            false
+        }
+    }
+
+    fun detachGlContext() {
         try {
-            eglHelper?.makeCurrent()
+            eglHelper?.detachCurrent()
         } catch (_: Throwable) {}
     }
 
@@ -383,15 +409,19 @@ class ModernArEngine(private val context: Context) {
         }
         try {
             session?.pause()
+            detachGlContext()
         } catch (e: Throwable) {
             Log.w("ModernArEngine", "Failed to pause ARCore session: ${e.message}")
         }
     }
 
     fun resume() {
+        val curSession = session ?: return
         try {
-            eglHelper?.makeCurrent()
-            session?.resume()
+            makeGlContextCurrent()
+            curSession.resume()
+            detachGlContext()
+            Log.i("ModernArEngine", "ARCore session resumed successfully.")
         } catch (e: CameraNotAvailableException) {
             Log.w("ModernArEngine", "Camera not available for ARCore: ${e.message}")
         } catch (e: Exception) {
@@ -438,6 +468,12 @@ class ModernArEngine(private val context: Context) {
      * During real-time aiming, creating anchors on every frame causes ARCore memory/graph stalls.
      */
     fun performHitTest(frame: Frame, x: Float, y: Float, createAnchor: Boolean = false): HitTestResult? {
+        if (x.isNaN() || y.isNaN() || x.isInfinite() || y.isInfinite() || x < 0f || y < 0f) {
+            return null
+        }
+        if (viewportWidth > 0 && viewportHeight > 0 && (x > viewportWidth * 1.5f || y > viewportHeight * 1.5f)) {
+            return null
+        }
         try {
             val hits = frame.hitTest(x, y)
             val validHits = hits.filter { it.distance in 0.05f..25.0f }
@@ -793,8 +829,11 @@ class ModernArEngine(private val context: Context) {
             allPlanes?.forEach { plane ->
                 if (plane.subsumedBy == null) {
                     val poly2d = plane.polygon
-                    val polyArray = FloatArray(poly2d.remaining())
-                    poly2d.get(polyArray)
+                    val rem = poly2d?.remaining() ?: 0
+                    val polyArray = if (rem > 0) {
+                        val arr = FloatArray(rem)
+                        try { poly2d.get(arr); arr } catch (_: Throwable) { FloatArray(0) }
+                    } else FloatArray(0)
                     planeInfos.add(
                         DetectedPlaneInfo(
                             id = plane.hashCode().toString(),
@@ -1035,6 +1074,9 @@ private class HeadlessEglHelper {
             GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST)
             GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_NEAREST)
             textureId = textures[0]
+
+            // CRITICAL: Unbind immediately from initialization thread so VulkanRenderThread can bind it
+            EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
             return textureId
         } catch (e: Throwable) {
             Log.w("HeadlessEglHelper", "Headless EGL setup skipped: ${e.message}")
@@ -1042,9 +1084,18 @@ private class HeadlessEglHelper {
         }
     }
 
-    fun makeCurrent() {
+    fun makeCurrent(): Boolean {
         if (eglDisplay != EGL14.EGL_NO_DISPLAY && eglSurface != EGL14.EGL_NO_SURFACE && eglContext != EGL14.EGL_NO_CONTEXT) {
-            EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
+            val currentContext = EGL14.eglGetCurrentContext()
+            if (currentContext == eglContext) return true
+            return EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
+        }
+        return false
+    }
+
+    fun detachCurrent() {
+        if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
+            EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
         }
     }
 

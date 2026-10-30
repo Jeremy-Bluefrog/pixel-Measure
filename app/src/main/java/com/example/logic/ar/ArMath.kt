@@ -69,7 +69,134 @@ object ArMath {
     }
 
     /**
+     * Checks if a 2D line segment (p1->p2) intersects with (p3->p4).
+     * Excludes collinear overlapping endpoints.
+     */
+    private fun do2DSegmentsIntersect(
+        p1x: Double, p1y: Double, p2x: Double, p2y: Double,
+        p3x: Double, p3y: Double, p4x: Double, p4y: Double
+    ): Boolean {
+        fun ccw(ax: Double, ay: Double, bx: Double, by: Double, cx: Double, cy: Double): Double {
+            return (cy - ay) * (bx - ax) - (by - ay) * (cx - ax)
+        }
+
+        val ccw1 = ccw(p1x, p1y, p2x, p2y, p3x, p3y)
+        val ccw2 = ccw(p1x, p1y, p2x, p2y, p4x, p4y)
+        val ccw3 = ccw(p3x, p3y, p4x, p4y, p1x, p1y)
+        val ccw4 = ccw(p3x, p3y, p4x, p4y, p2x, p2y)
+
+        // Standard strict intersection check: opposite signs across both lines
+        return ((ccw1 > 1e-7 && ccw2 < -1e-7) || (ccw1 < -1e-7 && ccw2 > 1e-7)) &&
+               ((ccw3 > 1e-7 && ccw4 < -1e-7) || (ccw3 < -1e-7 && ccw4 > 1e-7))
+    }
+
+    /**
+     * Detects if a 3D polygon has self-intersecting boundary edges (e.g., figure-8 or bow-tie shape)
+     * when projected onto its best-fit 2D plane.
+     */
+    fun isPolygonSelfIntersecting(points: List<Point3D>): Boolean {
+        if (points.size < 4) return false
+
+        // Compute polygon normal vector to project onto 2D plane
+        var totalVectorX = 0.0
+        var totalVectorY = 0.0
+        var totalVectorZ = 0.0
+
+        val n = points.size
+        for (i in 0 until n) {
+            val pCurrent = points[i]
+            val pNext = points[(i + 1) % n]
+            totalVectorX += (pCurrent.y * pNext.z) - (pCurrent.z * pNext.y)
+            totalVectorY += (pCurrent.z * pNext.x) - (pCurrent.x * pNext.z)
+            totalVectorZ += (pCurrent.x * pNext.y) - (pCurrent.y * pNext.x)
+        }
+
+        val normalLength = sqrt(totalVectorX * totalVectorX + totalVectorY * totalVectorY + totalVectorZ * totalVectorZ)
+        var nx = 0.0
+        var ny = 0.0
+        var nz = 0.0
+
+        if (normalLength > 1e-6) {
+            nx = totalVectorX / normalLength
+            ny = totalVectorY / normalLength
+            nz = totalVectorZ / normalLength
+        } else {
+            // Newell's cross product sum cancelled out (e.g., self-intersecting polygon with equal and opposite loops!)
+            // Derive plane normal using any non-collinear vertices
+            var found = false
+            for (i in 0 until n - 1) {
+                val v1x = points[i + 1].x - points[i].x
+                val v1y = points[i + 1].y - points[i].y
+                val v1z = points[i + 1].z - points[i].z
+                for (j in (i + 2) until n) {
+                    val v2x = points[j].x - points[i].x
+                    val v2y = points[j].y - points[i].y
+                    val v2z = points[j].z - points[i].z
+                    val cx = v1y * v2z - v1z * v2y
+                    val cy = v1z * v2x - v1x * v2z
+                    val cz = v1x * v2y - v1y * v2x
+                    val len = sqrt(cx * cx + cy * cy + cz * cz)
+                    if (len > 1e-6) {
+                        nx = cx / len
+                        ny = cy / len
+                        nz = cz / len
+                        found = true
+                        break
+                    }
+                }
+                if (found) break
+            }
+            if (!found) return false // All points collinear in 3D
+        }
+
+        val (arbitraryX, arbitraryY, arbitraryZ) = if (abs(ny) < 0.9) Triple(0.0, 1.0, 0.0) else Triple(1.0, 0.0, 0.0)
+        val dot = nx * arbitraryX + ny * arbitraryY + nz * arbitraryZ
+        val ux = arbitraryX - nx * dot
+        val uy = arbitraryY - ny * dot
+        val uz = arbitraryZ - nz * dot
+        val uLen = sqrt(ux * ux + uy * uy + uz * uz)
+        if (uLen < 1e-6) return false
+
+        val u1x = ux / uLen
+        val u1y = uy / uLen
+        val u1z = uz / uLen
+
+        val v1x = ny * u1z - nz * u1y
+        val v1y = nz * u1x - nx * u1z
+        val v1z = nx * u1y - ny * u1x
+
+        // Project all points to 2D coordinates (U, V)
+        val uCoords = DoubleArray(n)
+        val vCoords = DoubleArray(n)
+        for (i in 0 until n) {
+            val p = points[i]
+            uCoords[i] = p.x * u1x + p.y * u1y + p.z * u1z
+            vCoords[i] = p.x * v1x + p.y * v1y + p.z * v1z
+        }
+
+        // Test every pair of non-adjacent edges (i, i+1) and (j, j+1)
+        for (i in 0 until n) {
+            val iNext = (i + 1) % n
+            for (j in i + 1 until n) {
+                val jNext = (j + 1) % n
+                // Skip adjacent edges that share an endpoint
+                if (i == j || iNext == j || (i == 0 && jNext == 0) || i == jNext) continue
+
+                if (do2DSegmentsIntersect(
+                        uCoords[i], vCoords[i], uCoords[iNext], vCoords[iNext],
+                        uCoords[j], vCoords[j], uCoords[jNext], vCoords[jNext]
+                    )
+                ) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    /**
      * High-precision 3D polygon area using cross-product sum and planar 2D projection in meters².
+     * Protected against degenerate collinear shapes, self-intersections, and negative results.
      */
     fun polygonArea(points: List<Point3D>): Double {
         if (points.size < 3) return 0.0
@@ -98,61 +225,61 @@ object ArMath {
             totalVectorY * totalVectorY +
             totalVectorZ * totalVectorZ
         )
+        if (normalLength.isNaN() || normalLength < 1e-6) return 0.0
         val crossArea3d = 0.5 * normalLength
 
         // 2. Orthonormal 2D basis projection area (Green's theorem on best-fit plane)
-        if (normalLength > 1e-6) {
-            val nx = totalVectorX / normalLength
-            val ny = totalVectorY / normalLength
-            val nz = totalVectorZ / normalLength
+        val nx = totalVectorX / normalLength
+        val ny = totalVectorY / normalLength
+        val nz = totalVectorZ / normalLength
 
-            // Construct 2D plane orthonormal basis vectors (U, V) robustly for any plane orientation
-            val (arbitraryX, arbitraryY, arbitraryZ) = if (abs(ny) < 0.9) {
-                Triple(0.0, 1.0, 0.0)
-            } else {
-                Triple(1.0, 0.0, 0.0)
-            }
-
-            // Gram-Schmidt orthogonalization: U = arbitrary - N * (N . arbitrary)
-            val dot = nx * arbitraryX + ny * arbitraryY + nz * arbitraryZ
-            val ux = arbitraryX - nx * dot
-            val uy = arbitraryY - ny * dot
-            val uz = arbitraryZ - nz * dot
-            val uLen = sqrt(ux * ux + uy * uy + uz * uz)
-
-            if (uLen > 1e-6) {
-                val u1x = ux / uLen
-                val u1y = uy / uLen
-                val u1z = uz / uLen
-
-                val v1x = ny * u1z - nz * u1y
-                val v1y = nz * u1x - nx * u1z
-                val v1z = nx * u1y - ny * u1x
-
-                // Project 3D points to 2D plane coordinates
-                var shoelaceArea = 0.0
-                for (i in 0 until n) {
-                    val p1 = points[i]
-                    val p2 = points[(i + 1) % n]
-
-                    val u1 = p1.x * u1x + p1.y * u1y + p1.z * u1z
-                    val v1 = p1.x * v1x + p1.y * v1y + p1.z * v1z
-
-                    val u2 = p2.x * u1x + p2.y * u1y + p2.z * u1z
-                    val v2 = p2.x * v1x + p2.y * v1y + p2.z * v1z
-
-                    shoelaceArea += (u1 * v2 - u2 * v1)
-                }
-                val shoelaceArea2d = abs(shoelaceArea) * 0.5
-                return if (abs(shoelaceArea2d - crossArea3d) < 0.05 * crossArea3d) {
-                    crossArea3d
-                } else {
-                    max(crossArea3d, shoelaceArea2d)
-                }
-            }
+        // Construct 2D plane orthonormal basis vectors (U, V) robustly for any plane orientation
+        val (arbitraryX, arbitraryY, arbitraryZ) = if (abs(ny) < 0.9) {
+            Triple(0.0, 1.0, 0.0)
+        } else {
+            Triple(1.0, 0.0, 0.0)
         }
 
-        return crossArea3d
+        // Gram-Schmidt orthogonalization: U = arbitrary - N * (N . arbitrary)
+        val dot = nx * arbitraryX + ny * arbitraryY + nz * arbitraryZ
+        val ux = arbitraryX - nx * dot
+        val uy = arbitraryY - ny * dot
+        val uz = arbitraryZ - nz * dot
+        val uLen = sqrt(ux * ux + uy * uy + uz * uz)
+
+        if (uLen > 1e-6) {
+            val u1x = ux / uLen
+            val u1y = uy / uLen
+            val u1z = uz / uLen
+
+            val v1x = ny * u1z - nz * u1y
+            val v1y = nz * u1x - nx * u1z
+            val v1z = nx * u1y - ny * u1x
+
+            // Project 3D points to 2D plane coordinates
+            var shoelaceArea = 0.0
+            for (i in 0 until n) {
+                val p1 = points[i]
+                val p2 = points[(i + 1) % n]
+
+                val u1 = p1.x * u1x + p1.y * u1y + p1.z * u1z
+                val v1 = p1.x * v1x + p1.y * v1y + p1.z * v1z
+
+                val u2 = p2.x * u1x + p2.y * u1y + p2.z * u1z
+                val v2 = p2.x * v1x + p2.y * v1y + p2.z * v1z
+
+                shoelaceArea += (u1 * v2 - u2 * v1)
+            }
+            val shoelaceArea2d = abs(shoelaceArea) * 0.5
+            val finalArea = if (abs(shoelaceArea2d - crossArea3d) < 0.05 * crossArea3d) {
+                crossArea3d
+            } else {
+                max(crossArea3d, shoelaceArea2d)
+            }
+            return if (finalArea.isNaN() || finalArea.isInfinite()) 0.0 else max(0.0, finalArea)
+        }
+
+        return if (crossArea3d.isNaN() || crossArea3d.isInfinite()) 0.0 else max(0.0, crossArea3d)
     }
 
     /**
@@ -160,6 +287,16 @@ object ArMath {
      */
     fun calculateBoundingBox(points: List<Point3D>): BoundingBoxResult {
         if (points.isEmpty()) return BoundingBoxResult()
+        if (points.size == 1) {
+            val p = points[0]
+            return BoundingBoxResult(
+                minX = p.x, maxX = p.x,
+                minY = p.y, maxY = p.y,
+                minZ = p.z, maxZ = p.z,
+                lengthX = 0.0, heightY = 0.0, widthZ = 0.0,
+                volume = 0.0, surfaceArea = 0.0
+            )
+        }
 
         var minX = points[0].x
         var maxX = points[0].x
@@ -196,7 +333,7 @@ object ArMath {
      * Vertical height difference between two points (e.g. base point and top point) in meters.
      */
     fun verticalHeight(base: Point3D, top: Point3D): Double {
-        return abs(top.y - base.y).coerceAtLeast(abs(top.z - base.z))
+        return abs(top.y - base.y)
     }
 
     /**
@@ -223,6 +360,7 @@ object ArMath {
 
     /**
      * Fit a 3D circle from 3 points on a plane.
+     * Hardened against collinear points, flat triangles, and division-by-zero.
      */
     fun fitCircle3Points(p1: Point3D, p2: Point3D, p3: Point3D): CircleResult? {
         val a = distance(p2, p3)
@@ -230,12 +368,30 @@ object ArMath {
         val c = distance(p1, p2)
 
         if (a < 1e-4 || b < 1e-4 || c < 1e-4) return null
+        val maxEdge = max(a, max(b, c))
+
+        // Vector cross product collinearity test: (p2 - p1) x (p3 - p1)
+        val v1x = p2.x - p1.x
+        val v1y = p2.y - p1.y
+        val v1z = p2.z - p1.z
+        val v2x = p3.x - p1.x
+        val v2y = p3.y - p1.y
+        val v2z = p3.z - p1.z
+
+        val crossX = v1y * v2z - v1z * v2y
+        val crossY = v1z * v2x - v1x * v2z
+        val crossZ = v1x * v2y - v1y * v2x
+        val crossMag = sqrt(crossX * crossX + crossY * crossY + crossZ * crossZ)
+
+        // If cross product magnitude is degenerate relative to the edge length, points are collinear
+        if (crossMag < 1e-4 * maxEdge) return null
 
         val s = (a + b + c) / 2.0
         val triangleArea = sqrt(max(0.0, s * (s - a) * (s - b) * (s - c)))
-        if (triangleArea < 1e-6) return null
+        if (triangleArea.isNaN() || triangleArea < 1e-4 * maxEdge * maxEdge) return null
 
         val radius = (a * b * c) / (4.0 * triangleArea)
+        if (radius.isNaN() || radius.isInfinite() || radius > 50.0 || radius < 0.005) return null
         val diameter = radius * 2.0
         val circumference = 2.0 * Math.PI * radius
         val area = Math.PI * radius * radius
@@ -255,6 +411,10 @@ object ArMath {
         val cx = (alpha * p1.x + beta * p2.x + gamma * p3.x) / total
         val cy = (alpha * p1.y + beta * p2.y + gamma * p3.y) / total
         val cz = (alpha * p1.z + beta * p2.z + gamma * p3.z) / total
+
+        if (cx.isNaN() || cy.isNaN() || cz.isNaN() || cx.isInfinite() || cy.isInfinite() || cz.isInfinite()) {
+            return null
+        }
 
         val center = Point3D(cx, cy, cz, 0f, 0f, true, "圓心")
         return CircleResult(center, radius, diameter, circumference, area)

@@ -69,7 +69,7 @@ object VulkanMatrix4 {
         val ny = y * invLen
         val nz = z * invLen
 
-        val r = scratchR.get()
+        val r = scratchR.get() ?: FloatArray(16)
         r[0] = nx * nx * nc + c
         r[1] = ny * nx * nc + nz * s
         r[2] = nz * nx * nc - ny * s
@@ -90,7 +90,7 @@ object VulkanMatrix4 {
         r[14] = 0f
         r[15] = 1f
 
-        val temp = scratchTemp.get()
+        val temp = scratchTemp.get() ?: FloatArray(16)
         multiplyMM(temp, 0, m, offset, r, 0)
         System.arraycopy(temp, 0, m, offset, 16)
     }

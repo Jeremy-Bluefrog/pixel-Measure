@@ -81,6 +81,19 @@ fun MainScreen(viewModel: MeasureViewModel) {
     val rulerLabel = viewModel.getString("nav_ruler").ifEmpty { "螢幕尺" }
     val levelLabel = viewModel.getString("nav_level").ifEmpty { "水平儀" }
 
+    // Predictive & standard system back handling for modal overlays and sub-screens
+    androidx.activity.compose.BackHandler(
+        enabled = showWelcomeScreen || selectedRecordForDetail != null || showHistorySheet || showSettingsDialog || currentMode != 0
+    ) {
+        when {
+            selectedRecordForDetail != null -> selectedRecordForDetail = null
+            showHistorySheet -> showHistorySheet = false
+            showSettingsDialog -> showSettingsDialog = false
+            showWelcomeScreen -> viewModel.dismissWelcomeScreen()
+            currentMode != 0 -> viewModel.setMode(0)
+        }
+    }
+
     val navItems = remember(cameraLabel, rulerLabel, levelLabel) {
         listOf(
             FloatingPillNavItem(
