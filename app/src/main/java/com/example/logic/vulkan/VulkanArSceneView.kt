@@ -90,8 +90,10 @@ class VulkanArSceneView(
                     holder.surface?.setFrameRate(60.0f, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
                 } catch (_: Throwable) {}
             }
-            session?.setDisplayGeometry(0, width, height)
-            viewModel?.updateDisplayGeometry(0, width, height)
+            if (width > 100 && height > 100) {
+                session?.setDisplayGeometry(0, width, height)
+                viewModel?.updateDisplayGeometry(0, width, height)
+            }
 
             if (isRendering) {
                 _renderState.set(VulkanRenderState.ACTIVE_RENDER_LOOP)

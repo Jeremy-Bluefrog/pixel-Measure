@@ -2,6 +2,7 @@ package com.example.logic.ar
 
 import android.app.Activity
 import android.content.Context
+import android.os.Build
 import android.opengl.EGL14
 import android.opengl.EGLConfig
 import android.opengl.EGLContext
@@ -174,176 +175,92 @@ class ModernArEngine(private val context: Context) {
         }
 
         try {
-            val arCoreInstalled = isArCorePackageInstalled(context)
-            val playStoreAvailable = isGooglePlayStoreAvailable(context)
+            // First priority: Create ARCore session supporting shared camera or standard camera
+            val newSession = try {
+                Session(context, EnumSet.of(Session.Feature.SHARED_CAMERA))
+            } catch (e: Throwable) {
+                Log.w("ModernArEngine", "SharedCamera session creation note, fallback to standard: ${e.message}")
+                Session(context)
+            }
 
-            // Case 1: ARCore package is already installed - initialize session directly
-            if (arCoreInstalled) {
+            val config = Config(newSession)
+            config.focusMode = Config.FocusMode.AUTO
+            config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
+            config.lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
+
+            // Configure Vulkan hardware buffer mode if supported on API 27+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
                 try {
-                    val newSession = try {
-                        Session(context, EnumSet.of(Session.Feature.SHARED_CAMERA))
-                    } catch (e: Throwable) {
-                        Log.w("ModernArEngine", "SharedCamera session creation failed, fallback: ${e.message}")
-                        Session(context)
-                    }
-                    val config = Config(newSession)
-                    config.focusMode = Config.FocusMode.AUTO
-                    config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
-                    config.lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
+                    config.textureUpdateMode = Config.TextureUpdateMode.EXPOSE_HARDWARE_BUFFER
+                } catch (_: Throwable) {}
+            }
 
-                    try {
-                        if (newSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
-                            config.depthMode = Config.DepthMode.AUTOMATIC
-                            isDepthModeActive = true
-                        }
-                    } catch (_: Throwable) {}
+            try {
+                if (newSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
+                    config.depthMode = Config.DepthMode.AUTOMATIC
+                    isDepthModeActive = true
+                }
+            } catch (_: Throwable) {}
 
-                    try {
-                        config.instantPlacementMode = Config.InstantPlacementMode.LOCAL_Y_UP
-                    } catch (_: Throwable) {}
+            try {
+                config.instantPlacementMode = Config.InstantPlacementMode.LOCAL_Y_UP
+            } catch (_: Throwable) {}
 
-                    newSession.configure(config)
+            newSession.configure(config)
 
-                    // Initialize headless EGL context and bind texture so session.update() works flawlessly
-                    val helper = HeadlessEglHelper()
-                    val texId = helper.init()
-                    if (texId > 0) {
-                        newSession.setCameraTextureName(texId)
-                        eglHelper = helper
-                    }
-
-                    session = newSession
-                    isSupported = true
-                    _arCoreStatus.value = ArCoreEngineStatus.ACTIVE
-                    _arCoreStatusMessage.value = "Google ARCore 已就緒 (水平/垂直平面與深度追蹤)"
-                    Log.i("ModernArEngine", "Google ARCore Session successfully created & configured.")
-                    return newSession
-                } catch (e: UnavailableDeviceNotCompatibleException) {
-                    isSupported = false
-                    _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
-                    _arCoreStatusMessage.value = "此硬體不相容 Google ARCore"
-                    return null
-                } catch (e: UnavailableApkTooOldException) {
-                    isSupported = false
-                    _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
-                    _arCoreStatusMessage.value = "Google Play Services for AR 版本過舊，請前往商店更新"
-                    return null
-                } catch (t: Throwable) {
-                    Log.w("ModernArEngine", "Direct ARCore Session init failed: ${t.message}")
+            // If EXPOSE_HARDWARE_BUFFER is not active, bind headless texture for background driver
+            if (config.textureUpdateMode != Config.TextureUpdateMode.EXPOSE_HARDWARE_BUFFER) {
+                val helper = HeadlessEglHelper()
+                val texId = helper.init()
+                if (texId > 0) {
+                    newSession.setCameraTextureName(texId)
+                    eglHelper = helper
                 }
             }
 
-            // Case 2: ARCore is NOT installed, and Google Play Store is not present (e.g. streaming emulator, AOSP)
-            // Do NOT attempt to query or bind Play Store InstallService, avoid E/ARCore-InstallService error logs.
-            if (!playStoreAvailable) {
-                isSupported = false
-                _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
-                _arCoreStatusMessage.value = "此環境未安裝 Google Play 商店，無法使用 ARCore"
-                Log.i("ModernArEngine", "Google Play Store not found. ARCore not available.")
-                return null
-            }
-
-            // Case 3: Google Play Store is present, avoid calling checkAvailability if ARCore package is not installed
-            // to prevent E/ARCore-InstallService Play Store install service could not be bound errors.
-            val availability = if (arCoreInstalled) {
-                try {
-                    ArCoreApk.getInstance().checkAvailability(context)
-                } catch (e: Throwable) {
-                    Log.w("ModernArEngine", "checkAvailability error: ${e.message}")
-                    ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE
-                }
-            } else {
-                ArCoreApk.Availability.SUPPORTED_NOT_INSTALLED
-            }
-            Log.i("ModernArEngine", "ARCore hardware availability: $availability")
-
-            when {
-                availability == ArCoreApk.Availability.SUPPORTED_INSTALLED -> {
-                    val newSession = try {
-                        Session(context, EnumSet.of(Session.Feature.SHARED_CAMERA))
-                    } catch (e: Throwable) {
-                        Log.w("ModernArEngine", "SharedCamera session creation failed, fallback: ${e.message}")
-                        Session(context)
-                    }
-                    val config = Config(newSession)
-                    config.focusMode = Config.FocusMode.AUTO
-                    config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
-                    config.lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
-
-                    try {
-                        if (newSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
-                            config.depthMode = Config.DepthMode.AUTOMATIC
-                            isDepthModeActive = true
-                        }
-                    } catch (_: Throwable) {}
-
-                    try {
-                        config.instantPlacementMode = Config.InstantPlacementMode.LOCAL_Y_UP
-                    } catch (_: Throwable) {}
-
-                    newSession.configure(config)
-
-                    val helper = HeadlessEglHelper()
-                    val texId = helper.init()
-                    if (texId > 0) {
-                        newSession.setCameraTextureName(texId)
-                        eglHelper = helper
-                    }
-
-                    session = newSession
-                    isSupported = true
-                    _arCoreStatus.value = ArCoreEngineStatus.ACTIVE
-                    _arCoreStatusMessage.value = "Google ARCore 已就緒 (水平/垂直平面與深度追蹤)"
-                    Log.i("ModernArEngine", "Google ARCore Session successfully created & configured.")
-                    return newSession
-                }
-                availability == ArCoreApk.Availability.SUPPORTED_NOT_INSTALLED || availability == ArCoreApk.Availability.SUPPORTED_APK_TOO_OLD -> {
-                    isSupported = false
-                    _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
-                    _arCoreStatusMessage.value = "⚠️ 警告：裝置支援 ARCore 但尚未安裝，請安裝 Google Play Services for AR 才能進行測量"
-                    return null
-                }
-                availability == ArCoreApk.Availability.UNKNOWN_CHECKING -> {
-                    _arCoreStatusMessage.value = "正在確認 ARCore 硬體相容性..."
-                    return null
-                }
-                else -> {
-                    isSupported = false
-                    _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
-                    _arCoreStatusMessage.value = "⚠️ 警告：此裝置或環境不支援 Google ARCore，無法進行 3D 空間測量"
-                    Log.i("ModernArEngine", "ARCore unsupported on device. No fallback active.")
-                    return null
-                }
-            }
+            session = newSession
+            isSupported = true
+            _arCoreStatus.value = ArCoreEngineStatus.ACTIVE
+            _arCoreStatusMessage.value = "Google ARCore 已就緒 (水平/垂直平面與深度追蹤)"
+            Log.i("ModernArEngine", "Google ARCore Session successfully created & configured.")
+            return newSession
+        } catch (e: UnavailableDeviceNotCompatibleException) {
+            isSupported = false
+            _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
+            _arCoreStatusMessage.value = "⚠️ 此硬體不相容 Google ARCore"
+            Log.w("ModernArEngine", "DeviceNotCompatible: ${e.message}")
+            return null
         } catch (e: UnavailableArcoreNotInstalledException) {
+            isSupported = false
             _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
             _arCoreStatusMessage.value = "⚠️ 警告：尚未安裝 Google Play Services for AR"
-            isSupported = false
-        } catch (e: UnavailableDeviceNotCompatibleException) {
-            _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
-            _arCoreStatusMessage.value = "⚠️ 警告：此硬體不相容 Google ARCore"
-            isSupported = false
+            Log.w("ModernArEngine", "ArcoreNotInstalled: ${e.message}")
+            return null
         } catch (e: UnavailableApkTooOldException) {
-            _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
-            _arCoreStatusMessage.value = "⚠️ 警告：Google Play Services for AR 版本過舊"
             isSupported = false
+            _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
+            _arCoreStatusMessage.value = "⚠️ 警告：Google Play Services for AR 版本過舊，請前往商店更新"
+            Log.w("ModernArEngine", "ApkTooOld: ${e.message}")
+            return null
         } catch (e: UnavailableSdkTooOldException) {
+            isSupported = false
             _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
             _arCoreStatusMessage.value = "⚠️ 警告：應用程式 ARCore SDK 版本不相容"
-            isSupported = false
+            return null
         } catch (e: UnavailableUserDeclinedInstallationException) {
+            isSupported = false
             _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
             _arCoreStatusMessage.value = "⚠️ 警告：使用者已取消安裝 ARCore"
-            isSupported = false
+            return null
         } catch (t: Throwable) {
             Log.e("ModernArEngine", "ARCore Session init exception: ${t.message}", t)
             _arCoreStatus.value = ArCoreEngineStatus.ERROR
             _arCoreStatusMessage.value = "⚠️ 警告：ARCore 初始化失敗 (${t.localizedMessage ?: "未知"})"
             isSupported = false
+            return null
         } finally {
             isInitializing.set(false)
         }
-        return null
     }
 
     /**
@@ -370,8 +287,9 @@ class ModernArEngine(private val context: Context) {
     }
 
     fun makeGlContextCurrent(): Boolean {
+        val helper = eglHelper ?: return true // In pure Vulkan hardware buffer mode, no EGL context is needed
         return try {
-            eglHelper?.makeCurrent() ?: false
+            helper.makeCurrent()
         } catch (t: Throwable) {
             Log.w("ModernArEngine", "makeGlContextCurrent error: ${t.message}")
             false
@@ -379,8 +297,9 @@ class ModernArEngine(private val context: Context) {
     }
 
     fun detachGlContext() {
+        val helper = eglHelper ?: return
         try {
-            eglHelper?.detachCurrent()
+            helper.detachCurrent()
         } catch (_: Throwable) {}
     }
 

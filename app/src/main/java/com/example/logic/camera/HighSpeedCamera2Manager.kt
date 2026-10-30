@@ -382,7 +382,14 @@ class HighSpeedCamera2Manager(private val context: Context) {
             val targetFpsRange = selectOptimalFpsRange(characteristics)
             val targetAfMode = selectOptimalAfMode(characteristics)
 
-            val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+            val currentSharedCamera = sharedCamera
+            val template = if (currentSharedCamera != null) {
+                CameraDevice.TEMPLATE_RECORD
+            } else {
+                CameraDevice.TEMPLATE_PREVIEW
+            }
+
+            val requestBuilder = camera.createCaptureRequest(template).apply {
                 addTarget(surface)
                 set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
                 set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, targetFpsRange)
@@ -408,20 +415,23 @@ class HighSpeedCamera2Manager(private val context: Context) {
                     set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
                 }
             }
-            previewRequestBuilder = requestBuilder
 
             val surfaceList = ArrayList<Surface>()
             surfaceList.add(surface)
-            val currentSharedCamera = sharedCamera
             if (currentSharedCamera != null) {
                 try {
-                    surfaceList.addAll(currentSharedCamera.arCoreSurfaces)
+                    val arSurfaces = currentSharedCamera.arCoreSurfaces
+                    surfaceList.addAll(arSurfaces)
+                    for (arSurface in arSurfaces) {
+                        requestBuilder.addTarget(arSurface)
+                    }
                     currentSharedCamera.setAppSurfaces(activeCameraId ?: "0", listOf(surface))
-                    Log.i(TAG, "Configured SharedCamera with ${currentSharedCamera.arCoreSurfaces.size} ARCore surfaces.")
+                    Log.i(TAG, "Configured SharedCamera with ${arSurfaces.size} ARCore surfaces added to capture request.")
                 } catch (t: Throwable) {
                     Log.w(TAG, "Error binding SharedCamera surfaces: ${t.message}")
                 }
             }
+            previewRequestBuilder = requestBuilder
 
             val stateCallback = object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
@@ -433,15 +443,23 @@ class HighSpeedCamera2Manager(private val context: Context) {
                     isHighSpeedSessionActive = targetFpsRange.upper >= 60
 
                     try {
-                        session.setRepeatingRequest(
-                            requestBuilder.build(),
-                            captureCallback,
-                            backgroundHandler
-                        )
-                        Log.i(TAG, "CameraCaptureSession successfully started! FPS Range: $targetFpsRange, Size: ${size.width}x${size.height}")
+                        if (currentSharedCamera != null) {
+                            // Official Google ARCore SharedCamera contract:
+                            // ARCore manages its own repeating request to feed tracking algorithms and surfaces.
+                            // Do not call session.setRepeatingRequest manually as it interferes with ARCore tracking.
+                            currentSharedCamera.setCaptureCallback(captureCallback, backgroundHandler)
+                            Log.i(TAG, "SharedCamera active: registered captureCallback with ARCore.")
+                        } else {
+                            session.setRepeatingRequest(
+                                requestBuilder.build(),
+                                captureCallback,
+                                backgroundHandler
+                            )
+                            Log.i(TAG, "CameraCaptureSession successfully started! FPS Range: $targetFpsRange, Size: ${size.width}x${size.height}")
+                        }
                         onSessionConfigured?.invoke(isHighSpeedSessionActive, size)
                     } catch (e: Throwable) {
-                        Log.i(TAG, "setRepeatingRequest note (handled by ARCore when tracking): ${e.message}")
+                        Log.i(TAG, "CaptureSession start note: ${e.message}")
                         onSessionConfigured?.invoke(isHighSpeedSessionActive, size)
                     }
                 }

@@ -84,6 +84,15 @@ fun ModernArCameraView(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         hasCameraPermission = granted
+        if (granted) {
+            viewModel.checkAndInitArCore(context as? android.app.Activity, forceRetry = true)
+        }
+    }
+
+    LaunchedEffect(hasCameraPermission) {
+        if (hasCameraPermission) {
+            viewModel.checkAndInitArCore(context as? android.app.Activity, forceRetry = (viewModel.modernArEngine.session == null))
+        }
     }
 
     val openAppSettings = {
@@ -170,6 +179,7 @@ fun ModernArCameraView(
                     hasCameraPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
                     viewModel.onResume()
                     if (hasCameraPermission) {
+                        viewModel.checkAndInitArCore(context as? android.app.Activity, forceRetry = (viewModel.modernArEngine.session == null))
                         textureViewRef?.let { tv ->
                             if (tv.isAvailable) {
                                 viewModel.setHighSpeedCamera2Manager(camera2Manager)
@@ -398,6 +408,7 @@ fun ModernArCameraView(
             LaunchedEffect(viewportPxW, viewportPxH) {
                 if (viewportPxW > 0 && viewportPxH > 0) {
                     viewModel.updateDisplayGeometry(0, viewportPxW, viewportPxH)
+                    viewModel.modernArEngine.setDisplayGeometry(0, viewportPxW, viewportPxH)
                 }
             }
 
@@ -440,6 +451,7 @@ fun ModernArCameraView(
                             val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) ctx.display else (ctx.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager)?.defaultDisplay
                             val rot = display?.rotation ?: android.view.Surface.ROTATION_0
                             viewModel.updateDisplayGeometry(rot, width, height)
+                            viewModel.modernArEngine.setDisplayGeometry(rot, width, height)
                             viewModel.modernArEngine.sharedCamera?.let { camera2Manager.sharedCamera = it }
                             camera2Manager.openCameraAndStartSession(textureView) { isHighSpeed, size ->
                                 android.util.Log.i("CameraView", "Session ready. HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
@@ -453,6 +465,7 @@ fun ModernArCameraView(
                             val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) ctx.display else (ctx.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager)?.defaultDisplay
                             val rot = display?.rotation ?: android.view.Surface.ROTATION_0
                             viewModel.updateDisplayGeometry(rot, width, height)
+                            viewModel.modernArEngine.setDisplayGeometry(rot, width, height)
                             camera2Manager.configureTransform(textureView, width, height)
                         }
                         override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {

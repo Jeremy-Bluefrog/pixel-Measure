@@ -227,7 +227,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             modernArEngine.resume()
             return
         }
-        if (hasCheckedArCore && !forceRetry) return
+        if (hasCheckedArCore && !forceRetry && modernArEngine.arCoreStatus.value == ArCoreEngineStatus.ACTIVE) return
         hasCheckedArCore = true
         viewModelScope.launch(Dispatchers.IO) {
             val session = modernArEngine.checkAndCreateSession(activity)
