@@ -244,6 +244,11 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                 }
                 Log.i("MeasureViewModel", "Google ARCore session active.")
+            } else {
+                withContext(Dispatchers.Main) {
+                    _isMeasurementAvailable.value = true
+                }
+                Log.i("MeasureViewModel", "ARCore session unavailable, optical & sensor fusion measurement active.")
             }
         }
     }
@@ -1472,9 +1477,52 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         if (modernArEngine.session != null) {
             pendingHitTestQueue.set(Pair(x, y))
         } else {
-            _toastMessage.tryEmit("⚠️ 警告：Google ARCore 未就緒或不受支援，無法進行 3D 測量")
+            processOpticalFallbackTap(x, y)
+        }
+    }
+
+    private fun processOpticalFallbackTap(x: Float, y: Float) {
+        val w = displayWidth.coerceAtLeast(1)
+        val h = displayHeight.coerceAtLeast(1)
+        val ndcX = (x / w) * 2f - 1f
+        val ndcY = 1f - (y / h) * 2f
+
+        val telemetry = sensorCorrectionEngine.telemetry.value
+        val pitch = telemetry.pitchDeg
+        val angleRad = Math.toRadians(pitch.toDouble())
+        val estimatedDist = if (pitch in 10.0..80.0) {
+            (1.2 / kotlin.math.sin(angleRad)).coerceIn(0.3, 5.0)
+        } else {
+            1.2
         }
 
+        val aspect = w.toFloat() / h.toFloat()
+        val fovYRad = Math.toRadians(60.0)
+        val tanHalfFovY = kotlin.math.tan(fovYRad / 2.0)
+        val tanHalfFovX = tanHalfFovY * aspect
+
+        val pX = ndcX * tanHalfFovX * estimatedDist
+        val pY = ndcY * tanHalfFovY * estimatedDist
+        val pZ = -estimatedDist
+
+        val rawPoint = Point3D(pX, pY, pZ, isArPrecision = false)
+        val finalPoint = sensorCorrectionEngine.correctPointWithSensorFusion(rawPoint, _liveTargetPoint.value)
+
+        synchronized(pointsLock) {
+            saveUndoState()
+            capturedPoints.add(finalPoint)
+            updateCapturedPointsSnapshotCache()
+            triggerHapticFeedback(HapticType.CLICK)
+            val currentCount = capturedPoints.size
+            val charCode = ('A'.code + ((currentCount - 1) % 26)).toChar()
+            if (currentCount % 2 == 0) {
+                _toastMessage.tryEmit("線段 ${currentCount / 2} 完成（光學感測輔助）")
+            } else {
+                _toastMessage.tryEmit("已設定起點 ($charCode)，請瞄準下一點")
+            }
+            updateAutoDetectedGeometry()
+        }
+        _isMeasurementAvailable.value = true
     }
 
     private fun saveUndoState() {

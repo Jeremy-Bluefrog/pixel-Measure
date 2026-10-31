@@ -452,6 +452,9 @@ fun ModernArCameraView(
                             val rot = display?.rotation ?: android.view.Surface.ROTATION_0
                             viewModel.updateDisplayGeometry(rot, width, height)
                             viewModel.modernArEngine.setDisplayGeometry(rot, width, height)
+                            if (viewModel.modernArEngine.session == null) {
+                                viewModel.checkAndInitArCore(ctx as? android.app.Activity, forceRetry = true)
+                            }
                             viewModel.modernArEngine.sharedCamera?.let { camera2Manager.sharedCamera = it }
                             camera2Manager.openCameraAndStartSession(textureView) { isHighSpeed, size ->
                                 android.util.Log.i("CameraView", "Session ready. HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")

@@ -574,6 +574,44 @@ fun HistorySheetContent(
 
         Spacer(modifier = Modifier.height(10.dp))
 
+        if (records.isNotEmpty()) {
+            val totalCount = records.size
+            val distanceRecords = records.filter { it.type == "DISTANCE" || it.type == "CAM" || it.type.isEmpty() }
+            val sumDistance = distanceRecords.sumOf { it.value }
+
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 2.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("統計摘要", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text("總紀錄: $totalCount 項 | 總長度: ${String.format(Locale.getDefault(), "%.2f", sumDistance)} m", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    FilledTonalButton(
+                        onClick = { ShareUtility.exportRecordsAsCsvText(context, records) },
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Icon(Icons.Rounded.Share, null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("匯出報表", fontSize = 12.sp)
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
         // Category Filter Chips Row
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),

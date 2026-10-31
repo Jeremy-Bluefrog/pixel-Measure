@@ -1086,6 +1086,43 @@ object ShareUtility {
     }
 
     /**
+     * Exports all measurement records as a structured CSV/Text summary for easy sharing.
+     */
+    fun exportRecordsAsCsvText(context: Context, records: List<MeasureRecord>) {
+        if (records.isEmpty()) {
+            android.widget.Toast.makeText(context, "目前尚無測量紀錄可匯出", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        val sb = StringBuilder()
+        sb.append("=== AR 空間測量紀錄報表 ===\n")
+        sb.append("匯出時間: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}\n\n")
+        for ((idx, rec) in records.withIndex()) {
+            sb.append("紀錄 #${idx + 1}\n")
+            sb.append("類型: ${rec.type}\n")
+            sb.append("數值: ${rec.value} ${rec.unit}\n")
+            sb.append("日期: ${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(rec.timestamp))}\n")
+            if (!rec.notes.isNullOrBlank()) {
+                sb.append("備註: ${rec.notes}\n")
+            }
+            sb.append("------------------------------------\n")
+        }
+        val text = sb.toString()
+        try {
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, "AR 空間測量紀錄報表")
+                putExtra(Intent.EXTRA_TEXT, text)
+            }
+            val chooser = Intent.createChooser(shareIntent, "匯出測量報表").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(chooser)
+        } catch (e: Exception) {
+            copyToClipboard(context, text, "已複製測量報表至剪貼簿")
+        }
+    }
+
+    /**
      * Copies text to system clipboard with Toast prompt
      */
     fun copyToClipboard(context: Context, text: String, toastMsg: String = "已複製至剪貼簿") {

@@ -366,7 +366,7 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
                 isNearContact != prev.isProximityNear || isBurstLocked != prev.isMultiSampleLocked ||
                 burstDiff >= 0.02f || lastOrthogonalSnapped != prev.isOrthogonalSnapped
 
-        if (!hasSignificantChange && timeSinceLastEmit < 33L) {
+        if (!hasSignificantChange && timeSinceLastEmit < 50L) {
             return
         }
         lastTelemetryEmitTimeMs = now

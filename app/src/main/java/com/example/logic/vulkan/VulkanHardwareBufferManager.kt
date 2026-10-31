@@ -37,7 +37,7 @@ class VulkanHardwareBufferManager(
                 width,
                 height,
                 PixelFormat.RGBA_8888,
-                3,
+                4,
                 usage
             ).apply {
                 setOnImageAvailableListener({ reader ->

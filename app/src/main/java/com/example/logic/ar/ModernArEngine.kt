@@ -175,9 +175,25 @@ class ModernArEngine(private val context: Context) {
         }
 
         try {
+            if (!isArCorePackageInstalled(context)) {
+                isSupported = false
+                _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
+                _arCoreStatusMessage.value = "⚠️ 尚未安裝 Google Play Services for AR"
+                Log.i("ModernArEngine", "ARCore package com.google.ar.core is not installed on device. Skipping native Session creation.")
+                if (activity != null && isGooglePlayStoreAvailable(activity)) {
+                    try {
+                        ArCoreApk.getInstance().requestInstall(activity, true)
+                    } catch (_: Throwable) {}
+                }
+                return null
+            }
+
             // First priority: Create ARCore session supporting shared camera or standard camera
             val newSession = try {
                 Session(context, EnumSet.of(Session.Feature.SHARED_CAMERA))
+            } catch (e: UnavailableException) {
+                // If ARCore is not installed or device incompatible, re-throw to outer catch handler
+                throw e
             } catch (e: Throwable) {
                 Log.w("ModernArEngine", "SharedCamera session creation note, fallback to standard: ${e.message}")
                 Session(context)

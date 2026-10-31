@@ -443,23 +443,24 @@ class HighSpeedCamera2Manager(private val context: Context) {
                     isHighSpeedSessionActive = targetFpsRange.upper >= 60
 
                     try {
+                        session.setRepeatingRequest(
+                            requestBuilder.build(),
+                            captureCallback,
+                            backgroundHandler
+                        )
                         if (currentSharedCamera != null) {
-                            // Official Google ARCore SharedCamera contract:
-                            // ARCore manages its own repeating request to feed tracking algorithms and surfaces.
-                            // Do not call session.setRepeatingRequest manually as it interferes with ARCore tracking.
-                            currentSharedCamera.setCaptureCallback(captureCallback, backgroundHandler)
-                            Log.i(TAG, "SharedCamera active: registered captureCallback with ARCore.")
+                            try {
+                                currentSharedCamera.setCaptureCallback(captureCallback, backgroundHandler)
+                            } catch (cbEx: Throwable) {
+                                Log.w(TAG, "SharedCamera setCaptureCallback note: ${cbEx.message}")
+                            }
+                            Log.i(TAG, "CameraCaptureSession started with SharedCamera! FPS Range: $targetFpsRange, Size: ${size.width}x${size.height}")
                         } else {
-                            session.setRepeatingRequest(
-                                requestBuilder.build(),
-                                captureCallback,
-                                backgroundHandler
-                            )
                             Log.i(TAG, "CameraCaptureSession successfully started! FPS Range: $targetFpsRange, Size: ${size.width}x${size.height}")
                         }
                         onSessionConfigured?.invoke(isHighSpeedSessionActive, size)
                     } catch (e: Throwable) {
-                        Log.i(TAG, "CaptureSession start note: ${e.message}")
+                        Log.e(TAG, "setRepeatingRequest error: ${e.message}", e)
                         onSessionConfigured?.invoke(isHighSpeedSessionActive, size)
                     }
                 }
@@ -505,6 +506,10 @@ class HighSpeedCamera2Manager(private val context: Context) {
     }
 
     fun reconnectWithSharedCamera(sharedCam: SharedCamera, onConfigured: ((Boolean, Size) -> Unit)? = null) {
+        if (sharedCamera == sharedCam && captureSession != null && !isClosed) {
+            Log.i(TAG, "Camera already active with this SharedCamera instance.")
+            return
+        }
         sharedCamera = sharedCam
         val tv = activeTextureView?.get() ?: return
         if (tv.isAvailable) {
