@@ -309,7 +309,7 @@ fun MainScreen(viewModel: MeasureViewModel) {
                                     color = MaterialTheme.colorScheme.primaryContainer,
                                     contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
                                     shape = RoundedCornerShape(20.dp),
-                                    shadowElevation = 8.dp,
+                                    shadowElevation = 0.dp,
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Row(
@@ -920,7 +920,7 @@ fun RecordDetailDialog(
                 if (hasImage) {
                     Surface(
                         shape = RoundedCornerShape(16.dp),
-                        shadowElevation = 4.dp,
+                        shadowElevation = 0.dp,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(180.dp)

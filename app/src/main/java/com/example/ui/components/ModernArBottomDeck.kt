@@ -159,7 +159,6 @@ fun ModernArBottomDeck(
                                 .size((48 * uiButtonScale).dp)
                                 .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.70f else 0.88f), CircleShape)
                                 .border(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f), CircleShape)
-                                .shadow(3.dp, CircleShape)
                                 .testTag("undo_button")
                         ) {
                             Icon(
@@ -179,7 +178,6 @@ fun ModernArBottomDeck(
                                 .size((48 * uiButtonScale).dp)
                                 .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.85f), CircleShape)
                                 .border(0.8.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.55f), CircleShape)
-                                .shadow(3.dp, CircleShape)
                                 .testTag("clear_all_button")
                         ) {
                             Icon(
@@ -213,7 +211,7 @@ fun ModernArBottomDeck(
                     color = addFabContainerColor,
                     shape = RoundedCornerShape(addFabCornerRadius),
                     border = if (!isMeasurementAvailable) BorderStroke(1.5.dp, MaterialTheme.colorScheme.outlineVariant) else null,
-                    shadowElevation = if (isMeasurementAvailable) 6.dp else 3.dp,
+                    shadowElevation = 0.dp,
                     modifier = Modifier
                         .size((90 * uiButtonScale).dp)
                         .clickable(
@@ -269,7 +267,7 @@ fun ModernArBottomDeck(
                     shape = RoundedCornerShape(10.dp),
                     color = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.70f else 0.90f),
                     border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-                    shadowElevation = 2.dp,
+                    shadowElevation = 0.dp,
                     modifier = Modifier.testTag("photo_video_mode_toggle")
                 ) {
                     Row(
@@ -429,7 +427,7 @@ private fun LiveDistanceBadge(
         color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
         shape = RoundedCornerShape(18.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)),
-        modifier = Modifier.shadow(4.dp, RoundedCornerShape(18.dp))
+        shadowElevation = 0.dp
     ) {
         Row(
             modifier = Modifier
@@ -510,7 +508,7 @@ private fun MeasurementLiveSummaryCard(
         color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.94f),
         shape = RoundedCornerShape(20.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
-        shadowElevation = 8.dp,
+        shadowElevation = 0.dp,
         modifier = modifier
             .fillMaxWidth()
             .testTag("measurement_live_summary_card")

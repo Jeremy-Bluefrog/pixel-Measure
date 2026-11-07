@@ -639,9 +639,9 @@ fun ActiveTrackingStabilityWarningBanner(
         color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.95f),
         shape = RoundedCornerShape(20.dp),
         border = BorderStroke(1.5.dp, bannerColor.copy(alpha = 0.85f)),
+        shadowElevation = 0.dp,
         modifier = modifier
             .fillMaxWidth()
-            .shadow(12.dp, RoundedCornerShape(20.dp))
     ) {
         Row(
             modifier = Modifier

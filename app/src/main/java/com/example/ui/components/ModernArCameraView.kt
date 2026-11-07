@@ -537,27 +537,8 @@ fun ModernArCameraView(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .statusBarsPadding()
-                        .padding(top = 96.dp, start = 16.dp, end = 16.dp)
+                        .padding(top = 104.dp, start = 16.dp, end = 16.dp)
                 )
-            }
-            
-            if (arCoreStatus != ArCoreEngineStatus.ACTIVE && arCoreStatus != ArCoreEngineStatus.UNSUPPORTED) {
-                 // Non-intrusive status warning
-                 Surface(
-                    color = MaterialTheme.colorScheme.tertiaryContainer,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .statusBarsPadding()
-                        .padding(top = 16.dp)
-                        .clickable { showSensorStatusDialog = true }
-                 ) {
-                     Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                         Icon(Icons.Rounded.HelpOutline, null, tint = MaterialTheme.colorScheme.onTertiaryContainer)
-                         Spacer(Modifier.width(8.dp))
-                         Text("AR 功能受限，點擊檢查狀態", color = MaterialTheme.colorScheme.onTertiaryContainer, fontWeight = FontWeight.Bold)
-                     }
-                 }
             }
 
             // 4. Clean Minimal Top Bar
@@ -581,7 +562,7 @@ fun ModernArCameraView(
                     modifier = Modifier.align(Alignment.TopCenter)
                 )
 
-                // 4.5. Dynamic Silent Visual Guidance Pill
+                // 4.5. Dynamic Silent Visual Guidance Pill (Compact & Clean)
                 MeasurementGuidancePill(
                     viewModel = viewModel,
                     subMode = subMode,
@@ -596,7 +577,7 @@ fun ModernArCameraView(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .statusBarsPadding()
-                        .padding(top = if (trackingStability.level == StabilityLevel.POOR) 152.dp else 56.dp)
+                        .padding(top = if (trackingStability.level == StabilityLevel.POOR) 152.dp else 68.dp)
                 )
             }
 

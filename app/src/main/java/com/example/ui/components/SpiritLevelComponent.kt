@@ -371,7 +371,6 @@ fun SpiritLevelComponent(
                     modifier = Modifier
                         .size(42.dp)
                         .background(MaterialTheme.colorScheme.primaryContainer, CircleShape)
-                        .shadow(3.dp, CircleShape)
                         .testTag("level_btn_save")
                 ) {
                     Icon(
@@ -1031,7 +1030,7 @@ private fun PrecisionMasterpieceBullseyeView(
                     shape = RoundedCornerShape(16.dp),
                     color = levelColor.copy(alpha = 0.22f),
                     border = BorderStroke(1.2.dp, levelColor.copy(alpha = 0.85f)),
-                    shadowElevation = 6.dp
+                    shadowElevation = 0.dp
                 ) {
                     Row(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 7.dp),
@@ -1059,7 +1058,7 @@ private fun PrecisionMasterpieceBullseyeView(
                     shape = RoundedCornerShape(14.dp),
                     color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
                     border = BorderStroke(1.dp, outlineVariant.copy(alpha = 0.5f)),
-                    shadowElevation = 4.dp
+                    shadowElevation = 0.dp
                 ) {
                     Text(
                         text = String.format(Locale.US, "%.1f°", deviation),

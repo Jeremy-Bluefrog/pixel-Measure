@@ -1272,59 +1272,98 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         }
 
         // 6. If a tap was requested, commit the point with sensor correction
-        if (tapRequest != null && hitResult != null) {
-            val pose = hitResult.pose
-            val rawP = Point3D(
-                x = pose.tx().toDouble(),
-                y = pose.ty().toDouble(),
-                z = pose.tz().toDouble(),
-                isArPrecision = true,
-                anchor = hitResult.anchor
-            )
-            val contactP = sensorCorrectionEngine.applyProximityZeroContactOffset(rawP)
-            val planarP = if (_cameraSubMode.value == 1 || hitResult.hitType == com.example.logic.ar.HitType.PLANE_POLYGON) {
-                sensorCorrectionEngine.projectPointToPlane(contactP, hitResult.pose)
-            } else {
-                contactP
-            }
-            val livePt = _liveTargetPoint.value
-            val baseP = if (livePt != null && ArMath.distance(livePt, planarP) < 0.08) {
-                livePt.copy(anchor = hitResult.anchor ?: livePt.anchor)
-            } else {
-                planarP
-            }
-            val pointsSnapshot = getCapturedPointsSnapshot()
-            val isActivelyDrawingLine = pointsSnapshot.size % 2 == 1
-            val lastPoint = pointsSnapshot.lastOrNull()
-            val correctedP = if (isActivelyDrawingLine && lastPoint != null && (_cameraSubMode.value == 0 || _cameraSubMode.value == 1)) {
-                sensorCorrectionEngine.correctOrthogonalAlignment(lastPoint, baseP)
-            } else {
-                baseP
-            }
-
-            val nextIndex = pointsSnapshot.size
-            val lineNum = (nextIndex / 2) + 1
-            val role = if (nextIndex % 2 == 0) "起點" else "終點"
-            val charCode = ('A'.code + nextIndex).toChar()
-            val namedP = correctedP.copy(label = "線段$lineNum $role $charCode")
-
-            android.os.Handler(android.os.Looper.getMainLooper()).post {
-                synchronized(pointsLock) {
-                    if (capturedPoints.size >= 256) {
-                        _toastMessage.tryEmit("已達最大測量點上限 (256點)，請儲存或清除後再繼續")
-                        return@post
-                    }
-                    saveUndoState()
-                    capturedPoints.add(namedP)
-                    updateCapturedPointsSnapshotCache()
-                }
-                triggerHapticFeedback(if (isActivelyDrawingLine) HapticType.HEAVY else HapticType.CLICK)
-                if (isActivelyDrawingLine) {
-                    _toastMessage.tryEmit("線段 $lineNum 完成（兩點成一線）")
+        if (tapRequest != null) {
+            val tapX = tapRequest.first
+            val tapY = tapRequest.second
+            if (hitResult != null) {
+                val pose = hitResult.pose
+                val rawP = Point3D(
+                    x = pose.tx().toDouble(),
+                    y = pose.ty().toDouble(),
+                    z = pose.tz().toDouble(),
+                    isArPrecision = true,
+                    anchor = hitResult.anchor
+                )
+                val contactP = sensorCorrectionEngine.applyProximityZeroContactOffset(rawP)
+                val planarP = if (_cameraSubMode.value == 1 || hitResult.hitType == com.example.logic.ar.HitType.PLANE_POLYGON) {
+                    sensorCorrectionEngine.projectPointToPlane(contactP, hitResult.pose)
                 } else {
-                    _toastMessage.tryEmit("已設定線段 $lineNum 起點 ($charCode)，請瞄準終點")
+                    contactP
                 }
-                updateAutoDetectedGeometry()
+                val livePt = _liveTargetPoint.value
+                val baseP = if (livePt != null && ArMath.distance(livePt, planarP) < 0.08) {
+                    livePt.copy(anchor = hitResult.anchor ?: livePt.anchor)
+                } else {
+                    planarP
+                }
+                val pointsSnapshot = getCapturedPointsSnapshot()
+                val isActivelyDrawingLine = pointsSnapshot.size % 2 == 1
+                val lastPoint = pointsSnapshot.lastOrNull()
+                val correctedP = if (isActivelyDrawingLine && lastPoint != null && (_cameraSubMode.value == 0 || _cameraSubMode.value == 1)) {
+                    sensorCorrectionEngine.correctOrthogonalAlignment(lastPoint, baseP)
+                } else {
+                    baseP
+                }
+
+                val nextIndex = pointsSnapshot.size
+                val lineNum = (nextIndex / 2) + 1
+                val role = if (nextIndex % 2 == 0) "起點" else "終點"
+                val charCode = ('A'.code + nextIndex).toChar()
+                val namedP = correctedP.copy(label = "線段$lineNum $role $charCode")
+
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    synchronized(pointsLock) {
+                        if (capturedPoints.size >= 256) {
+                            _toastMessage.tryEmit("已達最大測量點上限 (256點)，請儲存或清除後再繼續")
+                            return@post
+                        }
+                        saveUndoState()
+                        capturedPoints.add(namedP)
+                        updateCapturedPointsSnapshotCache()
+                    }
+                    triggerHapticFeedback(if (isActivelyDrawingLine) HapticType.HEAVY else HapticType.CLICK)
+                    if (isActivelyDrawingLine) {
+                        _toastMessage.tryEmit("線段 $lineNum 完成（兩點成一線）")
+                    } else {
+                        _toastMessage.tryEmit("已設定線段 $lineNum 起點 ($charCode)，請瞄準終點")
+                    }
+                    updateAutoDetectedGeometry()
+                }
+            } else {
+                // If raycast hit no plane directly at tap coordinate, fallback gracefully to live target or optical sensor fusion
+                val livePt = _liveTargetPoint.value
+                if (livePt != null) {
+                    val pointsSnapshot = getCapturedPointsSnapshot()
+                    val isActivelyDrawingLine = pointsSnapshot.size % 2 == 1
+                    val nextIndex = pointsSnapshot.size
+                    val lineNum = (nextIndex / 2) + 1
+                    val role = if (nextIndex % 2 == 0) "起點" else "終點"
+                    val charCode = ('A'.code + nextIndex).toChar()
+                    val namedP = livePt.copy(label = "線段$lineNum $role $charCode")
+
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        synchronized(pointsLock) {
+                            if (capturedPoints.size >= 256) {
+                                _toastMessage.tryEmit("已達最大測量點上限 (256點)")
+                                return@post
+                            }
+                            saveUndoState()
+                            capturedPoints.add(namedP)
+                            updateCapturedPointsSnapshotCache()
+                        }
+                        triggerHapticFeedback(if (isActivelyDrawingLine) HapticType.HEAVY else HapticType.CLICK)
+                        if (isActivelyDrawingLine) {
+                            _toastMessage.tryEmit("線段 $lineNum 完成")
+                        } else {
+                            _toastMessage.tryEmit("已設定線段 $lineNum 起點 ($charCode)")
+                        }
+                        updateAutoDetectedGeometry()
+                    }
+                } else {
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        processOpticalFallbackTap(tapX, tapY)
+                    }
+                }
             }
         }
         return centerHit

@@ -58,7 +58,7 @@ fun MeasurementTutorialDialog(
             shape = RoundedCornerShape(28.dp),
             color = Color(0xF00F172A), // Dark Glassmorphism 94% opacity
             border = BorderStroke(1.2.dp, Color(0xFF334155)),
-            shadowElevation = 16.dp,
+            shadowElevation = 0.dp,
             modifier = modifier
                 .fillMaxWidth(0.92f)
                 .wrapContentHeight()
@@ -690,7 +690,7 @@ private fun TutorialStep3MagneticSnapAnimation() {
                 shape = RoundedCornerShape(12.dp),
                 color = Color(0xF0064E3B), // Emerald Dark Glass
                 border = BorderStroke(1.dp, Color(0xFF10B981)),
-                shadowElevation = 6.dp
+                shadowElevation = 0.dp
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),

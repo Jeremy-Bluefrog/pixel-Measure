@@ -152,25 +152,25 @@ fun MeasurementGuidancePill(
     }
 
     Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = Color(0xCC0F172A), // Dark Glassmorphism 80% opacity
-        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.45f)),
-        shadowElevation = 8.dp,
+        shape = RoundedCornerShape(16.dp),
+        color = Color(0xB80F172A), // Dark Glassmorphism 72% opacity
+        border = BorderStroke(0.8.dp, accentColor.copy(alpha = 0.35f)),
+        shadowElevation = 0.dp,
         modifier = modifier
-            .padding(horizontal = 16.dp)
+            .padding(horizontal = 24.dp)
             .testTag("measurement_guidance_pill")
     ) {
         Row(
             modifier = Modifier
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 14.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Animated Icon Box
+            // Minimal Icon
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(34.dp)
+                    .size(24.dp)
                     .clip(CircleShape)
                     .background(accentColor.copy(alpha = 0.20f))
                     .graphicsLayer {
@@ -186,60 +186,35 @@ fun MeasurementGuidancePill(
                     imageVector = icon,
                     contentDescription = null,
                     tint = accentColor,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(14.dp)
                 )
             }
 
-            // Step Instructional Texts (Zero-jank immediate rendering without 60fps AnimatedContent thrashing)
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.Center
-            ) {
-                Text(
-                    text = title,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White,
-                    maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                )
+            // Streamlined single-focus message
+            Text(
+                text = title,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false)
+            )
 
-                Spacer(modifier = Modifier.height(1.dp))
-
-                Text(
-                    text = subtitle,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Normal,
-                    color = Color(0xFFCBD5E1),
-                    maxLines = 1,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                )
-            }
-
-            // Quick Tutorial Access Chip Button
-            Surface(
-                onClick = onOpenTutorial,
-                shape = RoundedCornerShape(12.dp),
-                color = Color.White.copy(alpha = 0.12f),
-                border = BorderStroke(0.7.dp, Color.White.copy(alpha = 0.25f)),
-                modifier = Modifier.testTag("guidance_tutorial_chip")
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(
-                        Icons.Rounded.Lightbulb,
-                        contentDescription = "教學",
-                        tint = Color(0xFFFBBF24), // Warm Amber
-                        modifier = Modifier.size(13.dp)
+            if (subtitle.contains("：") || subtitle.contains(":")) {
+                val valuePart = subtitle.substringAfter("：").substringAfter(":").trim()
+                if (valuePart.isNotEmpty()) {
+                    Text(
+                        text = "•",
+                        fontSize = 11.sp,
+                        color = Color(0xFF94A3B8)
                     )
                     Text(
-                        text = "教學",
+                        text = valuePart,
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color.White
+                        fontWeight = FontWeight.Medium,
+                        color = Color(0xFFE2E8F0),
+                        maxLines = 1
                     )
                 }
             }

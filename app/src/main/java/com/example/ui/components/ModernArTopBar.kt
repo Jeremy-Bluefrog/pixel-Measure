@@ -91,7 +91,7 @@ fun ModernArTopBar(
                         color = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f),
                         contentColor = colorOnSurface,
                         border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f)),
-                        shadowElevation = 2.dp,
+                        shadowElevation = 0.dp,
                         modifier = Modifier.testTag("submode_selector_button")
                     ) {
                         Row(
@@ -172,7 +172,7 @@ fun ModernArTopBar(
                         color = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f),
                         contentColor = colorPrimary,
                         border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f)),
-                        shadowElevation = 2.dp,
+                        shadowElevation = 0.dp,
                         modifier = Modifier.testTag("unit_selector_button")
                     ) {
                         Row(
@@ -249,7 +249,6 @@ fun ModernArTopBar(
                                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f),
                                 shape = CircleShape
                             )
-                            .shadow(2.dp, CircleShape)
                             .testTag("switch_camera_facing_button")
                     ) {
                         Icon(
@@ -282,7 +281,6 @@ fun ModernArTopBar(
                                 color = if (isTorchOn) Color.Transparent else MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f),
                                 shape = CircleShape
                             )
-                            .shadow(if (isTorchOn) 5.dp else 2.dp, CircleShape)
                             .testTag("flashlight_toggle_button")
                     ) {
                         Icon(
@@ -418,7 +416,6 @@ fun ModernArTopBar(
                             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f),
                             shape = CircleShape
                         )
-                        .shadow(2.dp, CircleShape)
                 ) {
                     Icon(
                         Icons.Rounded.History,
@@ -439,7 +436,6 @@ fun ModernArTopBar(
                             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f),
                             shape = CircleShape
                         )
-                        .shadow(2.dp, CircleShape)
                 ) {
                     Icon(
                         Icons.Rounded.Settings,
@@ -470,7 +466,7 @@ fun ModernArTopBar(
                 contentColor = MaterialTheme.colorScheme.onSurface,
                 shape = RoundedCornerShape(24.dp),
                 border = BorderStroke(1.5.dp, Color(0xFFE53935)),
-                shadowElevation = 10.dp,
+                shadowElevation = 0.dp,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .statusBarsPadding()

@@ -268,8 +268,8 @@ fun RulerComponent(
         Surface(
             shape = RoundedCornerShape(18.dp),
             color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.94f),
-            tonalElevation = 6.dp,
-            shadowElevation = 8.dp,
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
             modifier = Modifier
                 .align(Alignment.TopStart)
@@ -357,8 +357,8 @@ fun RulerComponent(
         Surface(
             shape = CircleShape,
             color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.88f),
-            tonalElevation = 4.dp,
-            shadowElevation = 6.dp,
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
             modifier = Modifier
                 .align(Alignment.TopEnd)
