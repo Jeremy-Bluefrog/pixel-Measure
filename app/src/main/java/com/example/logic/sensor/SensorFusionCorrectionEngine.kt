@@ -248,7 +248,6 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
         gyroSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME, handler) }
         rotationVectorSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME, handler) }
         linearAccelSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME, handler) }
-        magneticSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL, handler) }
         barometerSensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL, handler) }
         proximitySensor?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL, handler) }
     }
@@ -261,7 +260,11 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
         } catch (_: Exception) {}
         try {
             sensorHandler?.removeCallbacksAndMessages(null)
-            sensorThread?.quitSafely()
+            val thread = sensorThread
+            thread?.quitSafely()
+            try {
+                thread?.join(200)
+            } catch (_: InterruptedException) {}
             sensorThread = null
             sensorHandler = null
         } catch (_: Exception) {}
@@ -338,8 +341,8 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
     private fun updateTelemetryState() {
         val now = android.os.SystemClock.uptimeMillis()
         val timeSinceLastEmit = now - lastTelemetryEmitTimeMs
-        if (timeSinceLastEmit < 16L) {
-            return // Max 60Hz sync aligned with standard display V-Sync pacing
+        if (timeSinceLastEmit < 25L) {
+            return // Max ~40Hz HUD telemetry sync to reduce Pixel UI thread wakeups
         }
 
         val azimuth = Math.toDegrees(orientationAngles[0].toDouble()).toFloat()
@@ -743,14 +746,22 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
 
     /**
      * 5. Proximity Sensor Zero-Contact Calibration.
-     * Compensates camera lens-to-chassis offset (~1.2 cm glass thickness compensation).
+     * Compensates camera lens-to-chassis offset (~1.2 cm) along the camera-to-target ray.
      */
-    fun applyProximityZeroContactOffset(point: Point3D): Point3D {
-        if (!isSensorCorrectionEnabled || !isProximityZeroContactEnabled || !isNearContact) {
+    fun applyProximityZeroContactOffset(point: Point3D, cameraPose: Pose? = null): Point3D {
+        if (!isSensorCorrectionEnabled || !isProximityZeroContactEnabled || !isNearContact || cameraPose == null) {
             return point
         }
+        val dx = cameraPose.tx().toDouble() - point.x
+        val dy = cameraPose.ty().toDouble() - point.y
+        val dz = cameraPose.tz().toDouble() - point.z
+        val dist = sqrt(dx * dx + dy * dy + dz * dz)
+        if (dist < 1e-4) return point
+        val offsetMeters = 0.012
         return point.copy(
-            z = point.z + 0.012
+            x = point.x + (dx / dist) * offsetMeters,
+            y = point.y + (dy / dist) * offsetMeters,
+            z = point.z + (dz / dist) * offsetMeters
         )
     }
 

@@ -106,7 +106,8 @@ fun WelcomeScreen(
                     Card(
                         shape = RoundedCornerShape(24.dp),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(180.dp)

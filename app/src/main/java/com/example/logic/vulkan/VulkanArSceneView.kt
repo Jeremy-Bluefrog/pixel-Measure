@@ -46,6 +46,13 @@ class VulkanArSceneView(
     private var surfaceWidth = 0
     private var surfaceHeight = 0
 
+    @Volatile
+    private var targetFps: Float = 60.0f
+    @Volatile
+    private var minFrameIntervalNs: Long = 15_500_000L // ~60Hz pacing guard against 90/120Hz duplicate wakeups
+    private var lastDispatchedDoFrameNs: Long = 0L
+    private var lastArFrameTimestampNs: Long = 0L
+
     // Frame synchronization & watchdog
     val frameSyncManager = VulkanFrameSyncManager(maxFramesInFlight = 2)
 
@@ -57,10 +64,25 @@ class VulkanArSceneView(
         frameSyncManager.onWatchdogTriggered = {
             handleWatchdogTimeoutRecovery()
         }
-        // Request 60Hz frame rate on the Vulkan surface directly
+        applySurfaceFrameRate(targetFps)
+    }
+
+    fun setTargetFrameRate(fps: Float) {
+        val clamped = if (fps <= 35f) 30.0f else 60.0f
+        if (targetFps == clamped) return
+        targetFps = clamped
+        minFrameIntervalNs = if (clamped <= 30.0f) 31_000_000L else 15_500_000L
+        applySurfaceFrameRate(clamped)
+    }
+
+    private fun applySurfaceFrameRate(fps: Float) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             try {
-                holder.surface?.setFrameRate(60.0f, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
+                holder.surface?.let { surf ->
+                    if (surf.isValid) {
+                        surf.setFrameRate(fps, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
+                    }
+                }
             } catch (t: Throwable) {
                 Log.w(TAG, "Frame rate lock notification: ${t.message}")
             }
@@ -70,29 +92,32 @@ class VulkanArSceneView(
     override fun surfaceCreated(holder: SurfaceHolder) {
         Log.i(TAG, "Vulkan Surface created. Transitioning to SURFACE_ATTACHED.")
         _renderState.set(VulkanRenderState.SURFACE_ATTACHED)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            try {
-                holder.surface?.setFrameRate(60.0f, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
-            } catch (_: Throwable) {}
-        }
+        applySurfaceFrameRate(targetFps)
         startRenderLoop()
     }
 
+    private fun getCurrentDisplayRotation(): Int {
+        val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            context.display
+        } else {
+            @Suppress("DEPRECATION")
+            (context.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager)?.defaultDisplay
+        }
+        return display?.rotation ?: Surface.ROTATION_0
+    }
+
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-        if (width > 1 && height > 1) {
+        if (width >= 1 && height >= 1) {
             surfaceWidth = width
             surfaceHeight = height
             _renderState.set(VulkanRenderState.SWAPCHAIN_CONFIGURED)
             Log.i(TAG, "Vulkan Swapchain configured: ${width}x${height}")
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                try {
-                    holder.surface?.setFrameRate(60.0f, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
-                } catch (_: Throwable) {}
-            }
+            applySurfaceFrameRate(targetFps)
             if (width > 100 && height > 100) {
-                session?.setDisplayGeometry(0, width, height)
-                viewModel?.updateDisplayGeometry(0, width, height)
+                val rot = getCurrentDisplayRotation()
+                modernArEngine?.setDisplayGeometry(rot, width, height)
+                viewModel?.updateDisplayGeometry(rot, width, height)
             }
 
             if (isRendering) {
@@ -108,10 +133,12 @@ class VulkanArSceneView(
     }
 
     fun onResume() {
-        if (_renderState.get() == VulkanRenderState.SAFE_SUSPENDED && holder.surface.isValid) {
-            _renderState.set(VulkanRenderState.SWAPCHAIN_CONFIGURED)
+        if (holder.surface.isValid) {
+            if (_renderState.get() == VulkanRenderState.SAFE_SUSPENDED) {
+                _renderState.set(VulkanRenderState.SWAPCHAIN_CONFIGURED)
+            }
+            startRenderLoop()
         }
-        startRenderLoop()
     }
 
     fun onPause() {
@@ -126,9 +153,10 @@ class VulkanArSceneView(
     private fun startRenderLoop() {
         if (isRendering) return
         isRendering = true
+        lastDispatchedDoFrameNs = 0L
         _renderState.set(VulkanRenderState.ACTIVE_RENDER_LOOP)
 
-        renderThread = HandlerThread("VulkanRenderThread").apply {
+        renderThread = HandlerThread("VulkanRenderThread", android.os.Process.THREAD_PRIORITY_DISPLAY).apply {
             start()
             renderHandler = Handler(looper)
         }
@@ -188,8 +216,11 @@ class VulkanArSceneView(
     override fun doFrame(frameTimeNanos: Long) {
         if (!isRendering || !_renderState.get().canRender) return
 
-        // Zero-allocation post using reusable Runnable
-        renderHandler?.post(frameProcessRunnable)
+        // Throttle 90Hz/120Hz Pixel Smooth Display Choreographer callbacks to target AR cadence (30/60Hz)
+        if (lastDispatchedDoFrameNs == 0L || (frameTimeNanos - lastDispatchedDoFrameNs) >= minFrameIntervalNs) {
+            lastDispatchedDoFrameNs = frameTimeNanos
+            renderHandler?.post(frameProcessRunnable)
+        }
 
         if (isRendering && _renderState.get().canRender) {
             Choreographer.getInstance().postFrameCallback(this)
@@ -211,11 +242,19 @@ class VulkanArSceneView(
 
         try {
             val arEngine = modernArEngine ?: return
-            val arSession = session ?: arEngine.session ?: return
+            if (!arEngine.isSessionResumed) return
+            val arSession = arEngine.session ?: session ?: return
 
             if (arEngine.makeGlContextCurrent()) {
                 try {
                     val frame = arSession.update()
+                    val frameTimestamp = frame.timestamp
+                    if (frameTimestamp != 0L && frameTimestamp == lastArFrameTimestampNs) {
+                        // Skip duplicate camera frame on higher-refresh VSync ticks unless tap is pending
+                        val hasPendingTap = viewModel?.hasPendingTapRequest() == true
+                        if (!hasPendingTap) return
+                    }
+                    lastArFrameTimestampNs = frameTimestamp
                     viewModel?.let { vm ->
                         vm.processVulkanFrame(frame, arEngine)
                     }

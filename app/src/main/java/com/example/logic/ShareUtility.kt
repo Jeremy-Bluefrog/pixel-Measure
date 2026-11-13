@@ -241,20 +241,35 @@ object ShareUtility {
 
             val file = File(screenshotsDir, "measure_snap_${System.currentTimeMillis()}.jpg")
 
-            val targetBitmap = if (useDisplayP3 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val targetBitmap = if (useDisplayP3 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                bitmap.colorSpace != ColorSpace.get(ColorSpace.Named.DISPLAY_P3)
+            ) {
                 try {
-                    val p3Bmp = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+                    val p3Bmp = Bitmap.createBitmap(
+                        bitmap.width,
+                        bitmap.height,
+                        Bitmap.Config.ARGB_8888,
+                        true,
+                        ColorSpace.get(ColorSpace.Named.DISPLAY_P3)
+                    )
+                    Canvas(p3Bmp).drawBitmap(bitmap, 0f, 0f, null)
                     p3Bmp
-                } catch (e: Exception) {
+                } catch (_: Throwable) {
                     bitmap
                 }
             } else {
                 bitmap
             }
 
-            FileOutputStream(file).use { out ->
-                targetBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
-                out.flush()
+            try {
+                FileOutputStream(file).use { out ->
+                    targetBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+                    out.flush()
+                }
+            } finally {
+                if (targetBitmap !== bitmap && !targetBitmap.isRecycled) {
+                    targetBitmap.recycle()
+                }
             }
             file.absolutePath
         } catch (e: Exception) {
@@ -520,6 +535,53 @@ object ShareUtility {
         return uri
     }
 
+    private fun isArSpatialRecordType(type: String): Boolean {
+        return type in setOf("CAM", "DISTANCE", "AREA", "HEIGHT", "VOLUME", "CIRCLE", "ANGLE")
+    }
+
+    private fun formatLengthValueForUnit(meters: Double, unit: String): String {
+        return when (unit.lowercase(Locale.US).trim()) {
+            "m" -> String.format(Locale.US, "%.2f m", meters)
+            "mm" -> String.format(Locale.US, "%.0f mm", meters * 1000.0)
+            "in" -> String.format(Locale.US, "%.2f in", meters * 39.3701)
+            "ft" -> String.format(Locale.US, "%.2f ft", meters * 3.28084)
+            "yd" -> String.format(Locale.US, "%.2f yd", meters * 1.09361)
+            else -> String.format(Locale.US, "%.1f cm", meters * 100.0)
+        }
+    }
+
+    private fun formatAreaValueForUnit(sqMeters: Double, unit: String): String {
+        return when (unit.lowercase(Locale.US).trim()) {
+            "m" -> String.format(Locale.US, "%.2f m²", sqMeters)
+            "in" -> String.format(Locale.US, "%.1f in²", sqMeters * 1550.0)
+            "ft" -> String.format(Locale.US, "%.2f sq ft", sqMeters * 10.7639)
+            "yd" -> String.format(Locale.US, "%.2f sq yd", sqMeters * 1.19599)
+            else -> String.format(Locale.US, "%.1f cm²", sqMeters * 10000.0)
+        }
+    }
+
+    private fun formatVolumeValueForUnit(cuMeters: Double, unit: String): String {
+        return when (unit.lowercase(Locale.US).trim()) {
+            "m" -> String.format(Locale.US, "%.3f m³", cuMeters)
+            "ft" -> String.format(Locale.US, "%.2f cu ft", cuMeters * 35.3147)
+            else -> String.format(Locale.US, "%.2f L", cuMeters * 1000.0)
+        }
+    }
+
+    internal fun formatRecordPrimaryValue(record: MeasureRecord): String {
+        return when (record.type) {
+            "RULER" -> {
+                val cm = record.value * 100.0
+                "${String.format(Locale.US, "%.2f", cm)} cm (${String.format(Locale.US, "%.1f", cm * 10.0)} mm)"
+            }
+            "LEVEL" -> String.format(Locale.US, "%.1f° (傾角偏差)", record.value)
+            "AREA" -> formatAreaValueForUnit(record.value, record.unit)
+            "VOLUME" -> formatVolumeValueForUnit(record.value, record.unit)
+            "ANGLE" -> "${Math.round(record.value)}°"
+            else -> formatLengthValueForUnit(record.value, record.unit)
+        }
+    }
+
     /**
      * Formats a clean structural text report of the measurement
      */
@@ -527,12 +589,17 @@ object ShareUtility {
         val sdf = SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.getDefault())
         val dateStr = sdf.format(Date(record.timestamp))
         val modeStr = when (record.type) {
-            "CAM" -> "相機 AR 測量"
+            "CAM", "DISTANCE" -> "相機 AR 距離測量"
+            "AREA" -> "相機 AR 面積測量"
+            "HEIGHT" -> "相機 AR 垂直高度測量"
+            "VOLUME" -> "相機 AR 3D 體積測量"
+            "CIRCLE" -> "相機 AR 圓形直徑測量"
+            "ANGLE" -> "相機 AR 空間夾角測量"
             "RULER" -> "螢幕卡鉗直尺"
             "LEVEL" -> "高精數位水準儀"
             else -> "數位測量"
         }
-        
+
         val sb = StringBuilder()
         sb.append("===============================\n")
         sb.append("        數位 AR 測量報告        \n")
@@ -540,50 +607,36 @@ object ShareUtility {
         sb.append("✍️ 測量名稱 : ${record.title}\n")
         sb.append("⏱️ 測量時間 : $dateStr\n")
         sb.append("🔧 測量模式 : $modeStr\n")
-        val valueStr = when (record.type) {
-            "RULER" -> {
-                val cm = record.value * 100.0
-                "${String.format(Locale.US, "%.2f", cm)} cm (${String.format(Locale.US, "%.1f", cm * 10.0)} mm)"
-            }
-            "LEVEL" -> {
-                String.format(Locale.US, "%.1f° (傾角偏差)", record.value)
-            }
-            else -> "${Math.round(record.value)} ${record.unit}"
-        }
-        sb.append("📐 測量數值 : $valueStr\n")
-        
+        sb.append("📐 測量數值 : ${formatRecordPrimaryValue(record)}\n")
+
         if (!record.notes.isNullOrBlank()) {
             sb.append("📝 備註事項 : ${record.notes}\n")
         }
-        
-        if (record.type == "CAM" && !record.pointsData.isNullOrBlank()) {
+
+        if (isArSpatialRecordType(record.type) && !record.pointsData.isNullOrBlank()) {
             val points = record.pointsData.deserializePoints()
             if (points.isNotEmpty()) {
                 sb.append("\n📍 [AR 空間標註點紀錄] :\n")
                 points.forEachIndexed { index, p ->
                     val lbl = if (!p.label.isNullOrBlank()) " - \"${p.label}\"" else ""
-                    sb.append("   - 標註點 #${index + 1}: (X:${Math.round(p.x)}, Y:${Math.round(p.y)}, Z:${Math.round(p.z)})$lbl\n")
+                    sb.append(
+                        "   - 標註點 #${index + 1}: (X:${String.format(Locale.US, "%.2f", p.x)}, " +
+                            "Y:${String.format(Locale.US, "%.2f", p.y)}, " +
+                            "Z:${String.format(Locale.US, "%.2f", p.z)})$lbl\n"
+                    )
                 }
-                
+
                 if (points.size >= 2) {
                     sb.append("\n📐 [分段長度分析] :\n")
-                    for (i in 0 until points.size - 1) {
+                    val step = if (record.type == "AREA" || record.type == "ANGLE") 1 else 2
+                    for (i in 0 until points.size - 1 step step) {
                         val p1 = points[i]
                         val p2 = points[i + 1]
                         val dist = sqrt((p1.x - p2.x).pow(2) + (p1.y - p2.y).pow(2) + (p1.z - p2.z).pow(2))
-                        
-                        // Convert meters to record unit
-                        val cmValue = dist * 100.0
-                        val displayDist = when (record.unit) {
-                            "m" -> cmValue / 100.0
-                            "in" -> cmValue / 2.54
-                            "ft" -> cmValue / 30.48
-                            else -> cmValue
-                        }
-                        
                         val lbl1 = if (!p1.label.isNullOrBlank()) p1.label else "#${i + 1}"
                         val lbl2 = if (!p2.label.isNullOrBlank()) p2.label else "#${i + 2}"
-                        sb.append("   👉 [$lbl1] ↗ [$lbl2] : ${Math.round(displayDist)} ${record.unit}\n")
+                        val distLabel = formatLengthValueForUnit(dist, if (record.unit == "°") "cm" else record.unit)
+                        sb.append("   👉 [$lbl1] ↗ [$lbl2] : $distLabel\n")
                     }
                 }
             }
@@ -667,17 +720,15 @@ object ShareUtility {
             isAntiAlias = true
         }
         val formattedVal = when (record.type) {
-            "RULER" -> {
-                val cm = record.value * 100.0
-                "${String.format(Locale.US, "%.2f", cm)} cm"
-            }
-            "LEVEL" -> {
-                String.format(Locale.US, "%.1f°", record.value)
-            }
-            else -> "${Math.round(record.value)} ${record.unit}"
+            "RULER" -> String.format(Locale.US, "%.2f cm", record.value * 100.0)
+            "LEVEL" -> String.format(Locale.US, "%.1f°", record.value)
+            "AREA" -> formatAreaValueForUnit(record.value, record.unit)
+            "VOLUME" -> formatVolumeValueForUnit(record.value, record.unit)
+            "ANGLE" -> "${Math.round(record.value)}°"
+            else -> formatLengthValueForUnit(record.value, record.unit)
         }
         canvas.drawText(formattedVal, 80f, 175f, valPaint)
-        
+
         // Meta Tag (Mode Label)
         val metaPaint = Paint().apply {
             color = Color.parseColor("#94A3B8") // CadetBlue
@@ -688,7 +739,12 @@ object ShareUtility {
         val sdf = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault())
         val dateStr = sdf.format(Date(record.timestamp))
         val modeStr = when (record.type) {
-            "CAM" -> "相機 AR 測量模式"
+            "CAM", "DISTANCE" -> "相機 AR 距離測量"
+            "AREA" -> "相機 AR 面積測量"
+            "HEIGHT" -> "相機 AR 高度測量"
+            "VOLUME" -> "相機 AR 體積測量"
+            "CIRCLE" -> "相機 AR 圓形測量"
+            "ANGLE" -> "相機 AR 角度測量"
             "RULER" -> "螢幕卡鉗直尺模式"
             "LEVEL" -> "高精數位水準儀模式"
             else -> "數位測量模式"
@@ -743,44 +799,36 @@ object ShareUtility {
         canvas.drawText("⚡ 3D 空間投影佈線圖", 60f, drawTop + 40f, bpLabelPaint)
         
         // Map points and draw the graph
-        if (record.type == "CAM" && !record.pointsData.isNullOrBlank()) {
+        if (isArSpatialRecordType(record.type) && !record.pointsData.isNullOrBlank()) {
             val points = record.pointsData.deserializePoints()
             if (points.isNotEmpty()) {
                 val cx = width / 2f
                 val cy = drawTop + (drawBottom - drawTop) / 2f
-                
-                // Find bounding range to scale automatically
-                var minX = Double.MAX_VALUE
-                var maxX = Double.MIN_VALUE
-                var minY = Double.MAX_VALUE
-                var maxY = Double.MIN_VALUE
-                
-                points.forEach { p ->
-                    if (p.x < minX) minX = p.x
-                    if (p.x > maxX) maxX = p.x
-                    if (p.y < minY) minY = p.y
-                    if (p.y > maxY) maxY = p.y
-                }
-                
+
+                val minX = points.minOf { it.x }
+                val maxX = points.maxOf { it.x }
+                val minY = points.minOf { it.y }
+                val maxY = points.maxOf { it.y }
+
                 val rangeX = maxX - minX
                 val rangeY = maxY - minY
                 val maxRange = max(max(rangeX, rangeY), 0.1)
-                
+
                 // Max dimensions to sit inside the blueprint
                 val fitW = width - 200f
                 val fitH = (drawBottom - drawTop) - 150f
                 val scale = min(fitW / maxRange, fitH / maxRange).toFloat()
-                
+
                 val midX = (minX + maxX) / 2.0
                 val midY = (minY + maxY) / 2.0
-                
+
                 // Transform helper mapping 3D space to 2D coordinates
                 val mappedPoints: List<android.graphics.PointF> = points.map { p ->
                     val px = cx + ((p.x - midX) * scale).toFloat()
                     val py = cy - ((p.y - midY) * scale).toFloat() // Flip Y for traditional screen space look
                     android.graphics.PointF(px, py)
                 }
-                
+
                 // Set Up drawing details
                 val linePaint = Paint().apply {
                     color = Color.parseColor("#0EA5E9") // PrecisionCyan
@@ -788,32 +836,20 @@ object ShareUtility {
                     style = Paint.Style.STROKE
                     isAntiAlias = true
                 }
-                
-                val textMeasurer = Paint().apply {
-                    color = Color.WHITE
-                    textSize = 18f
-                    typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-                    isAntiAlias = true
-                }
-                
-                // Connect lines (兩點成一線，不共用點)
-                val isAreaRecord = record.type == "AREA"
-                val stepCount = if (isAreaRecord) 1 else 2
-                for (i in 0 until mappedPoints.size - 1 step stepCount) {
+
+                // Connect lines (AREA/ANGLE consecutive vertices; DISTANCE pairs)
+                val isPolyOrChain = record.type == "AREA" || record.type == "ANGLE"
+                val stepCount = if (isPolyOrChain) 1 else 2
+                val edgeCount = if (record.type == "AREA" && mappedPoints.size >= 3) mappedPoints.size else mappedPoints.size - 1
+                for (i in 0 until edgeCount step stepCount) {
+                    val nextIdx = (i + 1) % mappedPoints.size
                     val p1 = mappedPoints[i]
-                    val p2 = mappedPoints[i + 1]
+                    val p2 = mappedPoints[nextIdx]
                     canvas.drawLine(p1.x, p1.y, p2.x, p2.y, linePaint)
-                    
+
                     // Segment Label text
-                    val dist = sqrt((points[i].x - points[i+1].x).pow(2) + (points[i].y - points[i+1].y).pow(2) + (points[i].z - points[i+1].z).pow(2))
-                    val cmValue = dist * 100.0
-                    val displayDist = when (record.unit) {
-                        "m" -> cmValue / 100.0
-                        "in" -> cmValue / 2.54
-                        "ft" -> cmValue / 30.48
-                        else -> cmValue
-                    }
-                    val segmentText = "${Math.round(displayDist)} ${record.unit}"
+                    val dist = sqrt((points[i].x - points[nextIdx].x).pow(2) + (points[i].y - points[nextIdx].y).pow(2) + (points[i].z - points[nextIdx].z).pow(2))
+                    val segmentText = formatLengthValueForUnit(dist, if (record.unit == "°") "cm" else record.unit)
                     
                     // Box placard in segment center
                     val mx = (p1.x + p2.x) / 2f

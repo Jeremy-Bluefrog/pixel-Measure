@@ -157,7 +157,7 @@ fun MeasurementGuidancePill(
         border = BorderStroke(0.8.dp, accentColor.copy(alpha = 0.35f)),
         shadowElevation = 0.dp,
         modifier = modifier
-            .padding(horizontal = 24.dp)
+            .padding(horizontal = 8.dp)
             .testTag("measurement_guidance_pill")
     ) {
         Row(

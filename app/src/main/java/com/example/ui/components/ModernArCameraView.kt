@@ -46,6 +46,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.logic.vulkan.VulkanArSceneView
 import com.example.logic.ar.ArCoreEngineStatus
 import com.example.logic.ar.StabilityLevel
@@ -80,21 +81,6 @@ fun ModernArCameraView(
         )
     }
 
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        hasCameraPermission = granted
-        if (granted) {
-            viewModel.checkAndInitArCore(context as? android.app.Activity, forceRetry = true)
-        }
-    }
-
-    LaunchedEffect(hasCameraPermission) {
-        if (hasCameraPermission) {
-            viewModel.checkAndInitArCore(context as? android.app.Activity, forceRetry = (viewModel.modernArEngine.session == null))
-        }
-    }
-
     val openAppSettings = {
         try {
             val intent = Intent(
@@ -107,17 +93,18 @@ fun ModernArCameraView(
         } catch (_: Exception) {}
     }
 
-    // ViewModel States
-    val trackingStability by viewModel.trackingStability.collectAsState()
-    val planesCount by viewModel.arPlanesCount.collectAsState()
-    val subMode by viewModel.cameraSubMode.collectAsState()
-    val autoDetectedType by viewModel.autoDetectedType.collectAsState()
-    val selectedUnit by viewModel.selectedUnit.collectAsState()
-    val isSnapped by viewModel.isSnapped.collectAsState()
-    val isTorchOn by viewModel.isTorchOn.collectAsState()
-    val torchBrightness by viewModel.torchBrightness.collectAsState()
-    val isMeasurementAvailable by viewModel.isMeasurementAvailable.collectAsState()
-    val isTakingPhoto by viewModel.isTakingPhoto.collectAsState()
+    // ViewModel States (Lifecycle-aware collection to eliminate background wakeup churn)
+    val trackingStability by viewModel.trackingStability.collectAsStateWithLifecycle()
+    val planesCount by viewModel.arPlanesCount.collectAsStateWithLifecycle()
+    val subMode by viewModel.cameraSubMode.collectAsStateWithLifecycle()
+    val autoDetectedType by viewModel.autoDetectedType.collectAsStateWithLifecycle()
+    val selectedUnit by viewModel.selectedUnit.collectAsStateWithLifecycle()
+    val isSnapped by viewModel.isSnapped.collectAsStateWithLifecycle()
+    val isTorchOn by viewModel.isTorchOn.collectAsStateWithLifecycle()
+    val torchBrightness by viewModel.torchBrightness.collectAsStateWithLifecycle()
+    val isMeasurementAvailable by viewModel.isMeasurementAvailable.collectAsStateWithLifecycle()
+    val isTakingPhoto by viewModel.isTakingPhoto.collectAsStateWithLifecycle()
+    val effectiveTargetFps by viewModel.effectiveTargetFps.collectAsStateWithLifecycle()
 
     val capturedPoints = viewModel.capturedPoints
     val hasCapturedPoints by remember { derivedStateOf { capturedPoints.isNotEmpty() } }
@@ -133,20 +120,71 @@ fun ModernArCameraView(
         }
     }
 
-    val cameraAspectRatio by viewModel.cameraAspectRatio.collectAsState()
-    val useDisplayP3ColorSpace by viewModel.useDisplayP3ColorSpace.collectAsState()
-    val isLensSmudged by viewModel.isLensSmudged.collectAsState()
-    val simulatedAlert by viewModel.simulatedAlert.collectAsState()
-    val uiButtonScale by viewModel.uiButtonScale.collectAsState()
-    val arCoreStatus by viewModel.arCoreStatus.collectAsState()
+    val cameraAspectRatio by viewModel.cameraAspectRatio.collectAsStateWithLifecycle()
+    val useDisplayP3ColorSpace by viewModel.useDisplayP3ColorSpace.collectAsStateWithLifecycle()
+    val isLensSmudged by viewModel.isLensSmudged.collectAsStateWithLifecycle()
+    val simulatedAlert by viewModel.simulatedAlert.collectAsStateWithLifecycle()
+    val uiButtonScale by viewModel.uiButtonScale.collectAsStateWithLifecycle()
+    val arCoreStatus by viewModel.arCoreStatus.collectAsStateWithLifecycle()
+    val isCameraSimulationActive by viewModel.isCameraSimulationActive.collectAsStateWithLifecycle()
 
     // Video Recorder
     val videoRecorder = remember { ArVideoRecorder(context) }
-    val isRecordingVideo by videoRecorder.isRecording.collectAsState()
-    val recordingSeconds by videoRecorder.recordingSeconds.collectAsState()
+    val isRecordingVideo by videoRecorder.isRecording.collectAsStateWithLifecycle()
+    val recordingSeconds by videoRecorder.recordingSeconds.collectAsStateWithLifecycle()
 
     // Touch ripple visual pings
     val pings = remember { mutableStateListOf<Pair<Offset, Animatable<Float, AnimationVector1D>>>() }
+
+    val startCameraAndArPipeline: (TextureView) -> Unit = remember(viewModel, camera2Manager) {
+        { tv: TextureView ->
+            coroutineScope.launch {
+                viewModel.setHighSpeedCamera2Manager(camera2Manager)
+                viewModel.ensureArCoreInitialized(
+                    activity = context as? android.app.Activity,
+                    forceRetry = (viewModel.modernArEngine.session == null)
+                )
+                if (!tv.isAvailable) return@launch
+                val rot = getDisplayRotation(context)
+                if (tv.width > 0 && tv.height > 0) {
+                    viewModel.updateDisplayGeometry(rot, tv.width, tv.height)
+                    viewModel.modernArEngine.setDisplayGeometry(rot, tv.width, tv.height)
+                }
+                viewModel.modernArEngine.sharedCamera?.let { sc ->
+                    camera2Manager.sharedCamera = sc
+                    camera2Manager.preferredCameraId = viewModel.modernArEngine.selectedCameraId
+                    camera2Manager.preferredAspectRatio = viewModel.modernArEngine.selectedCameraImageSize?.let {
+                        if (it.height > 0) it.width.toFloat() / it.height.toFloat() else null
+                    }
+                }
+                camera2Manager.openCameraAndStartSession(tv) { isHighSpeed, size ->
+                    android.util.Log.i("CameraView", "Session ready. HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
+                    tv.post {
+                        camera2Manager.configureTransform(tv, tv.width, tv.height)
+                    }
+                }
+            }
+        }
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasCameraPermission = granted
+        if (granted) {
+            textureViewRef?.let { tv ->
+                if (tv.isAvailable) {
+                    startCameraAndArPipeline(tv)
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(hasCameraPermission, isCameraSimulationActive) {
+        if (hasCameraPermission && isCameraSimulationActive && viewModel.modernArEngine.session == null) {
+            viewModel.checkAndInitArCore(context as? android.app.Activity, forceRetry = true)
+        }
+    }
 
     // Dialogs Visibility
     var showHelpDialog by remember { mutableStateOf(false) }
@@ -169,35 +207,33 @@ fun ModernArCameraView(
         label = "ArOverlayBackdropBlur"
     )
 
-    // Lifecycle sync for Camera2 & Sensor Fusion
+    LaunchedEffect(effectiveTargetFps, modernArVulkanViewRef) {
+        val fpsFloat = effectiveTargetFps.toFloat()
+        modernArVulkanViewRef?.setTargetFrameRate(fpsFloat)
+        (context as? com.example.MainActivity)?.enforceHighDisplayRefreshRate(fpsFloat)
+    }
+
+    // Lifecycle sync for Camera2, ARCore & Vulkan loop
     DisposableEffect(lifecycleOwner) {
         viewModel.onResume()
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_RESUME -> {
-                    (context as? com.example.MainActivity)?.enforceHighDisplayRefreshRate()
+                    (context as? com.example.MainActivity)?.enforceHighDisplayRefreshRate(viewModel.effectiveTargetFps.value.toFloat())
                     hasCameraPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
                     viewModel.onResume()
+                    modernArVulkanViewRef?.onResume()
                     if (hasCameraPermission) {
-                        viewModel.checkAndInitArCore(context as? android.app.Activity, forceRetry = (viewModel.modernArEngine.session == null))
                         textureViewRef?.let { tv ->
                             if (tv.isAvailable) {
-                                viewModel.setHighSpeedCamera2Manager(camera2Manager)
-                                viewModel.modernArEngine.sharedCamera?.let { camera2Manager.sharedCamera = it }
-                                camera2Manager.openCameraAndStartSession(tv) { isHighSpeed, size ->
-                                    android.util.Log.i("CameraView", "Session resumed. HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
-                                    viewModel.modernArEngine.resume()
-                                    tv.post {
-                                        camera2Manager.configureTransform(tv, tv.width, tv.height)
-                                    }
-                                }
+                                startCameraAndArPipeline(tv)
                             }
                         }
                     }
                 }
                 Lifecycle.Event.ON_PAUSE -> {
+                    modernArVulkanViewRef?.onPause()
                     viewModel.onPause()
-                    camera2Manager.closeCamera()
                 }
                 else -> {}
             }
@@ -205,7 +241,7 @@ fun ModernArCameraView(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            camera2Manager.closeCamera()
+            viewModel.pauseArAndCamera(camera2Manager)
             modernArVulkanViewRef?.destroy()
             viewModel.onPause()
             viewModel.setHighSpeedCamera2Manager(null)
@@ -404,11 +440,12 @@ fun ModernArCameraView(
             val localDensity = androidx.compose.ui.platform.LocalDensity.current
             val viewportPxW = with(localDensity) { maxWidth.roundToPx() }
             val viewportPxH = with(localDensity) { maxHeight.roundToPx() }
+            val currentRotation = getDisplayRotation(context)
 
-            LaunchedEffect(viewportPxW, viewportPxH) {
+            LaunchedEffect(viewportPxW, viewportPxH, currentRotation) {
                 if (viewportPxW > 0 && viewportPxH > 0) {
-                    viewModel.updateDisplayGeometry(0, viewportPxW, viewportPxH)
-                    viewModel.modernArEngine.setDisplayGeometry(0, viewportPxW, viewportPxH)
+                    viewModel.updateDisplayGeometry(currentRotation, viewportPxW, viewportPxH)
+                    viewModel.modernArEngine.setDisplayGeometry(currentRotation, viewportPxW, viewportPxH)
                 }
             }
 
@@ -436,87 +473,82 @@ fun ModernArCameraView(
                 modifier = Modifier.size(1.dp)
             )
 
-            // 1. High-Performance, Rock-Solid Camera2 TextureView Surface
-            AndroidView(
-                factory = { ctx ->
-                    val textureView = TextureView(ctx).apply {
-                        isOpaque = true
+            // 1. High-Performance Camera2 TextureView Surface or Simulated 3D Environment Canvas
+            if (isCameraSimulationActive) {
+                androidx.compose.foundation.Canvas(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0xFF0F172A))
+                ) {
+                    val w = size.width
+                    val h = size.height
+                    val lineColor = Color(0x3300E5FF)
+                    val step = 60.dp.toPx()
+                    var x = 0f
+                    while (x < w) {
+                        drawLine(lineColor, Offset(x, 0f), Offset(x, h), 1f)
+                        x += step
                     }
-                    textureViewRef = textureView
-                    viewModel.setHighSpeedCamera2Manager(camera2Manager)
-                    viewModel.modernArEngine.sharedCamera?.let { camera2Manager.sharedCamera = it }
+                    var y = 0f
+                    while (y < h) {
+                        drawLine(lineColor, Offset(0f, y), Offset(w, y), 1f)
+                        y += step
+                    }
+                    drawCircle(
+                        color = Color(0x1A00E5FF),
+                        radius = w * 0.45f,
+                        center = Offset(w / 2f, h * 0.55f)
+                    )
+                }
+            } else {
+                AndroidView(
+                    factory = { ctx ->
+                        val textureView = TextureView(ctx).apply {
+                            isOpaque = true
+                        }
+                        textureViewRef = textureView
+                        viewModel.setHighSpeedCamera2Manager(camera2Manager)
 
-                    textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                        override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
-                            val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) ctx.display else (ctx.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager)?.defaultDisplay
-                            val rot = display?.rotation ?: android.view.Surface.ROTATION_0
-                            viewModel.updateDisplayGeometry(rot, width, height)
-                            viewModel.modernArEngine.setDisplayGeometry(rot, width, height)
-                            if (viewModel.modernArEngine.session == null) {
-                                viewModel.checkAndInitArCore(ctx as? android.app.Activity, forceRetry = true)
+                        textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                            override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+                                val rot = getDisplayRotation(ctx)
+                                viewModel.updateDisplayGeometry(rot, width, height)
+                                viewModel.modernArEngine.setDisplayGeometry(rot, width, height)
+                                startCameraAndArPipeline(textureView)
                             }
-                            viewModel.modernArEngine.sharedCamera?.let { camera2Manager.sharedCamera = it }
-                            camera2Manager.openCameraAndStartSession(textureView) { isHighSpeed, size ->
-                                android.util.Log.i("CameraView", "Session ready. HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
-                                viewModel.modernArEngine.resume()
-                                textureView.post {
-                                    camera2Manager.configureTransform(textureView, width, height)
-                                }
+                            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
+                                val rot = getDisplayRotation(ctx)
+                                viewModel.updateDisplayGeometry(rot, width, height)
+                                viewModel.modernArEngine.setDisplayGeometry(rot, width, height)
+                                camera2Manager.configureTransform(textureView, width, height)
                             }
+                            override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                                viewModel.pauseArAndCamera(camera2Manager)
+                                return true
+                            }
+                            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
                         }
-                        override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
-                            val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) ctx.display else (ctx.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager)?.defaultDisplay
-                            val rot = display?.rotation ?: android.view.Surface.ROTATION_0
-                            viewModel.updateDisplayGeometry(rot, width, height)
-                            viewModel.modernArEngine.setDisplayGeometry(rot, width, height)
-                            camera2Manager.configureTransform(textureView, width, height)
-                        }
-                        override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
-                            camera2Manager.closeCamera()
-                            return true
-                        }
-                        override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
-                    }
 
-                    if (textureView.isAvailable) {
-                        val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) ctx.display else (ctx.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager)?.defaultDisplay
-                        val rot = display?.rotation ?: android.view.Surface.ROTATION_0
-                        viewModel.updateDisplayGeometry(rot, textureView.width, textureView.height)
-                        viewModel.modernArEngine.sharedCamera?.let { camera2Manager.sharedCamera = it }
-                        camera2Manager.openCameraAndStartSession(textureView) { isHighSpeed, size ->
-                            android.util.Log.i("CameraView", "Session ready (immediate). HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
-                            viewModel.modernArEngine.resume()
-                            textureView.post {
-                                camera2Manager.configureTransform(textureView, textureView.width, textureView.height)
-                            }
+                        if (textureView.isAvailable) {
+                            val rot = getDisplayRotation(ctx)
+                            viewModel.updateDisplayGeometry(rot, textureView.width, textureView.height)
+                            viewModel.modernArEngine.setDisplayGeometry(rot, textureView.width, textureView.height)
+                            startCameraAndArPipeline(textureView)
                         }
-                    }
 
-                    textureView
-                },
-                update = { tv ->
-                    textureViewRef = tv
-                },
-                onRelease = { _ ->
-                    camera2Manager.closeCamera()
-                    textureViewRef = null
-                },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .pointerInput(Unit) {
-                        detectTapGestures { offset ->
-                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                            val pingAnim = Animatable(0f)
-                            val pingPair = offset to pingAnim
-                            pings.add(pingPair)
-                            coroutineScope.launch {
-                                pingAnim.animateTo(1f, animationSpec = tween(600, easing = LinearOutSlowInEasing))
-                                pings.remove(pingPair)
-                            }
-                            viewModel.requestHitTest(offset.x, offset.y)
-                        }
-                    }
-            )
+                        textureView
+                    },
+                    update = { tv ->
+                        textureViewRef = tv
+                    },
+                    onRelease = { _ ->
+                        viewModel.pauseArAndCamera(camera2Manager)
+                        textureViewRef = null
+                    },
+                    modifier = Modifier
+                        .fillMaxSize()
+                )
+            }
 
             // 2. 3D Augmented Overlay Canvas (Planes, Projected Points, Lines, Measurements, Pings, Reticle)
             ArMeasurementCanvasOverlay(
@@ -529,19 +561,7 @@ fun ModernArCameraView(
                 planeLockedParticleAnim = planeLockedParticleAnim
             )
 
-            // 3. Tracking Stability Warning Banner
-            if (trackingStability.level == StabilityLevel.POOR) {
-                ActiveTrackingStabilityWarningBanner(
-                    stability = trackingStability,
-                    onActionClick = { showStabilityDiagnosticsDialog = true },
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .statusBarsPadding()
-                        .padding(top = 104.dp, start = 16.dp, end = 16.dp)
-                )
-            }
-
-            // 4. Clean Minimal Top Bar
+            // 3. Clean Unified Top HUD Stack (Zero Overlap)
             if (!isTakingPhoto) {
                 ModernArTopBar(
                     viewModel = viewModel,
@@ -559,25 +579,28 @@ fun ModernArCameraView(
                     onShowHistoryClick = onShowHistoryClick,
                     onShowSettingsClick = onShowSettingsClick,
                     onSwitchCamera = { viewModel.switchCameraFacing(textureViewRef) },
-                    modifier = Modifier.align(Alignment.TopCenter)
-                )
+                    modifier = Modifier.align(Alignment.TopCenter),
+                    extraTopHudContent = {
+                        MeasurementGuidancePill(
+                            viewModel = viewModel,
+                            subMode = subMode,
+                            autoDetectedType = autoDetectedType,
+                            planesCount = planesCount,
+                            hasCapturedPoints = hasCapturedPoints,
+                            isWaitingForSecondPoint = isWaitingForSecondPoint,
+                            capturedPointsCount = capturedPoints.size,
+                            isMeasurementAvailable = isMeasurementAvailable,
+                            isSnapped = isSnapped,
+                            onOpenTutorial = { showHelpDialog = true }
+                        )
 
-                // 4.5. Dynamic Silent Visual Guidance Pill (Compact & Clean)
-                MeasurementGuidancePill(
-                    viewModel = viewModel,
-                    subMode = subMode,
-                    autoDetectedType = autoDetectedType,
-                    planesCount = planesCount,
-                    hasCapturedPoints = hasCapturedPoints,
-                    isWaitingForSecondPoint = isWaitingForSecondPoint,
-                    capturedPointsCount = capturedPoints.size,
-                    isMeasurementAvailable = isMeasurementAvailable,
-                    isSnapped = isSnapped,
-                    onOpenTutorial = { showHelpDialog = true },
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .statusBarsPadding()
-                        .padding(top = if (trackingStability.level == StabilityLevel.POOR) 152.dp else 68.dp)
+                        if (trackingStability.level == StabilityLevel.POOR) {
+                            ActiveTrackingStabilityWarningBanner(
+                                stability = trackingStability,
+                                onActionClick = { showStabilityDiagnosticsDialog = true }
+                            )
+                        }
+                    }
                 )
             }
 
@@ -644,4 +667,14 @@ fun ModernArCameraView(
         isLensSmudged = isLensSmudged,
         simulatedAlert = simulatedAlert
     )
+}
+
+private fun getDisplayRotation(context: Context): Int {
+    val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        context.display
+    } else {
+        @Suppress("DEPRECATION")
+        (context.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager)?.defaultDisplay
+    }
+    return display?.rotation ?: android.view.Surface.ROTATION_0
 }

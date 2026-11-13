@@ -1,6 +1,9 @@
 package com.example
 
 import com.example.logic.TranslationManager
+import com.example.ui.viewmodel.Point3D
+import com.example.ui.viewmodel.deserializePoints
+import com.example.ui.viewmodel.serializePoints
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -362,6 +365,190 @@ class ExampleUnitTest {
 
     val circle = com.example.logic.ar.ArMath.fitCircle3Points(p1, p2, p3)
     assertNull("Near-collinear points must be rejected to prevent giant radius explosion", circle)
+  }
+
+  @Test
+  fun `verify ArMath distance is world-translation invariant`() {
+    val a1 = com.example.ui.viewmodel.Point3D(0.0, 0.0, 0.0)
+    val b1 = com.example.ui.viewmodel.Point3D(0.6, 0.8, 0.0) // exact 1.0m
+
+    // Translated far away in ARCore world space (+15m along Z, -4m X, +2m Y)
+    val a2 = com.example.ui.viewmodel.Point3D(-4.0, 2.0, 15.0)
+    val b2 = com.example.ui.viewmodel.Point3D(-3.4, 2.8, 15.0)
+
+    val d1 = com.example.logic.ar.ArMath.distance(a1, b1)
+    val d2 = com.example.logic.ar.ArMath.distance(a2, b2)
+
+    assertEquals(1.0, d1, 1e-6)
+    assertEquals(1.0, d2, 1e-6)
+    assertEquals(d1, d2, 1e-9)
+  }
+
+  @Test
+  fun `verify optical fallback VulkanMatrix4 projection projects portrait viewport cleanly`() {
+    val view = FloatArray(16)
+    val proj = FloatArray(16)
+    val width = 1080
+    val height = 1920
+    val aspect = width.toFloat() / height.toFloat()
+
+    com.example.logic.vulkan.VulkanMatrix4.setIdentity(view, 0)
+    com.example.logic.vulkan.VulkanMatrix4.perspective(proj, 0, 62f, aspect, 0.05f, 100f)
+
+    assertTrue(com.example.logic.ar.ArMath.isMatrixValid(view))
+    assertTrue(com.example.logic.ar.ArMath.isMatrixValid(proj))
+
+    val centerOut = FloatArray(2)
+    val okCenter = com.example.logic.ar.ArMath.projectCoordsToScreen(
+      0.0, 0.0, -1.5, view, proj, width, height, centerOut
+    )
+    assertTrue("Optical center in fallback mode must project", okCenter)
+    assertEquals(width * 0.5f, centerOut[0], 1.5f)
+    assertEquals(height * 0.5f, centerOut[1], 1.5f)
+
+    val offsetOut = FloatArray(2)
+    val okOffset = com.example.logic.ar.ArMath.projectCoordsToScreen(
+      0.25, 0.30, -1.5, view, proj, width, height, offsetOut
+    )
+    assertTrue("Offset point in front of fallback camera must project within screen", okOffset)
+    assertTrue(offsetOut[0] > width * 0.5f && offsetOut[0] < width.toFloat())
+    assertTrue(offsetOut[1] > 0f && offsetOut[1] < height * 0.5f)
+  }
+
+  @Test
+  fun `verify Point3D serialization escapes delimiters and supports legacy format`() {
+    val pts = listOf(
+      Point3D(1.25, -0.75, -2.5, pitch = 12.5f, yaw = -45.0f, isArPrecision = true, label = "起點 A, 廚房;中島"),
+      Point3D(2.75, -0.75, -2.5, pitch = 12.5f, yaw = -45.0f, isArPrecision = true, label = "終點 B")
+    )
+    val serialized = pts.serializePoints()
+    val parsed = serialized.deserializePoints()
+
+    assertEquals(2, parsed.size)
+    assertEquals(1.25, parsed[0].x, 1e-6)
+    assertEquals(-0.75, parsed[0].y, 1e-6)
+    assertEquals("起點 A, 廚房;中島", parsed[0].label)
+    assertEquals("終點 B", parsed[1].label)
+
+    // Verify backwards compatibility with legacy 4-field serialization ("x,y,z,label")
+    val legacy = "0.0,-1.0,-2.0,窗台左;1.5,-1.0,-2.0,窗台右"
+    val parsedLegacy = legacy.deserializePoints()
+    assertEquals(2, parsedLegacy.size)
+    assertEquals("窗台左", parsedLegacy[0].label)
+    assertEquals(1.5, parsedLegacy[1].x, 1e-6)
+    assertEquals("窗台右", parsedLegacy[1].label)
+  }
+
+  @Test
+  fun `verify ShareUtility formatTextReport preserves decimals and AR spatial types`() {
+    val pts = listOf(
+      Point3D(0.0, -1.2, -2.0, label = "P1"),
+      Point3D(1.45, -1.2, -2.0, label = "P2"),
+      Point3D(1.45, -1.2, -3.0, label = "P3")
+    )
+    val areaRecord = com.example.data.model.MeasureRecord(
+      id = 7,
+      title = "客廳地板面積",
+      value = 1.45,
+      unit = "m",
+      type = "AREA",
+      pointsData = pts.serializePoints()
+    )
+    val report = com.example.logic.ShareUtility.formatTextReport(areaRecord)
+    assertTrue("Area report should show 2 decimal meters", report.contains("1.45 m²"))
+    assertTrue("Area report should include AR point list", report.contains("AR 空間標註點紀錄"))
+    assertTrue("Area report should include segment analysis", report.contains("分段長度分析"))
+
+    val distRecord = com.example.data.model.MeasureRecord(
+      id = 8,
+      title = "書桌寬度",
+      value = 1.486,
+      unit = "m",
+      type = "CAM"
+    )
+    val distReport = com.example.logic.ShareUtility.formatTextReport(distRecord)
+    assertTrue("Distance report should preserve decimals rather than rounding 1.486 to 1", distReport.contains("1.49 m"))
+  }
+
+  @Test
+  fun `verify PixelPerformanceMonitor evaluateThermalPolicy across thermal states`() {
+    val optimalHigh = com.example.logic.PixelPerformanceMonitor.evaluateThermalPolicy(
+      thermalStatus = android.os.PowerManager.THERMAL_STATUS_NONE,
+      userHighFps = true,
+      userHighDef = true
+    )
+    assertEquals(com.example.logic.ThermalTier.OPTIMAL, optimalHigh.tier)
+    assertEquals(60, optimalHigh.targetFps)
+    assertTrue(optimalHigh.allowDepth)
+    assertTrue(optimalHigh.allowHighRes)
+    assertFalse(optimalHigh.forceDisableTorch)
+
+    val optimalLowPref = com.example.logic.PixelPerformanceMonitor.evaluateThermalPolicy(
+      thermalStatus = android.os.PowerManager.THERMAL_STATUS_NONE,
+      userHighFps = false,
+      userHighDef = false
+    )
+    assertEquals(com.example.logic.ThermalTier.OPTIMAL, optimalLowPref.tier)
+    assertEquals(30, optimalLowPref.targetFps)
+    assertTrue(optimalLowPref.allowDepth)
+    assertFalse(optimalLowPref.allowHighRes)
+    assertFalse(optimalLowPref.forceDisableTorch)
+
+    val warm = com.example.logic.PixelPerformanceMonitor.evaluateThermalPolicy(
+      thermalStatus = android.os.PowerManager.THERMAL_STATUS_MODERATE,
+      userHighFps = true,
+      userHighDef = true
+    )
+    assertEquals(com.example.logic.ThermalTier.WARM, warm.tier)
+    assertEquals(30, warm.targetFps)
+    assertTrue(warm.allowDepth)
+    assertFalse(warm.allowHighRes)
+    assertFalse(warm.forceDisableTorch)
+
+    val throttled = com.example.logic.PixelPerformanceMonitor.evaluateThermalPolicy(
+      thermalStatus = android.os.PowerManager.THERMAL_STATUS_SEVERE,
+      userHighFps = true,
+      userHighDef = true
+    )
+    assertEquals(com.example.logic.ThermalTier.THROTTLED, throttled.tier)
+    assertEquals(30, throttled.targetFps)
+    assertFalse(throttled.allowDepth)
+    assertFalse(throttled.allowHighRes)
+    assertTrue(throttled.forceDisableTorch)
+  }
+
+  @Test
+  fun `verify ArMath findVertexSnap handles vertex midpoint edge and miss`() {
+    val p0 = Point3D(0.0, 0.0, 0.0, label = "起點 A")
+    val p1 = Point3D(1.0, 0.0, 0.0, label = "終點 B")
+    val segment = listOf(p0, p1)
+
+    // 1. Direct vertex snap
+    val nearVertex = Point3D(0.01, 0.0, 0.0)
+    val vertexSnap = com.example.logic.ar.ArMath.findVertexSnap(nearVertex, segment, snapThresholdMeters = 0.075)
+    assertNotNull(vertexSnap)
+    assertEquals("起點 A", vertexSnap!!.label)
+    assertEquals(0.0, vertexSnap.x, 1e-6)
+
+    // 2. Midpoint snap
+    val nearMid = Point3D(0.505, 0.0, 0.005)
+    val midSnap = com.example.logic.ar.ArMath.findVertexSnap(nearMid, segment, snapThresholdMeters = 0.075)
+    assertNotNull(midSnap)
+    assertEquals("中點", midSnap!!.label)
+    assertEquals(0.5, midSnap.x, 1e-6)
+
+    // 3. Edge projection snap (away from vertices and midpoint)
+    val nearEdge = Point3D(0.25, 0.01, 0.0)
+    val edgeSnap = com.example.logic.ar.ArMath.findVertexSnap(nearEdge, segment, snapThresholdMeters = 0.075)
+    assertNotNull(edgeSnap)
+    assertEquals("邊緣", edgeSnap!!.label)
+    assertEquals(0.25, edgeSnap.x, 1e-6)
+    assertEquals(0.0, edgeSnap.y, 1e-6)
+
+    // 4. Out-of-range miss
+    val farPoint = Point3D(0.25, 0.50, 0.0)
+    val missSnap = com.example.logic.ar.ArMath.findVertexSnap(farPoint, segment, snapThresholdMeters = 0.075)
+    assertNull(missSnap)
   }
 }
 

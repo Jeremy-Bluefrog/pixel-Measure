@@ -1,7 +1,9 @@
 package com.example.logic.ar
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.opengl.EGL14
 import android.opengl.EGLConfig
@@ -11,6 +13,8 @@ import android.opengl.EGLSurface
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.util.Log
+import android.util.Size
+import androidx.core.content.ContextCompat
 import com.example.ui.viewmodel.Point3D
 import com.google.ar.core.*
 import com.google.ar.core.exceptions.*
@@ -111,10 +115,32 @@ class ModernArEngine(private val context: Context) {
     var isTorchActive: Boolean = false
         private set
 
+    @Volatile
+    var isSessionResumed: Boolean = false
+        private set
+
+    @Volatile
+    var isExposeHardwareBufferActive: Boolean = false
+        private set
+
+    var selectedCameraId: String? = null
+        private set
+
+    var selectedCameraImageSize: Size? = null
+        private set
+
     var isRawDepthConfidenceFilterEnabled: Boolean = true
     var rawDepthConfidenceThreshold: Int = 45
 
+    @Volatile
+    var preferHighFps: Boolean = true
+    @Volatile
+    var preferHighDef: Boolean = true
+    @Volatile
+    var allowDepthMode: Boolean = true
+
     private var frameCounter = 0
+    private var aimMissCounter = 0
     private var cachedPlanes: List<DetectedPlaneInfo> = emptyList()
     private var lastCameraPose: Pose? = null
     private var lastFrameTimeNs: Long = 0L
@@ -124,6 +150,18 @@ class ModernArEngine(private val context: Context) {
     private var userRequestedInstall = false
     private var eglHelper: HeadlessEglHelper? = null
     private val isInitializing = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    // Pre-allocated scratch buffers to eliminate per-frame heap allocations on Pixel
+    private val scratchPointIn = FloatArray(3)
+    private val scratchPointOut = FloatArray(3)
+    private val scratchNormalIn = floatArrayOf(0f, 1f, 0f)
+    private val scratchNormalOut = FloatArray(3)
+    private val scratchPoseTrans = FloatArray(3)
+    private val neighborDx = floatArrayOf(-4f, 4f, 0f, 0f)
+    private val neighborDy = floatArrayOf(0f, 0f, -4f, 4f)
+    private val vMatrixPool = Array(2) { FloatArray(16) }
+    private val pMatrixPool = Array(2) { FloatArray(16) }
+    private var matrixPoolIdx = 0
 
     companion object {
         /**
@@ -175,6 +213,11 @@ class ModernArEngine(private val context: Context) {
         }
 
         try {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                Log.i("ModernArEngine", "Camera permission not granted yet; deferring ARCore session creation.")
+                return null
+            }
+
             if (!isArCorePackageInstalled(context)) {
                 isSupported = false
                 _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
@@ -192,40 +235,62 @@ class ModernArEngine(private val context: Context) {
             val newSession = try {
                 Session(context, EnumSet.of(Session.Feature.SHARED_CAMERA))
             } catch (e: UnavailableException) {
-                // If ARCore is not installed or device incompatible, re-throw to outer catch handler
                 throw e
             } catch (e: Throwable) {
                 Log.w("ModernArEngine", "SharedCamera session creation note, fallback to standard: ${e.message}")
                 Session(context)
             }
 
-            val config = Config(newSession)
-            config.focusMode = Config.FocusMode.AUTO
-            config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
-            config.lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
-
-            // Configure Vulkan hardware buffer mode if supported on API 27+
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-                try {
-                    config.textureUpdateMode = Config.TextureUpdateMode.EXPOSE_HARDWARE_BUFFER
-                } catch (_: Throwable) {}
+            // Align ARCore CameraConfig with Camera2 target FPS (30 vs 60) & resolution (1080p vs 720p)
+            try {
+                val desiredFpsFlag = if (preferHighFps) CameraConfig.TargetFps.TARGET_FPS_60 else CameraConfig.TargetFps.TARGET_FPS_30
+                val fpsFilter = CameraConfigFilter(newSession).apply {
+                    facingDirection = CameraConfig.FacingDirection.BACK
+                    targetFps = EnumSet.of(desiredFpsFlag)
+                }
+                var supportedConfigs = newSession.getSupportedCameraConfigs(fpsFilter)
+                if (supportedConfigs.isEmpty()) {
+                    val fallbackFilter = CameraConfigFilter(newSession).apply {
+                        facingDirection = CameraConfig.FacingDirection.BACK
+                    }
+                    supportedConfigs = newSession.getSupportedCameraConfigs(fallbackFilter)
+                }
+                if (supportedConfigs.isNotEmpty()) {
+                    val preferredConfig = if (preferHighDef) {
+                        supportedConfigs.firstOrNull { cfg ->
+                            val ts = cfg.textureSize
+                            ts.width == 1920 && ts.height == 1080
+                        } ?: supportedConfigs.firstOrNull { cfg ->
+                            val ts = cfg.textureSize
+                            ts.width == 1280 && ts.height == 720
+                        }
+                    } else {
+                        supportedConfigs.firstOrNull { cfg ->
+                            val ts = cfg.textureSize
+                            ts.width == 1280 && ts.height == 720
+                        } ?: supportedConfigs.firstOrNull { cfg ->
+                            val ts = cfg.textureSize
+                            ts.width == 1920 && ts.height == 1080
+                        }
+                    } ?: supportedConfigs.firstOrNull { cfg ->
+                        val ts = cfg.textureSize
+                        kotlin.math.abs((ts.width.toFloat() / ts.height.coerceAtLeast(1)) - (16f / 9f)) < 0.05f
+                    } ?: supportedConfigs.first()
+                    newSession.cameraConfig = preferredConfig
+                    is60FpsActive = try { preferredConfig.fpsRange.upper >= 60 } catch (_: Throwable) { false }
+                }
+            } catch (cfgEx: Throwable) {
+                Log.w("ModernArEngine", "CameraConfig selection fallback: ${cfgEx.message}")
             }
 
-            try {
-                if (newSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
-                    config.depthMode = Config.DepthMode.AUTOMATIC
-                    isDepthModeActive = true
-                }
-            } catch (_: Throwable) {}
+            selectedCameraId = try { newSession.cameraConfig.cameraId } catch (_: Throwable) { null }
+            selectedCameraImageSize = try { newSession.cameraConfig.textureSize } catch (_: Throwable) { null }
 
-            try {
-                config.instantPlacementMode = Config.InstantPlacementMode.LOCAL_Y_UP
-            } catch (_: Throwable) {}
+            val configured = configureSessionWithFallback(newSession)
+            isExposeHardwareBufferActive = configured.textureUpdateMode == Config.TextureUpdateMode.EXPOSE_HARDWARE_BUFFER
 
-            newSession.configure(config)
-
-            // If EXPOSE_HARDWARE_BUFFER is not active, bind headless texture for background driver
-            if (config.textureUpdateMode != Config.TextureUpdateMode.EXPOSE_HARDWARE_BUFFER) {
+            // If EXPOSE_HARDWARE_BUFFER is not active, bind headless OES texture for background driver
+            if (!isExposeHardwareBufferActive) {
                 val helper = HeadlessEglHelper()
                 val texId = helper.init()
                 if (texId > 0) {
@@ -235,10 +300,11 @@ class ModernArEngine(private val context: Context) {
             }
 
             session = newSession
+            isSessionResumed = false
             isSupported = true
             _arCoreStatus.value = ArCoreEngineStatus.ACTIVE
             _arCoreStatusMessage.value = "Google ARCore 已就緒 (水平/垂直平面與深度追蹤)"
-            Log.i("ModernArEngine", "Google ARCore Session successfully created & configured.")
+            Log.i("ModernArEngine", "Google ARCore Session configured: camId=$selectedCameraId, textureSize=$selectedCameraImageSize, depth=$isDepthModeActive, ahb=$isExposeHardwareBufferActive")
             return newSession
         } catch (e: UnavailableDeviceNotCompatibleException) {
             isSupported = false
@@ -276,6 +342,70 @@ class ModernArEngine(private val context: Context) {
             return null
         } finally {
             isInitializing.set(false)
+        }
+    }
+
+    private fun configureSessionWithFallback(newSession: Session): Config {
+        val depthSupported = allowDepthMode && try {
+            newSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)
+        } catch (_: Throwable) {
+            false
+        }
+
+        val attempts = listOf(
+            // 1. Full Vulkan AHB + HDR lighting + Depth + Instant Placement
+            Triple(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1, depthSupported, Config.LightEstimationMode.ENVIRONMENTAL_HDR),
+            // 2. Headless OES + HDR lighting + Depth
+            Triple(false, depthSupported, Config.LightEstimationMode.ENVIRONMENTAL_HDR),
+            // 3. Headless OES + Ambient intensity + Depth disabled (maximum compatibility)
+            Triple(false, false, Config.LightEstimationMode.AMBIENT_INTENSITY)
+        )
+
+        var lastError: Throwable? = null
+        for ((useHardwareBuffer, useDepth, lightMode) in attempts) {
+            try {
+                val config = Config(newSession)
+                config.focusMode = Config.FocusMode.AUTO
+                config.updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
+                config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
+                config.lightEstimationMode = lightMode
+                config.depthMode = if (useDepth) Config.DepthMode.AUTOMATIC else Config.DepthMode.DISABLED
+                config.instantPlacementMode = Config.InstantPlacementMode.LOCAL_Y_UP
+                if (useHardwareBuffer && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                    config.textureUpdateMode = Config.TextureUpdateMode.EXPOSE_HARDWARE_BUFFER
+                }
+                newSession.configure(config)
+                isDepthModeActive = (config.depthMode == Config.DepthMode.AUTOMATIC)
+                return config
+            } catch (t: Throwable) {
+                lastError = t
+                Log.w("ModernArEngine", "ARCore configure attempt failed (ahb=$useHardwareBuffer, depth=$useDepth, light=$lightMode): ${t.message}")
+            }
+        }
+        throw lastError ?: IllegalStateException("Unable to configure ARCore session")
+    }
+
+    /**
+     * Dynamically adapts ARCore Depth usage under thermal stress to prevent Tensor throttling.
+     */
+    fun applyRuntimePerformanceConfig(allowDepth: Boolean) {
+        allowDepthMode = allowDepth
+        val currentSession = session ?: return
+        try {
+            val config = currentSession.config
+            val desiredDepth = if (allowDepth && currentSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
+                Config.DepthMode.AUTOMATIC
+            } else {
+                Config.DepthMode.DISABLED
+            }
+            if (config.depthMode != desiredDepth) {
+                config.depthMode = desiredDepth
+                currentSession.configure(config)
+                isDepthModeActive = (desiredDepth == Config.DepthMode.AUTOMATIC)
+                Log.i("ModernArEngine", "Adjusted ARCore DepthMode=$desiredDepth for thermal/performance policy.")
+            }
+        } catch (t: Throwable) {
+            Log.w("ModernArEngine", "applyRuntimePerformanceConfig skipped: ${t.message}")
         }
     }
 
@@ -339,6 +469,7 @@ class ModernArEngine(private val context: Context) {
     }
 
     fun pause() {
+        isSessionResumed = false
         if (isTorchActive) {
             setTorchMode(false)
         }
@@ -352,14 +483,21 @@ class ModernArEngine(private val context: Context) {
 
     fun resume() {
         val curSession = session ?: return
+        if (isSessionResumed) return
         try {
             makeGlContextCurrent()
+            if (viewportWidth > 0 && viewportHeight > 0) {
+                curSession.setDisplayGeometry(lastDisplayRotation, viewportWidth, viewportHeight)
+            }
             curSession.resume()
+            isSessionResumed = true
             detachGlContext()
             Log.i("ModernArEngine", "ARCore session resumed successfully.")
         } catch (e: CameraNotAvailableException) {
+            isSessionResumed = false
             Log.w("ModernArEngine", "Camera not available for ARCore: ${e.message}")
         } catch (e: Exception) {
+            isSessionResumed = false
             Log.e("ModernArEngine", "Failed to resume ARCore session", e)
         }
     }
@@ -368,14 +506,22 @@ class ModernArEngine(private val context: Context) {
         private set
     var viewportHeight: Int = 2400
         private set
+    private var lastDisplayRotation: Int = 0
 
     fun setDisplayGeometry(rotation: Int, width: Int, height: Int) {
+        if (width <= 0 || height <= 0) return
+        lastDisplayRotation = rotation
         viewportWidth = width
         viewportHeight = height
-        session?.setDisplayGeometry(rotation, width, height)
+        try {
+            session?.setDisplayGeometry(rotation, width, height)
+        } catch (t: Throwable) {
+            Log.w("ModernArEngine", "setDisplayGeometry note: ${t.message}")
+        }
     }
 
     fun destroy() {
+        isSessionResumed = false
         if (isTorchActive) {
             setTorchMode(false)
         }
@@ -385,6 +531,8 @@ class ModernArEngine(private val context: Context) {
             Log.e("ModernArEngine", "Error closing ARCore session", e)
         }
         session = null
+        selectedCameraId = null
+        selectedCameraImageSize = null
         isTorchActive = false
         eglHelper?.release()
         eglHelper = null
@@ -403,6 +551,9 @@ class ModernArEngine(private val context: Context) {
      * During real-time aiming, creating anchors on every frame causes ARCore memory/graph stalls.
      */
     fun performHitTest(frame: Frame, x: Float, y: Float, createAnchor: Boolean = false): HitTestResult? {
+        if (frame.camera.trackingState != TrackingState.TRACKING) {
+            return null
+        }
         if (x.isNaN() || y.isNaN() || x.isInfinite() || y.isInfinite() || x < 0f || y < 0f) {
             return null
         }
@@ -411,27 +562,58 @@ class ModernArEngine(private val context: Context) {
         }
         try {
             val hits = frame.hitTest(x, y)
-            val validHits = hits.filter { it.distance in 0.05f..25.0f }
 
-            // Tier 1: Detected Plane within polygon bounds at primary raycast
-            var planePolygonHit = validHits.firstOrNull { hit ->
+            // Single-pass zero-allocation tier resolution over hit list
+            var planePolygonHit: HitResult? = null
+            var planeEstimatedHit: HitResult? = null
+            var depthHit: HitResult? = null
+            var instantHit: HitResult? = null
+            var featurePointHit: HitResult? = null
+            var hasValidHit = false
+
+            for (i in hits.indices) {
+                val hit = hits[i]
+                val dist = hit.distance
+                if (dist < 0.05f || dist > 25.0f) continue
+                hasValidHit = true
                 val trackable = hit.trackable
-                trackable is Plane && trackable.trackingState == TrackingState.TRACKING && trackable.isPoseInPolygon(hit.hitPose)
+                when {
+                    trackable is Plane && trackable.trackingState == TrackingState.TRACKING -> {
+                        if (planePolygonHit == null && trackable.isPoseInPolygon(hit.hitPose)) {
+                            planePolygonHit = hit
+                            break
+                        } else if (planeEstimatedHit == null) {
+                            planeEstimatedHit = hit
+                        }
+                    }
+                    trackable is com.google.ar.core.Point -> {
+                        if (depthHit == null && trackable.orientationMode == com.google.ar.core.Point.OrientationMode.ESTIMATED_SURFACE_NORMAL) {
+                            depthHit = hit
+                        } else if (featurePointHit == null) {
+                            featurePointHit = hit
+                        }
+                    }
+                    trackable is InstantPlacementPoint -> {
+                        if (instantHit == null) instantHit = hit
+                    }
+                }
             }
 
-            // Sub-pixel 4-neighbor cross check to maximize Plane Polygon hit rate when aiming near edges
-            if (planePolygonHit == null) {
-                val offsets = arrayOf(Pair(-4f, 0f), Pair(4f, 0f), Pair(0f, -4f), Pair(0f, 4f))
-                for ((ox, oy) in offsets) {
-                    val nHits = frame.hitTest(x + ox, y + oy)
-                    val candidate = nHits.firstOrNull { hit ->
-                        val trackable = hit.trackable
-                        trackable is Plane && trackable.trackingState == TrackingState.TRACKING && trackable.isPoseInPolygon(hit.hitPose)
+            // Sub-pixel 4-neighbor cross check: always run on tap, throttled every 3rd miss during aiming
+            if (planePolygonHit == null && (createAnchor || aimMissCounter++ % 3 == 0)) {
+                for (n in 0 until 4) {
+                    val nHits = frame.hitTest(x + neighborDx[n], y + neighborDy[n])
+                    for (j in nHits.indices) {
+                        val hit = nHits[j]
+                        if (hit.distance in 0.05f..25.0f) {
+                            val trackable = hit.trackable
+                            if (trackable is Plane && trackable.trackingState == TrackingState.TRACKING && trackable.isPoseInPolygon(hit.hitPose)) {
+                                planePolygonHit = hit
+                                break
+                            }
+                        }
                     }
-                    if (candidate != null) {
-                        planePolygonHit = candidate
-                        break
-                    }
+                    if (planePolygonHit != null) break
                 }
             }
 
@@ -458,40 +640,32 @@ class ModernArEngine(private val context: Context) {
                 )
             }
 
-            if (validHits.isNotEmpty()) {
+            if (hasValidHit) {
                 // Tier 2: Plane estimated (outside current polygon)
-                val planeHit = validHits.firstOrNull { hit ->
-                    val trackable = hit.trackable
-                    trackable is Plane && trackable.trackingState == TrackingState.TRACKING
-                }
-                if (planeHit != null) {
-                    val plane = planeHit.trackable as Plane
-                    val edgeSnap = findPlaneEdgeOrVertexSnap(plane, planeHit.hitPose, snapRadiusMeters = 0.08f)
-                    val finalPose = edgeSnap?.first ?: planeHit.hitPose
+                if (planeEstimatedHit != null) {
+                    val plane = planeEstimatedHit.trackable as Plane
+                    val edgeSnap = findPlaneEdgeOrVertexSnap(plane, planeEstimatedHit.hitPose, snapRadiusMeters = 0.08f)
+                    val finalPose = edgeSnap?.first ?: planeEstimatedHit.hitPose
                     val isSnapped = edgeSnap?.second ?: false
 
                     val anchor = if (createAnchor) {
                         try {
                             plane.createAnchor(finalPose)
                         } catch (e: Exception) {
-                            try { planeHit.createAnchor() } catch (e2: Exception) { null }
+                            try { planeEstimatedHit.createAnchor() } catch (e2: Exception) { null }
                         }
                     } else null
                     return HitTestResult(
                         pose = finalPose,
                         anchor = anchor,
                         hitType = HitType.PLANE_ESTIMATED,
-                        distance = planeHit.distance,
+                        distance = planeEstimatedHit.distance,
                         planeType = plane.type,
                         isSnappedToFeature = isSnapped
                     )
                 }
 
                 // Tier 3: Depth Point (from Depth API)
-                val depthHit = validHits.firstOrNull { hit ->
-                    val trackable = hit.trackable
-                    trackable is com.google.ar.core.Point && trackable.orientationMode == com.google.ar.core.Point.OrientationMode.ESTIMATED_SURFACE_NORMAL
-                }
                 if (depthHit != null) {
                     val anchor = if (createAnchor) {
                         try { depthHit.createAnchor() } catch (e: Exception) { null }
@@ -506,7 +680,6 @@ class ModernArEngine(private val context: Context) {
                 }
 
                 // Tier 4: Instant Placement Point
-                val instantHit = validHits.firstOrNull { it.trackable is InstantPlacementPoint }
                 if (instantHit != null) {
                     val anchor = if (createAnchor) {
                         try { instantHit.createAnchor() } catch (e: Exception) { null }
@@ -521,7 +694,6 @@ class ModernArEngine(private val context: Context) {
                 }
 
                 // Tier 5: PointCloud feature point
-                val featurePointHit = validHits.firstOrNull { it.trackable is com.google.ar.core.Point }
                 if (featurePointHit != null) {
                     val anchor = if (createAnchor) {
                         try { featurePointHit.createAnchor() } catch (e: Exception) { null }
@@ -538,7 +710,6 @@ class ModernArEngine(private val context: Context) {
             }
 
             // Tier 6: Mathematical Ray-Plane Surface Extrapolation (Auto-Follow Surface Continuity)
-            // Seamlessly bridges gaps across walls, tables, and floors even when raw feature hits are empty
             val raycastPlaneHit = performPlaneRaycastIntersection(frame, x, y, createAnchor)
             if (raycastPlaneHit != null) {
                 return raycastPlaneHit
@@ -552,14 +723,12 @@ class ModernArEngine(private val context: Context) {
 
     /**
      * Tier 6: Mathematical Ray-Plane Surface Extrapolation.
-     * When moving across surfaces beyond immediate detected polygons,
-     * this raycasts from the camera onto the nearest active tracking Plane's surface.
+     * Zero-allocation scratch array version.
      */
     private fun performPlaneRaycastIntersection(frame: Frame, x: Float, y: Float, createAnchor: Boolean): HitTestResult? {
         val currentSession = session ?: return null
         val planes = currentSession.getAllTrackables(Plane::class.java)
-        val trackingPlanes = planes.filter { it.trackingState == TrackingState.TRACKING && it.subsumedBy == null }
-        if (trackingPlanes.isEmpty()) return null
+        if (planes.isEmpty()) return null
 
         val camera = frame.camera
         val cameraPose = camera.pose
@@ -572,14 +741,14 @@ class ModernArEngine(private val context: Context) {
         val rayCamY: Float
         val rayCamZ = -1.0f
         if (viewportWidth > 0 && viewportHeight > 0) {
-            camera.getProjectionMatrix(reusablePMatrix, 0, 0.1f, 100f)
+            camera.getProjectionMatrix(reusablePMatrix, 0, 0.05f, 50.0f)
             val p00 = reusablePMatrix[0]
             val p11 = reusablePMatrix[5]
             if (kotlin.math.abs(p00) > 1e-4f && kotlin.math.abs(p11) > 1e-4f) {
                 val ndcX = (2.0f * x / viewportWidth.toFloat()) - 1.0f
                 val ndcY = 1.0f - (2.0f * y / viewportHeight.toFloat())
-                rayCamX = ndcX / p00
-                rayCamY = ndcY / p11
+                rayCamX = (ndcX + reusablePMatrix[8]) / p00
+                rayCamY = (ndcY + reusablePMatrix[9]) / p11
             } else {
                 rayCamX = 0f
                 rayCamY = 0f
@@ -589,11 +758,14 @@ class ModernArEngine(private val context: Context) {
             rayCamY = 0f
         }
 
-        // Transform ray from camera space to world space
-        val forward = cameraPose.transformPoint(floatArrayOf(rayCamX, rayCamY, rayCamZ))
-        val rayDirX = forward[0] - camX
-        val rayDirY = forward[1] - camY
-        val rayDirZ = forward[2] - camZ
+        // Transform ray from camera space to world space using reusable scratch buffers
+        scratchPointIn[0] = rayCamX
+        scratchPointIn[1] = rayCamY
+        scratchPointIn[2] = rayCamZ
+        cameraPose.transformPoint(scratchPointIn, 0, scratchPointOut, 0)
+        val rayDirX = scratchPointOut[0] - camX
+        val rayDirY = scratchPointOut[1] - camY
+        val rayDirZ = scratchPointOut[2] - camZ
         val rLen = kotlin.math.sqrt(rayDirX * rayDirX + rayDirY * rayDirY + rayDirZ * rayDirZ)
         if (rLen < 1e-5f) return null
         val rNormX = rayDirX / rLen
@@ -606,20 +778,20 @@ class ModernArEngine(private val context: Context) {
         var bestHitY = 0f
         var bestHitZ = 0f
 
-        for (plane in trackingPlanes) {
+        for (plane in planes) {
+            if (plane.trackingState != TrackingState.TRACKING || plane.subsumedBy != null) continue
             val cPose = plane.centerPose
             val px = cPose.tx()
             val py = cPose.ty()
             val pz = cPose.tz()
 
             // Plane normal in world space (y-axis of center pose)
-            val up = cPose.transformPoint(floatArrayOf(0f, 1f, 0f))
-            val nx = up[0] - px
-            val ny = up[1] - py
-            val nz = up[2] - pz
+            cPose.transformPoint(scratchNormalIn, 0, scratchNormalOut, 0)
+            val nx = scratchNormalOut[0] - px
+            val ny = scratchNormalOut[1] - py
+            val nz = scratchNormalOut[2] - pz
 
             val denom = rNormX * nx + rNormY * ny + rNormZ * nz
-            // Must not be parallel to ray
             if (kotlin.math.abs(denom) > 0.05f) {
                 val t = ((px - camX) * nx + (py - camY) * ny + (pz - camZ) * nz) / denom
                 if (t in 0.15f..18.0f && t < bestT) {
@@ -633,7 +805,10 @@ class ModernArEngine(private val context: Context) {
         }
 
         if (bestPlane != null && bestT < 18.0f) {
-            val hitPose = Pose(floatArrayOf(bestHitX, bestHitY, bestHitZ), bestPlane.centerPose.rotationQuaternion)
+            scratchPoseTrans[0] = bestHitX
+            scratchPoseTrans[1] = bestHitY
+            scratchPoseTrans[2] = bestHitZ
+            val hitPose = Pose(scratchPoseTrans, bestPlane.centerPose.rotationQuaternion)
             val edgeSnap = findPlaneEdgeOrVertexSnap(bestPlane, hitPose, snapRadiusMeters = 0.08f)
             val finalPose = edgeSnap?.first ?: hitPose
             val isSnapped = edgeSnap?.second ?: false
@@ -658,8 +833,7 @@ class ModernArEngine(private val context: Context) {
 
     /**
      * Magnetically snap and auto-follow nearest detected plane polygon vertex (corner)
-     * or boundary edge segment (wall lines, tile seams, door frames, table borders)
-     * with soft-magnetic potential well attraction and hysteresis.
+     * or boundary edge segment with zero-alloc scratch transforms.
      */
     fun findPlaneEdgeOrVertexSnap(
         plane: Plane,
@@ -672,9 +846,12 @@ class ModernArEngine(private val context: Context) {
             val count = poly.remaining() / 2
             if (count < 2) return null
 
-            val localHit = plane.centerPose.inverse().transformPoint(floatArrayOf(hitPose.tx(), hitPose.ty(), hitPose.tz()))
-            val hx = localHit[0]
-            val hz = localHit[2]
+            scratchPointIn[0] = hitPose.tx()
+            scratchPointIn[1] = hitPose.ty()
+            scratchPointIn[2] = hitPose.tz()
+            plane.centerPose.inverse().transformPoint(scratchPointIn, 0, scratchPointOut, 0)
+            val hx = scratchPointOut[0]
+            val hz = scratchPointOut[2]
 
             val effectiveSnapRadius = if (isCurrentlySnapped) snapRadiusMeters * 1.6f else snapRadiusMeters
             var bestDist = effectiveSnapRadius
@@ -690,9 +867,11 @@ class ModernArEngine(private val context: Context) {
                 val z2 = poly.get(nextIdx * 2 + 1)
 
                 // 1. Polygon Corner Vertex Snap
-                val d1 = kotlin.math.sqrt((hx - x1) * (hx - x1) + (hz - z1) * (hz - z1))
-                if (d1 < bestDist) {
-                    bestDist = d1
+                val dx1 = hx - x1
+                val dz1 = hz - z1
+                val d1Sq = dx1 * dx1 + dz1 * dz1
+                if (d1Sq < bestDist * bestDist) {
+                    bestDist = kotlin.math.sqrt(d1Sq)
                     snapX = x1
                     snapZ = z1
                     didSnap = true
@@ -706,9 +885,12 @@ class ModernArEngine(private val context: Context) {
                     val t = (((hx - x1) * edx + (hz - z1) * edz) / lenSq).coerceIn(0f, 1f)
                     val px = x1 + t * edx
                     val pz = z1 + t * edz
-                    val segDist = kotlin.math.sqrt((hx - px) * (hx - px) + (hz - pz) * (hz - pz))
-                    if (segDist < bestDist && segDist < effectiveSnapRadius * 0.75f) {
-                        bestDist = segDist
+                    val pdx = hx - px
+                    val pdz = hz - pz
+                    val segDistSq = pdx * pdx + pdz * pdz
+                    val edgeCutoff = kotlin.math.min(bestDist, effectiveSnapRadius * 0.75f)
+                    if (segDistSq < edgeCutoff * edgeCutoff) {
+                        bestDist = kotlin.math.sqrt(segDistSq)
                         snapX = px
                         snapZ = pz
                         didSnap = true
@@ -717,7 +899,6 @@ class ModernArEngine(private val context: Context) {
             }
 
             if (didSnap) {
-                // Apply soft magnetic pull curve if between inner lock and outer release
                 val innerLockRadius = 0.035f
                 val finalSnapX: Float
                 val finalSnapZ: Float
@@ -726,17 +907,19 @@ class ModernArEngine(private val context: Context) {
                     finalSnapZ = snapZ
                 } else {
                     val t = ((bestDist - innerLockRadius) / (effectiveSnapRadius - innerLockRadius)).coerceIn(0f, 1f)
-                    val pull = 1f - (t * t * (3f - 2f * t)) // cubic smoothstep
+                    val pull = 1f - (t * t * (3f - 2f * t))
                     finalSnapX = hx * (1f - pull) + snapX * pull
                     finalSnapZ = hz * (1f - pull) + snapZ * pull
                 }
 
-                val worldSnap = plane.centerPose.transformPoint(floatArrayOf(finalSnapX, 0f, finalSnapZ))
-                val snappedPose = Pose(floatArrayOf(worldSnap[0], worldSnap[1], worldSnap[2]), hitPose.rotationQuaternion)
+                scratchPointIn[0] = finalSnapX
+                scratchPointIn[1] = 0f
+                scratchPointIn[2] = finalSnapZ
+                plane.centerPose.transformPoint(scratchPointIn, 0, scratchPointOut, 0)
+                val snappedPose = Pose(scratchPointOut, hitPose.rotationQuaternion)
                 return Pair(snappedPose, true)
             }
-        } catch (e: Throwable) {
-            // fallback gracefully
+        } catch (_: Throwable) {
         }
         return null
     }
@@ -746,19 +929,20 @@ class ModernArEngine(private val context: Context) {
     private var cachedFeaturePointsCount = 0
 
     /**
-     * Extract frame data matrices and state safely on GL thread with zero allocations.
+     * Extract frame data matrices and state safely on Vulkan/Render thread with double-buffered zero-alloc matrices.
      */
     fun extractFrameData(frame: Frame, centerHitResult: HitTestResult? = null): ModernArFrame {
         val camera = frame.camera
-        camera.getViewMatrix(reusableVMatrix, 0)
-        camera.getProjectionMatrix(reusablePMatrix, 0, 0.05f, 50.0f)
-        val vMatrix = reusableVMatrix.clone()
-        val pMatrix = reusablePMatrix.clone()
+        matrixPoolIdx = 1 - matrixPoolIdx
+        val vMatrix = vMatrixPool[matrixPoolIdx]
+        val pMatrix = pMatrixPool[matrixPoolIdx]
+        camera.getViewMatrix(vMatrix, 0)
+        camera.getProjectionMatrix(pMatrix, 0, 0.05f, 50.0f)
 
         frameCounter++
 
-        // Extract detected planes with polygon 2D vertices (throttled every 6 frames to prevent GC hiccups)
-        if (frameCounter % 6 == 0 || cachedPlanes.isEmpty()) {
+        // Extract detected planes with polygon 2D vertices (throttled every 8 frames to prevent GC hiccups)
+        if (frameCounter % 8 == 0 || cachedPlanes.isEmpty()) {
             val planeInfos = mutableListOf<DetectedPlaneInfo>()
             val allPlanes = session?.getAllTrackables(Plane::class.java)
             allPlanes?.forEach { plane ->
@@ -1036,16 +1220,22 @@ private class HeadlessEglHelper {
 
     fun release() {
         try {
-            if (textureId != 0) {
-                GLES20.glDeleteTextures(1, intArrayOf(textureId), 0)
-                textureId = 0
-            }
             if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
+                if (textureId != 0 && makeCurrent()) {
+                    GLES20.glDeleteTextures(1, intArrayOf(textureId), 0)
+                    textureId = 0
+                }
                 EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
                 if (eglSurface != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(eglDisplay, eglSurface)
                 if (eglContext != EGL14.EGL_NO_CONTEXT) EGL14.eglDestroyContext(eglDisplay, eglContext)
                 EGL14.eglTerminate(eglDisplay)
             }
-        } catch (_: Throwable) {}
+        } catch (_: Throwable) {
+        } finally {
+            textureId = 0
+            eglSurface = EGL14.EGL_NO_SURFACE
+            eglContext = EGL14.EGL_NO_CONTEXT
+            eglDisplay = EGL14.EGL_NO_DISPLAY
+        }
     }
 }

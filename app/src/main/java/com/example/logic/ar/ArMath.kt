@@ -37,23 +37,15 @@ data class CircleResult(
 object ArMath {
 
     /**
-     * Euclidean distance between two 3D points in meters, with depth curvature calibration.
+     * Exact Euclidean distance between two 3D points in meters.
      */
     fun distance(p1: Point3D, p2: Point3D): Double {
         val dx = p2.x - p1.x
         val dy = p2.y - p1.y
         val dz = p2.z - p1.z
         val rawDist = sqrt(dx * dx + dy * dy + dz * dz)
-        if (rawDist.isNaN() || rawDist < 1e-7) return 0.0
-
-        // Sub-millimeter lens depth curvature compensation
-        val avgZ = abs((p1.z + p2.z) / 2.0)
-        val opticalCorrectionFactor = if (avgZ > 0.5) {
-            1.0 - (0.00018 * (avgZ - 0.5)).coerceIn(0.0, 0.003)
-        } else {
-            1.0
-        }
-        return rawDist * opticalCorrectionFactor
+        if (rawDist.isNaN() || rawDist.isInfinite() || rawDist < 1e-7) return 0.0
+        return rawDist
     }
 
     /**
@@ -500,72 +492,113 @@ object ArMath {
         if (existingPoints.isEmpty()) return null
 
         val effectiveThreshold = if (isCurrentlySnapped) snapThresholdMeters * 1.65 else snapThresholdMeters
-        var bestCandidate: Point3D? = null
+        var bestVertex: Point3D? = null
+        var bestType = 0 // 0 = none, 1 = vertex, 2 = midpoint, 3 = edge
+        var bestX = 0.0
+        var bestY = 0.0
+        var bestZ = 0.0
         var minD = effectiveThreshold
 
+        val lx = livePoint.x
+        val ly = livePoint.y
+        val lz = livePoint.z
+
         // 1. Existing Node / Corner Vertex Snap (Highest Priority)
-        for (pt in existingPoints) {
-            val d = distance(livePoint, pt)
-            if (d < minD) {
-                minD = d
-                bestCandidate = pt
+        for (i in existingPoints.indices) {
+            val pt = existingPoints[i]
+            val dx = lx - pt.x
+            val dy = ly - pt.y
+            val dz = lz - pt.z
+            val dSq = dx * dx + dy * dy + dz * dz
+            if (dSq < minD * minD) {
+                val d = sqrt(dSq)
+                if (d < minD) {
+                    minD = d
+                    bestVertex = pt
+                    bestX = pt.x
+                    bestY = pt.y
+                    bestZ = pt.z
+                    bestType = 1
+                }
             }
         }
 
-        // 2. Line Segment Midpoint & Edge Sliding Snap (Auto-Follow along existing lines)
+        // 2. Line Segment Midpoint & Edge Sliding Snap (Zero-Alloc inner loop)
         if (existingPoints.size >= 2) {
             for (i in 0 until existingPoints.size - 1 step 2) {
                 val p1 = existingPoints[i]
-                val p2 = existingPoints.getOrNull(i + 1) ?: break
+                val p2 = existingPoints[i + 1]
 
-                // Check Midpoint Snap
-                val midX = (p1.x + p2.x) * 0.5
-                val midY = (p1.y + p2.y) * 0.5
-                val midZ = (p1.z + p2.z) * 0.5
-                val midPt = Point3D(midX, midY, midZ, isArPrecision = true, label = "中點")
-                val dMid = distance(livePoint, midPt)
-                if (dMid < minD * 0.90) {
-                    minD = dMid
-                    bestCandidate = midPt
+                // Check Midpoint Snap (yields to Vertex snap priority)
+                if (bestType != 1) {
+                    val midX = (p1.x + p2.x) * 0.5
+                    val midY = (p1.y + p2.y) * 0.5
+                    val midZ = (p1.z + p2.z) * 0.5
+                    val mdx = lx - midX
+                    val mdy = ly - midY
+                    val mdz = lz - midZ
+                    val dMidSq = mdx * mdx + mdy * mdy + mdz * mdz
+                    val midCutoff = minD * 0.90
+                    if (dMidSq < midCutoff * midCutoff) {
+                        minD = sqrt(dMidSq)
+                        bestVertex = null
+                        bestX = midX
+                        bestY = midY
+                        bestZ = midZ
+                        bestType = 2
+                    }
                 }
 
-                // Check Segment Edge Orthogonal Projection (Slide Auto-Follow)
-                val segDx = p2.x - p1.x
-                val segDy = p2.y - p1.y
-                val segDz = p2.z - p1.z
-                val segLenSq = segDx * segDx + segDy * segDy + segDz * segDz
-                if (segLenSq > 1e-6) {
-                    val t = (((livePoint.x - p1.x) * segDx + (livePoint.y - p1.y) * segDy + (livePoint.z - p1.z) * segDz) / segLenSq).coerceIn(0.0, 1.0)
-                    val projX = p1.x + t * segDx
-                    val projY = p1.y + t * segDy
-                    val projZ = p1.z + t * segDz
-                    val projPt = Point3D(projX, projY, projZ, isArPrecision = true, label = "邊緣")
-                    val dProj = distance(livePoint, projPt)
-                    if (dProj < minD * 0.72) {
-                        minD = dProj
-                        bestCandidate = projPt
+                // Check Segment Edge Orthogonal Projection (yields to Vertex and Midpoint snaps)
+                if (bestType == 0 || bestType == 3) {
+                    val segDx = p2.x - p1.x
+                    val segDy = p2.y - p1.y
+                    val segDz = p2.z - p1.z
+                    val segLenSq = segDx * segDx + segDy * segDy + segDz * segDz
+                    if (segLenSq > 1e-6) {
+                        val t = (((lx - p1.x) * segDx + (ly - p1.y) * segDy + (lz - p1.z) * segDz) / segLenSq).coerceIn(0.0, 1.0)
+                        val projX = p1.x + t * segDx
+                        val projY = p1.y + t * segDy
+                        val projZ = p1.z + t * segDz
+                        val pdx = lx - projX
+                        val pdy = ly - projY
+                        val pdz = lz - projZ
+                        val dProjSq = pdx * pdx + pdy * pdy + pdz * pdz
+                        val projCutoff = minD * 0.72
+                        if (dProjSq < projCutoff * projCutoff) {
+                            minD = sqrt(dProjSq)
+                            bestVertex = null
+                            bestX = projX
+                            bestY = projY
+                            bestZ = projZ
+                            bestType = 3
+                        }
                     }
                 }
             }
         }
 
-        if (bestCandidate == null) return null
+        if (bestType == 0) return null
+
+        val candidateLabel = when (bestType) {
+            2 -> "中點"
+            3 -> "邊緣"
+            else -> bestVertex?.label ?: ""
+        }
 
         // 3. Apply Soft-Magnetic Gravitational Attraction Curve
-        // If within inner lock zone (<= 3.0cm), snap firmly.
-        // If in outer attraction zone, apply smooth non-linear cubic hermite pull towards candidate
         val innerLockRadius = 0.030
         return if (minD <= innerLockRadius || isCurrentlySnapped) {
-            bestCandidate
+            bestVertex ?: Point3D(bestX, bestY, bestZ, isArPrecision = true, label = candidateLabel)
         } else {
             val tNorm = ((minD - innerLockRadius) / (effectiveThreshold - innerLockRadius)).coerceIn(0.0, 1.0)
-            val magneticPull = 1.0 - (tNorm * tNorm * (3.0 - 2.0 * tNorm)) // Smoothstep attraction
+            val magneticPull = 1.0 - (tNorm * tNorm * (3.0 - 2.0 * tNorm))
             Point3D(
-                x = livePoint.x * (1.0 - magneticPull) + bestCandidate.x * magneticPull,
-                y = livePoint.y * (1.0 - magneticPull) + bestCandidate.y * magneticPull,
-                z = livePoint.z * (1.0 - magneticPull) + bestCandidate.z * magneticPull,
+                x = lx * (1.0 - magneticPull) + bestX * magneticPull,
+                y = ly * (1.0 - magneticPull) + bestY * magneticPull,
+                z = lz * (1.0 - magneticPull) + bestZ * magneticPull,
                 isArPrecision = true,
-                label = bestCandidate.label
+                label = candidateLabel
             )
         }
     }

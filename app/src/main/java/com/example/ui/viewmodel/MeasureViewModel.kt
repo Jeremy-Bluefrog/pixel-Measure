@@ -22,6 +22,9 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.db.MeasureDatabase
 import com.example.data.model.MeasureRecord
 import com.example.data.repository.MeasureRepository
+import com.example.logic.PixelPerformanceMonitor
+import com.example.logic.PixelThermalPolicy
+import com.example.logic.ThermalTier
 import com.example.logic.TranslationManager
 import com.example.logic.ar.*
 import com.example.logic.sensor.SensorCorrectionTelemetry
@@ -31,6 +34,8 @@ import com.google.ar.core.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.text.DecimalFormat
 import java.util.concurrent.atomic.AtomicReference
@@ -214,6 +219,14 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         triggerHapticFeedback(HapticType.CLICK)
     }
 
+    // Pixel Thermal & Sustained Performance Monitor
+    val pixelPerformanceMonitor = PixelPerformanceMonitor(app)
+    val thermalPolicy: StateFlow<PixelThermalPolicy> = pixelPerformanceMonitor.policy
+    private val _effectiveTargetFps = MutableStateFlow(if (prefs.getBoolean("high_fps_mode_enabled", true)) 60 else 30)
+    val effectiveTargetFps: StateFlow<Int> = _effectiveTargetFps.asStateFlow()
+
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
     // Modern AR Engine & Session
     val modernArEngine = ModernArEngine(app)
     val arSession: Session? get() = modernArEngine.session
@@ -221,34 +234,89 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     val arCoreStatusMessage = modernArEngine.arCoreStatusMessage
 
     private var hasCheckedArCore = false
+    private val arInitMutex = kotlinx.coroutines.sync.Mutex()
+
+    private fun isCameraPermissionGranted(): Boolean {
+        return androidx.core.content.ContextCompat.checkSelfPermission(
+            app,
+            android.Manifest.permission.CAMERA
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun isOpticalFallbackMode(): Boolean {
+        return modernArEngine.session == null || _isFrontCamera.value || _isCameraSimulationActive.value
+    }
+
+    fun updateFallbackCameraMatrices() {
+        if (!isOpticalFallbackMode()) return
+        val w = displayWidth.coerceAtLeast(1)
+        val h = displayHeight.coerceAtLeast(1)
+        val aspect = w.toFloat() / h.toFloat()
+        val view = FloatArray(16)
+        val proj = FloatArray(16)
+        com.example.logic.vulkan.VulkanMatrix4.setIdentity(view, 0)
+        com.example.logic.vulkan.VulkanMatrix4.perspective(proj, 0, 60f, aspect, 0.05f, 50f)
+        _viewMatrix.value = view
+        _projectionMatrix.value = proj
+    }
+
+    suspend fun ensureArCoreInitialized(activity: Activity? = null, forceRetry: Boolean = false): Session? {
+        if (!isCameraPermissionGranted()) {
+            return null
+        }
+        modernArEngine.session?.let { existing ->
+            return existing
+        }
+        return arInitMutex.withLock {
+            modernArEngine.session?.let { return@withLock it }
+            if (hasCheckedArCore && !forceRetry && modernArEngine.arCoreStatus.value == ArCoreEngineStatus.ACTIVE) {
+                return@withLock null
+            }
+            hasCheckedArCore = true
+            val created = withContext(Dispatchers.IO) {
+                modernArEngine.checkAndCreateSession(activity)
+            }
+            withContext(Dispatchers.Main) {
+                if (created != null) {
+                    val sc = modernArEngine.sharedCamera
+                    val camMgr = highSpeedCamera2Manager
+                    if (sc != null && camMgr != null && !_isFrontCamera.value) {
+                        camMgr.sharedCamera = sc
+                        camMgr.preferredCameraId = modernArEngine.selectedCameraId
+                        camMgr.preferredAspectRatio = modernArEngine.selectedCameraImageSize?.let {
+                            if (it.height > 0) it.width.toFloat() / it.height.toFloat() else null
+                        }
+                    }
+                    // Keep _isMeasurementAvailable driven truthfully by tracked surface hits once frames arrive
+                    Log.i("MeasureViewModel", "Google ARCore session initialized (camId=${modernArEngine.selectedCameraId}).")
+                } else {
+                    _isMeasurementAvailable.value = true
+                    updateFallbackCameraMatrices()
+                    Log.i("MeasureViewModel", "ARCore session unavailable, optical & sensor fusion measurement active.")
+                }
+            }
+            created
+        }
+    }
 
     fun checkAndInitArCore(activity: Activity? = null, forceRetry: Boolean = false) {
-        if (modernArEngine.session != null) {
-            modernArEngine.resume()
-            return
-        }
+        if (!isCameraPermissionGranted()) return
+        if (modernArEngine.session != null) return
         if (hasCheckedArCore && !forceRetry && modernArEngine.arCoreStatus.value == ArCoreEngineStatus.ACTIVE) return
-        hasCheckedArCore = true
-        viewModelScope.launch(Dispatchers.IO) {
-            val session = modernArEngine.checkAndCreateSession(activity)
-            if (session != null) {
-                withContext(Dispatchers.Main) {
-                    _isMeasurementAvailable.value = true
-                    val sc = modernArEngine.sharedCamera
-                    if (sc != null && highSpeedCamera2Manager != null) {
-                        highSpeedCamera2Manager?.reconnectWithSharedCamera(sc) { _, _ ->
-                            modernArEngine.resume()
-                        }
-                    } else {
-                        modernArEngine.resume()
-                    }
+        viewModelScope.launch {
+            val hadSessionBefore = modernArEngine.session != null
+            val created = ensureArCoreInitialized(activity, forceRetry)
+            if (created != null && !hadSessionBefore) {
+                val sc = modernArEngine.sharedCamera
+                val camMgr = highSpeedCamera2Manager
+                if (sc != null && camMgr != null && !_isFrontCamera.value) {
+                    camMgr.reconnectWithSharedCamera(
+                        sharedCam = sc,
+                        cameraId = modernArEngine.selectedCameraId,
+                        imageSize = modernArEngine.selectedCameraImageSize,
+                        onBeforeCloseCamera = { modernArEngine.pause() }
+                    )
                 }
-                Log.i("MeasureViewModel", "Google ARCore session active.")
-            } else {
-                withContext(Dispatchers.Main) {
-                    _isMeasurementAvailable.value = true
-                }
-                Log.i("MeasureViewModel", "ARCore session unavailable, optical & sensor fusion measurement active.")
             }
         }
     }
@@ -316,6 +384,9 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun updateDisplayGeometry(rotation: Int, width: Int, height: Int) {
         displayWidth = width
         displayHeight = height
+        if (isOpticalFallbackMode()) {
+            updateFallbackCameraMatrices()
+        }
     }
 
     // Active placed points in 3D space with concurrency lock
@@ -364,7 +435,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     val torchBrightness: StateFlow<Float> = _torchBrightness.asStateFlow()
 
     // Toast / Feedback event channel
-    private val _toastMessage = MutableSharedFlow<String>(extraBufferCapacity = 1)
+    private val _toastMessage = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val toastMessage = _toastMessage.asSharedFlow()
 
     fun showToast(message: String) {
@@ -684,6 +755,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private var lastLensCheckTime = 0L
     private val isAnalyzingLensDirt = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val lensCheckPixels = IntArray(48 * 48)
 
     /**
      * Background offloaded lens smudge & cleanliness analyzer.
@@ -702,7 +774,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 val scaled = Bitmap.createScaledBitmap(bitmap, 48, 48, false)
                 var totalEdgeVariance = 0.0
                 var pixelCount = 0
-                val pixels = IntArray(48 * 48)
+                val pixels = lensCheckPixels
                 scaled.getPixels(pixels, 0, 48, 0, 0, 48, 48)
                 if (scaled != bitmap) {
                     try { scaled.recycle() } catch (_: Throwable) {}
@@ -744,6 +816,13 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private val _dismissedLowLight = MutableStateFlow(false)
     val dismissedLowLight: StateFlow<Boolean> = _dismissedLowLight.asStateFlow()
+
+    private val _isCameraSimulationActive = MutableStateFlow(false)
+    val isCameraSimulationActive: StateFlow<Boolean> = _isCameraSimulationActive.asStateFlow()
+
+    fun setCameraSimulationActive(active: Boolean) {
+        _isCameraSimulationActive.value = active
+    }
 
     private val _simulatedAlert = MutableStateFlow<String?>(null)
     val simulatedAlert: StateFlow<String?> = _simulatedAlert.asStateFlow()
@@ -839,13 +918,30 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun setHighFpsModeEnabled(enabled: Boolean) {
         highFpsModeEnabled.value = enabled
         prefs.edit().putBoolean("high_fps_mode_enabled", enabled).apply()
-        _toastMessage.tryEmit(if (enabled) "已啟用 60Hz 高幀率相機預覽" else "已切換至標準幀率")
+        modernArEngine.preferHighFps = enabled
+        pixelPerformanceMonitor.updateUserPreferences(enabled, highDefinitionQualityEnabled.value)
+        val policy = pixelPerformanceMonitor.policy.value
+        _effectiveTargetFps.value = policy.targetFps
+        highSpeedCamera2Manager?.updatePerformanceConfig(
+            highFps = enabled,
+            highDef = highDefinitionQualityEnabled.value,
+            maxFps = policy.targetFps
+        )
+        _toastMessage.tryEmit(if (enabled) "已啟用 60Hz 高幀率相機預覽" else "已切換至 30Hz 省電穩定幀率")
     }
 
     fun setHighDefinitionQualityEnabled(enabled: Boolean) {
         highDefinitionQualityEnabled.value = enabled
         prefs.edit().putBoolean("high_definition_quality_enabled", enabled).apply()
-        _toastMessage.tryEmit(if (enabled) "已啟用 Full HD/4K 超高畫質模式" else "已切換至標準畫質模式")
+        modernArEngine.preferHighDef = enabled
+        pixelPerformanceMonitor.updateUserPreferences(highFpsModeEnabled.value, enabled)
+        val policy = pixelPerformanceMonitor.policy.value
+        highSpeedCamera2Manager?.updatePerformanceConfig(
+            highFps = highFpsModeEnabled.value,
+            highDef = enabled,
+            maxFps = policy.targetFps
+        )
+        _toastMessage.tryEmit(if (enabled) "已啟用 Full HD 高畫質採樣" else "已切換至 720p 效能省電畫質")
     }
 
     // Vulkan 1.3 AR Hardware Accelerated Graphics Engine
@@ -1074,7 +1170,19 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         sensorCorrectionEngine.isStereoParallaxScaleEnabled = stereoParallaxEnabled.value
         modernArEngine.isRawDepthConfidenceFilterEnabled = rawDepthConfidenceEnabled.value
         modernArEngine.rawDepthConfidenceThreshold = rawDepthConfidenceThreshold.value
+        modernArEngine.preferHighFps = highFpsModeEnabled.value
+        modernArEngine.preferHighDef = highDefinitionQualityEnabled.value
         sensorCorrectionEngine.startListening()
+
+        pixelPerformanceMonitor.updateUserPreferences(
+            highFps = highFpsModeEnabled.value,
+            highDef = highDefinitionQualityEnabled.value
+        )
+        pixelPerformanceMonitor.onPolicyChanged = { policy ->
+            applyPixelThermalPolicy(policy)
+        }
+        pixelPerformanceMonitor.startMonitoring()
+        applyPixelThermalPolicy(pixelPerformanceMonitor.policy.value)
 
         try {
             val filter = android.content.IntentFilter().apply {
@@ -1088,6 +1196,25 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             Log.e("MeasureViewModel", "Failed to register batteryReceiver", e)
         }
         updateBatteryStatusAndEvaluate(showToast = false)
+    }
+
+    private fun applyPixelThermalPolicy(policy: PixelThermalPolicy) {
+        _effectiveTargetFps.value = policy.targetFps
+        modernArEngine.allowDepthMode = policy.allowDepth
+        modernArEngine.applyRuntimePerformanceConfig(policy.allowDepth)
+        highSpeedCamera2Manager?.updatePerformanceConfig(
+            highFps = highFpsModeEnabled.value,
+            highDef = highDefinitionQualityEnabled.value,
+            maxFps = policy.targetFps
+        )
+        if (policy.forceDisableTorch && _isTorchOn.value) {
+            mainHandler.post {
+                turnOffTorch(app)
+                _toastMessage.tryEmit("機身溫度偏高，已自動暫停補光並切換至 30 FPS 散熱模式")
+            }
+        } else if (policy.tier == ThermalTier.THROTTLED) {
+            Log.i("MeasureViewModel", "Pixel thermal throttle active: 30fps, depth off")
+        }
     }
 
     // Ruler calibration & physical screen scale
@@ -1115,6 +1242,8 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     // Queue for hit-testing requested from UI touches
     private val pendingHitTestQueue = AtomicReference<Pair<Float, Float>?>()
     private var lastHapticMeterMark = 0
+
+    fun hasPendingTapRequest(): Boolean = pendingHitTestQueue.get() != null
 
     private fun checkMeterMilestoneHaptic(distMeters: Double) {
         val meterMark = distMeters.toInt()
@@ -1156,8 +1285,8 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 isArPrecision = true
             )
 
-            // 0. Proximity Zero-Contact Offset (if touching surface directly)
-            val contactPoint = sensorCorrectionEngine.applyProximityZeroContactOffset(rawPoint)
+            // 0. Proximity Zero-Contact Offset (along camera-to-target ray when touching surface directly)
+            val contactPoint = sensorCorrectionEngine.applyProximityZeroContactOffset(rawPoint, camera.pose)
 
             // 1. Plane Coplanar Projection (for 2D Area & Polygon measuring on flat surfaces)
             val planeProjectedPoint = if (_cameraSubMode.value == 1 || centerHit.hitType == com.example.logic.ar.HitType.PLANE_POLYGON) {
@@ -1284,14 +1413,15 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                     isArPrecision = true,
                     anchor = hitResult.anchor
                 )
-                val contactP = sensorCorrectionEngine.applyProximityZeroContactOffset(rawP)
+                val contactP = sensorCorrectionEngine.applyProximityZeroContactOffset(rawP, camera.pose)
                 val planarP = if (_cameraSubMode.value == 1 || hitResult.hitType == com.example.logic.ar.HitType.PLANE_POLYGON) {
                     sensorCorrectionEngine.projectPointToPlane(contactP, hitResult.pose)
                 } else {
                     contactP
                 }
                 val livePt = _liveTargetPoint.value
-                val baseP = if (livePt != null && ArMath.distance(livePt, planarP) < 0.08) {
+                val snapMatchDist = if (_isSnapped.value) 0.14 else 0.08
+                val baseP = if (livePt != null && ArMath.distance(livePt, planarP) < snapMatchDist) {
                     livePt.copy(anchor = hitResult.anchor ?: livePt.anchor)
                 } else {
                     planarP
@@ -1308,12 +1438,13 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 val nextIndex = pointsSnapshot.size
                 val lineNum = (nextIndex / 2) + 1
                 val role = if (nextIndex % 2 == 0) "起點" else "終點"
-                val charCode = ('A'.code + nextIndex).toChar()
+                val charCode = ('A'.code + (nextIndex % 26)).toChar()
                 val namedP = correctedP.copy(label = "線段$lineNum $role $charCode")
 
                 android.os.Handler(android.os.Looper.getMainLooper()).post {
                     synchronized(pointsLock) {
                         if (capturedPoints.size >= 256) {
+                            try { hitResult.anchor?.detach() } catch (_: Throwable) {}
                             _toastMessage.tryEmit("已達最大測量點上限 (256點)，請儲存或清除後再繼續")
                             return@post
                         }
@@ -1330,15 +1461,16 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                     updateAutoDetectedGeometry()
                 }
             } else {
-                // If raycast hit no plane directly at tap coordinate, fallback gracefully to live target or optical sensor fusion
+                // If raycast hit no plane directly at tap coordinate, use live target only if tracking is active;
+                // never mix camera-local optical coordinates into ARCore world space.
                 val livePt = _liveTargetPoint.value
-                if (livePt != null) {
+                if (livePt != null && camera.trackingState == TrackingState.TRACKING) {
                     val pointsSnapshot = getCapturedPointsSnapshot()
                     val isActivelyDrawingLine = pointsSnapshot.size % 2 == 1
                     val nextIndex = pointsSnapshot.size
                     val lineNum = (nextIndex / 2) + 1
                     val role = if (nextIndex % 2 == 0) "起點" else "終點"
-                    val charCode = ('A'.code + nextIndex).toChar()
+                    val charCode = ('A'.code + (nextIndex % 26)).toChar()
                     val namedP = livePt.copy(label = "線段$lineNum $role $charCode")
 
                     android.os.Handler(android.os.Looper.getMainLooper()).post {
@@ -1361,7 +1493,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                 } else {
                     android.os.Handler(android.os.Looper.getMainLooper()).post {
-                        processOpticalFallbackTap(tapX, tapY)
+                        _toastMessage.tryEmit("尚未鎖定空間平面，請稍微緩慢平移相機掃描表面")
                     }
                 }
             }
@@ -1454,7 +1586,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         // Update active anchor positions to eliminate world drift with threshold to prevent SnapshotStateList churning
         val snapshot = capturedPointsSnapshotCache
         if (snapshot.isNotEmpty() && data.trackingState == TrackingState.TRACKING) {
-            val driftUpdates = mutableListOf<Pair<Int, Point3D>>()
+            var driftUpdates: MutableList<Pair<Int, Point3D>>? = null
             for (i in snapshot.indices) {
                 val pt = snapshot[i]
                 val anchor = pt.anchor
@@ -1463,22 +1595,23 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                     val newX = pose.tx().toDouble()
                     val newY = pose.ty().toDouble()
                     val newZ = pose.tz().toDouble()
-                    val candidate = pt.copy(x = newX, y = newY, z = newZ)
-
-                    if (ArMath.isPointValid(candidate)) {
-                        val dx = abs(newX - pt.x)
-                        val dy = abs(newY - pt.y)
-                        val dz = abs(newZ - pt.z)
-                        if (dx > 0.015 || dy > 0.015 || dz > 0.015) {
-                            driftUpdates.add(Pair(i, candidate))
+                    val dx = abs(newX - pt.x)
+                    val dy = abs(newY - pt.y)
+                    val dz = abs(newZ - pt.z)
+                    if (dx > 0.015 || dy > 0.015 || dz > 0.015) {
+                        val candidate = pt.copy(x = newX, y = newY, z = newZ)
+                        if (ArMath.isPointValid(candidate)) {
+                            val list = driftUpdates ?: mutableListOf<Pair<Int, Point3D>>().also { driftUpdates = it }
+                            list.add(Pair(i, candidate))
                         }
                     }
                 }
             }
-            if (driftUpdates.isNotEmpty()) {
-                android.os.Handler(android.os.Looper.getMainLooper()).post {
+            val updates = driftUpdates
+            if (updates != null) {
+                mainHandler.post {
                     synchronized(pointsLock) {
-                        for ((idx, cand) in driftUpdates) {
+                        for ((idx, cand) in updates) {
                             if (idx in capturedPoints.indices) {
                                 capturedPoints[idx] = cand
                             }
@@ -1498,24 +1631,23 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         }
         lastTapTimestampMs = now
 
-        val targetP = _liveTargetPoint.value
-        val proj = if (pixelX == null && pixelY == null && targetP != null && _viewMatrix.value.size >= 16 && _projectionMatrix.value.size >= 16) {
-            ArMath.projectWorldToScreen(targetP, _viewMatrix.value, _projectionMatrix.value, displayWidth.toInt(), displayHeight.toInt())
-        } else null
+        val x = pixelX ?: (displayWidth / 2f)
+        val y = pixelY ?: (displayHeight / 2f)
 
-        val x = pixelX ?: proj?.first ?: (displayWidth / 2f)
-        val y = pixelY ?: proj?.second ?: (displayHeight / 2f)
-
-        // Proactive warning when AR tracking feature points are deficient or camera moves too fast
-        val stability = _trackingStability.value
-        if (stability.isDriftRisk) {
-            val warn = stability.warningMessage ?: "特徵點不足，請慢速平移相機"
-            _toastMessage.tryEmit("⚠️ $warn（避免測量偏移）")
-        }
-        
-        if (modernArEngine.session != null) {
+        if (!isOpticalFallbackMode() && modernArEngine.session != null) {
+            // Proactive warning when AR tracking feature points are deficient or camera moves too fast
+            val stability = _trackingStability.value
+            if (stability.isDriftRisk) {
+                val warn = stability.warningMessage ?: "特徵點不足，請慢速平移相機"
+                _toastMessage.tryEmit("⚠️ $warn（避免測量偏移）")
+            }
+            if (!modernArEngine.isSessionResumed) {
+                _toastMessage.tryEmit("AR 相機正在初始化，請稍候")
+                return
+            }
             pendingHitTestQueue.set(Pair(x, y))
         } else {
+            updateFallbackCameraMatrices()
             processOpticalFallbackTap(x, y)
         }
     }
@@ -1573,13 +1705,21 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         synchronized(pointsLock) {
             if (undoStack.isNotEmpty()) {
                 val previous = undoStack.removeAt(undoStack.size - 1)
+                val keptAnchors = previous.mapNotNull { it.anchor }.toSet()
+                capturedPoints.forEach { pt ->
+                    val anchor = pt.anchor
+                    if (anchor != null && anchor !in keptAnchors) {
+                        try { anchor.detach() } catch (_: Throwable) {}
+                    }
+                }
                 capturedPoints.clear()
                 capturedPoints.addAll(previous)
                 updateCapturedPointsSnapshotCache()
                 triggerHapticFeedback()
                 updateAutoDetectedGeometry()
             } else if (capturedPoints.isNotEmpty()) {
-                capturedPoints.removeAt(capturedPoints.size - 1)
+                val removed = capturedPoints.removeAt(capturedPoints.size - 1)
+                try { removed.anchor?.detach() } catch (_: Throwable) {}
                 updateCapturedPointsSnapshotCache()
                 triggerHapticFeedback()
                 updateAutoDetectedGeometry()
@@ -1647,12 +1787,35 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun setHighSpeedCamera2Manager(manager: com.example.logic.camera.HighSpeedCamera2Manager?) {
         highSpeedCamera2Manager = manager
         if (manager != null) {
+            manager.onCameraUnavailable = {
+                _isCameraSimulationActive.value = true
+                _isMeasurementAvailable.value = true
+                updateFallbackCameraMatrices()
+                _toastMessage.tryEmit("已自動切換至虛擬 3D 模擬測量模式（無實體相機環境）")
+                Log.i("MeasureViewModel", "Camera unavailable callback invoked, simulation mode active.")
+            }
+            manager.onArSessionReadyToResume = {
+                if (!_isFrontCamera.value && !_isCameraSimulationActive.value) {
+                    modernArEngine.resume()
+                }
+            }
+            manager.isArCoreResumedChecker = { modernArEngine.isSessionResumed }
             val sc = modernArEngine.sharedCamera
             if (sc != null) {
                 manager.sharedCamera = sc
+                manager.preferredCameraId = modernArEngine.selectedCameraId
+                manager.preferredAspectRatio = modernArEngine.selectedCameraImageSize?.let {
+                    if (it.height > 0) it.width.toFloat() / it.height.toFloat() else null
+                }
             }
             _isFrontCamera.value = manager.isFrontFacing
             _isHorizontallyMirrored.value = manager.isHorizontallyMirrored || manager.isFrontFacing
+            val policy = pixelPerformanceMonitor.policy.value
+            manager.updatePerformanceConfig(
+                highFps = highFpsModeEnabled.value,
+                highDef = highDefinitionQualityEnabled.value,
+                maxFps = policy.targetFps
+            )
             if (_isTorchOn.value) {
                 manager.toggleTorch(true)
             }
@@ -1662,12 +1825,34 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun switchCameraFacing(textureView: android.view.TextureView?, onConfigured: ((Boolean) -> Unit)? = null) {
         val manager = highSpeedCamera2Manager ?: return
         if (textureView != null) {
-            manager.switchCamera(textureView) { ok, _ ->
+            manager.switchCamera(
+                textureView = textureView,
+                onBeforeCloseCamera = {
+                    // Must pause ARCore BEFORE closing Camera2 device/session
+                    modernArEngine.pause()
+                    releaseVulkanPipelineBuffers()
+                    _detectedPlanes.value = emptyList()
+                    _arPlanesCount.value = 0
+                }
+            ) { ok, _ ->
                 _isFrontCamera.value = manager.isFrontFacing
                 _isHorizontallyMirrored.value = manager.isHorizontallyMirrored || manager.isFrontFacing
+                if (manager.isFrontFacing) {
+                    _isMeasurementAvailable.value = true
+                    updateFallbackCameraMatrices()
+                } else {
+                    _isMeasurementAvailable.value = (modernArEngine.session == null)
+                }
                 onConfigured?.invoke(ok)
             }
         }
+    }
+
+    fun pauseArAndCamera(manager: com.example.logic.camera.HighSpeedCamera2Manager? = highSpeedCamera2Manager) {
+        modernArEngine.pause()
+        try {
+            manager?.closeCamera()
+        } catch (_: Exception) {}
     }
 
     fun toggleHorizontalMirror(textureView: android.view.TextureView?) {
@@ -1701,8 +1886,16 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     private fun applyTorchWithBrightness(context: Context, newState: Boolean, brightness: Float) {
         var success = false
 
-        // 1. Android 13+ (API 33+) Hardware Torch Strength Level via CameraManager
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+        // 1. If ARCore SharedCamera session is resumed on rear camera, configure flashMode via ARCore first
+        if (!success && modernArEngine.session != null && modernArEngine.isSessionResumed && !_isFrontCamera.value) {
+            val arOk = modernArEngine.setTorchMode(newState)
+            if (arOk) {
+                success = true
+            }
+        }
+
+        // 2. Android 13+ (API 33+) Hardware Torch Strength Level via CameraManager
+        if (!success && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             try {
                 val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
                 val targetCameraId = cameraManager.cameraIdList.firstOrNull { id ->
@@ -1725,14 +1918,6 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
             } catch (e: Throwable) {
                 Log.w("MeasureViewModel", "turnOnTorchWithStrengthLevel fallback: ${e.message}")
-            }
-        }
-
-        // 2. If ARCore session is running, configure flashMode via ARCore
-        if (!success && modernArEngine.session != null) {
-            val arOk = modernArEngine.setTorchMode(newState)
-            if (arOk) {
-                success = true
             }
         }
 
@@ -2008,11 +2193,11 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
             if (value > 0.0) {
                 val title = if (!customTitle.isNullOrBlank()) customTitle else autoTitle
-                val serializedPoints = capturedPoints.joinToString(";") { "${it.x},${it.y},${it.z},${it.label ?: ""}" }
+                val serializedPoints = getCapturedPointsSnapshot().serializePoints()
                 val record = MeasureRecord(
                     title = title,
                     value = value,
-                    unit = if (subMode == 5) "°" else unit,
+                    unit = if (effectiveType == "ANGLE") "°" else unit,
                     type = typeStr,
                     notes = customNotes,
                     pointsData = serializedPoints,
@@ -2204,20 +2389,16 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     fun onResume() {
         syncWithSystemLocale()
-        if (modernArEngine.session == null && !hasCheckedArCore) {
-            checkAndInitArCore(null)
-        }
-        modernArEngine.resume()
+        // ARCore SharedCamera resume is strictly triggered once Camera2 CaptureSession becomes active
+        pixelPerformanceMonitor.startMonitoring()
         sensorCorrectionEngine.startListening()
         updateBatteryStatusAndEvaluate(showToast = false)
     }
 
     fun onPause() {
         turnOffTorch(getApplication())
-        modernArEngine.pause()
-        try {
-            highSpeedCamera2Manager?.closeCamera()
-        } catch (_: Exception) {}
+        pauseArAndCamera()
+        pixelPerformanceMonitor.stopMonitoring()
         sensorCorrectionEngine.stopListening()
     }
 
@@ -2232,6 +2413,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             highSpeedCamera2Manager?.closeCamera()
         } catch (_: Exception) {}
         highSpeedCamera2Manager = null
+        pixelPerformanceMonitor.stopMonitoring()
         sensorCorrectionEngine.stopListening()
     }
 }

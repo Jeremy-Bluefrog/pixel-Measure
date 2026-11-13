@@ -2,17 +2,15 @@ package com.example
 
 import android.os.Build
 import android.os.Bundle
-import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.screens.MainScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.MeasureViewModel
-import java.util.function.Consumer
 
 class MainActivity : ComponentActivity() {
 
@@ -37,7 +35,7 @@ class MainActivity : ComponentActivity() {
         viewModel.checkAndInitArCore(this)
         
         setContent {
-            val dynamicColor by viewModel.dynamicColorEnabled.collectAsState()
+            val dynamicColor by viewModel.dynamicColorEnabled.collectAsStateWithLifecycle()
             MyApplicationTheme(dynamicColor = dynamicColor) {
                 MainScreen(viewModel = viewModel)
             }
@@ -47,49 +45,62 @@ class MainActivity : ComponentActivity() {
     private lateinit var viewModel: MeasureViewModel
 
     /**
-     * Prevents system SurfaceFlinger / DisplayManager from locking the screen
-     * to 30Hz when Camera HAL starts. Explicitly requests 60Hz or higher display mode.
+     * Aligns Pixel LTPO Smooth Display refresh rate with the active AR pipeline (60Hz target)
+     * instead of forcing 120Hz Choreographer wakeups or dropping to 30Hz Camera HAL lock.
      */
-    fun enforceHighDisplayRefreshRate() {
+    fun enforceHighDisplayRefreshRate(targetHz: Float = 60.0f) {
         try {
+            val desired = targetHz.coerceIn(30.0f, 60.0f)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 val currentDisplay = this.display
                 val modes = currentDisplay?.supportedModes ?: emptyArray()
-                val targetMode = modes.filter { it.refreshRate >= 59.5f }.maxByOrNull { it.refreshRate }
+                val targetMode = modes
+                    .filter { it.refreshRate >= desired - 0.5f }
+                    .minByOrNull { kotlin.math.abs(it.refreshRate - desired) }
                     ?: modes.maxByOrNull { it.refreshRate }
 
                 targetMode?.let { mode ->
                     val lp = window.attributes
-                    lp.preferredDisplayModeId = mode.modeId
-                    lp.preferredRefreshRate = mode.refreshRate.coerceAtLeast(60.0f)
-                    window.attributes = lp
-                    android.util.Log.i("MainActivity", "Enforced high refresh rate: ${mode.refreshRate}Hz (modeId=${mode.modeId})")
+                    if (lp.preferredDisplayModeId != mode.modeId || lp.preferredRefreshRate != desired) {
+                        lp.preferredDisplayModeId = mode.modeId
+                        lp.preferredRefreshRate = mode.refreshRate.coerceAtMost(60.0f).coerceAtLeast(desired)
+                        window.attributes = lp
+                        android.util.Log.i("MainActivity", "Aligned display refresh rate: ${mode.refreshRate}Hz (modeId=${mode.modeId})")
+                    }
                 }
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 @Suppress("DEPRECATION")
                 val currentDisplay = windowManager.defaultDisplay
                 val modes = currentDisplay?.supportedModes ?: emptyArray()
-                val targetMode = modes.filter { it.refreshRate >= 59.5f }.maxByOrNull { it.refreshRate }
+                val targetMode = modes
+                    .filter { it.refreshRate >= desired - 0.5f }
+                    .minByOrNull { kotlin.math.abs(it.refreshRate - desired) }
                     ?: modes.maxByOrNull { it.refreshRate }
 
                 targetMode?.let { mode ->
                     val lp = window.attributes
-                    lp.preferredDisplayModeId = mode.modeId
-                    window.attributes = lp
-                    android.util.Log.i("MainActivity", "Enforced high display mode: ${mode.modeId} (${mode.refreshRate}Hz)")
+                    if (lp.preferredDisplayModeId != mode.modeId) {
+                        lp.preferredDisplayModeId = mode.modeId
+                        window.attributes = lp
+                        android.util.Log.i("MainActivity", "Aligned display mode: ${mode.modeId} (${mode.refreshRate}Hz)")
+                    }
                 }
             }
         } catch (e: Throwable) {
-            android.util.Log.w("MainActivity", "Unable to enforce high display refresh rate: ${e.message}")
+            android.util.Log.w("MainActivity", "Unable to align display refresh rate: ${e.message}")
         }
     }
 
     override fun onResume() {
         super.onResume()
-        enforceHighDisplayRefreshRate()
         if (::viewModel.isInitialized) {
+            val targetFps = viewModel.effectiveTargetFps.value.toFloat()
+            enforceHighDisplayRefreshRate(targetFps)
+            viewModel.pixelPerformanceMonitor.applySustainedPerformanceMode(window, true)
             viewModel.syncWithSystemLocale()
             viewModel.onResume()
+        } else {
+            enforceHighDisplayRefreshRate()
         }
     }
 
@@ -103,6 +114,7 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         if (::viewModel.isInitialized) {
+            viewModel.pixelPerformanceMonitor.applySustainedPerformanceMode(window, false)
             viewModel.onPause()
         }
     }

@@ -469,8 +469,12 @@ class ArVideoRecorder(private val context: Context) {
         return reachedEos
     }
 
+    private var argbScratch: IntArray = IntArray(0)
+    private var yuvScratch: ByteArray = ByteArray(0)
+
     /**
-     * Converts an ARGB_8888 Bitmap to YUV420 byte array (supporting both SemiPlanar NV12 and Planar I420).
+     * Converts an ARGB_8888 Bitmap to YUV420 byte array (supporting both SemiPlanar NV12 and Planar I420)
+     * reusing scratch buffers across frames to eliminate GC pressure.
      */
     private fun convertBitmapToYuv420(
         bitmap: Bitmap,
@@ -478,12 +482,20 @@ class ArVideoRecorder(private val context: Context) {
         height: Int,
         colorFormat: Int
     ): ByteArray {
-        val argb = IntArray(width * height)
+        val totalPixels = width * height
+        if (argbScratch.size != totalPixels) {
+            argbScratch = IntArray(totalPixels)
+        }
+        val argb = argbScratch
         bitmap.getPixels(argb, 0, width, 0, 0, width, height)
-        val yuv = ByteArray(width * height * 3 / 2)
+
+        val requiredYuvSize = totalPixels * 3 / 2
+        if (yuvScratch.size != requiredYuvSize) {
+            yuvScratch = ByteArray(requiredYuvSize)
+        }
+        val yuv = yuvScratch
         val isSemiPlanar = colorFormat == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar
 
-        val totalPixels = width * height
         val uOffset = totalPixels
         val vOffset = totalPixels + (totalPixels / 4)
         var yIndex = 0
@@ -492,8 +504,10 @@ class ArVideoRecorder(private val context: Context) {
         var vPlanarIndex = vOffset
 
         for (j in 0 until height) {
+            val rowOffset = j * width
+            val isEvenRow = (j and 1) == 0
             for (i in 0 until width) {
-                val c = argb[j * width + i]
+                val c = argb[rowOffset + i]
                 val r = (c shr 16) and 0xff
                 val g = (c shr 8) and 0xff
                 val b = c and 0xff
@@ -502,7 +516,7 @@ class ArVideoRecorder(private val context: Context) {
                 val y = ((66 * r + 129 * g + 25 * b + 128) shr 8) + 16
                 yuv[yIndex++] = y.coerceIn(0, 255).toByte()
 
-                if (j % 2 == 0 && i % 2 == 0) {
+                if (isEvenRow && (i and 1) == 0) {
                     val u = ((-38 * r - 74 * g + 112 * b + 128) shr 8) + 128
                     val v = ((112 * r - 94 * g - 18 * b + 128) shr 8) + 128
                     val uByte = u.coerceIn(0, 255).toByte()

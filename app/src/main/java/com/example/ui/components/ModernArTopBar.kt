@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.logic.sensor.SensorCorrectionTelemetry
 import com.example.ui.viewmodel.MeasureViewModel
 import java.util.Locale
@@ -45,7 +46,8 @@ fun ModernArTopBar(
     onShowHistoryClick: () -> Unit,
     onShowSettingsClick: () -> Unit,
     onSwitchCamera: (() -> Unit)? = null,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    extraTopHudContent: (@Composable ColumnScope.() -> Unit)? = null
 ) {
     val isDark = isSystemInDarkTheme()
     val colorPrimary = MaterialTheme.colorScheme.primary
@@ -60,20 +62,25 @@ fun ModernArTopBar(
 
     var showTorchBrightnessMenu by remember { mutableStateOf(false) }
 
-    Box(modifier = modifier.fillMaxWidth()) {
-        // 1. Top Bar Items
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .widthIn(max = 640.dp)
+            .statusBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        // 1. Top Bar Controls Row
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Left: Quick SubMode Selector & Unit Selector
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 // SubMode Selector Pill
                 var showSubModeMenu by remember { mutableStateOf(false) }
@@ -81,21 +88,27 @@ fun ModernArTopBar(
                     1 -> "面積"
                     2 -> "高度"
                     5 -> "角度"
-                    else -> if (autoDetectedType == "HEIGHT") "自動 (高度)" else if (autoDetectedType == "AREA") "自動 (面積)" else "自動"
+                    else -> when (autoDetectedType) {
+                        "HEIGHT" -> "自動·高"
+                        "AREA" -> "自動·面"
+                        else -> "自動"
+                    }
                 }
 
                 Box {
                     Surface(
                         onClick = { showSubModeMenu = true },
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f),
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.72f else 0.90f),
                         contentColor = colorOnSurface,
                         border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f)),
                         shadowElevation = 0.dp,
-                        modifier = Modifier.testTag("submode_selector_button")
+                        modifier = Modifier
+                            .heightIn(min = 40.dp)
+                            .testTag("submode_selector_button")
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
@@ -108,19 +121,20 @@ fun ModernArTopBar(
                                 },
                                 contentDescription = null,
                                 tint = colorPrimary,
-                                modifier = Modifier.size(15.dp)
+                                modifier = Modifier.size(16.dp)
                             )
                             Text(
                                 text = subModeLabel,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = colorOnSurface
+                                color = colorOnSurface,
+                                maxLines = 1
                             )
                             Icon(
                                 Icons.Rounded.ArrowDropDown,
                                 contentDescription = null,
                                 tint = colorOnSurfaceVariant,
-                                modifier = Modifier.size(15.dp)
+                                modifier = Modifier.size(16.dp)
                             )
                         }
                     }
@@ -168,15 +182,17 @@ fun ModernArTopBar(
                 Box {
                     Surface(
                         onClick = { showUnitMenu = true },
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f),
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.72f else 0.90f),
                         contentColor = colorPrimary,
                         border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f)),
                         shadowElevation = 0.dp,
-                        modifier = Modifier.testTag("unit_selector_button")
+                        modifier = Modifier
+                            .heightIn(min = 40.dp)
+                            .testTag("unit_selector_button")
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
@@ -184,13 +200,14 @@ fun ModernArTopBar(
                                 text = selectedUnit.uppercase(),
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.ExtraBold,
-                                color = colorPrimary
+                                color = colorPrimary,
+                                maxLines = 1
                             )
                             Icon(
                                 Icons.Rounded.ArrowDropDown,
                                 contentDescription = null,
                                 tint = colorPrimary,
-                                modifier = Modifier.size(15.dp)
+                                modifier = Modifier.size(16.dp)
                             )
                         }
                     }
@@ -235,13 +252,13 @@ fun ModernArTopBar(
 
                 // Camera Flip / Switch Button (Front <-> Rear)
                 onSwitchCamera?.let { switchAction ->
-                    val isFrontCamera by viewModel.isFrontCamera.collectAsState()
+                    val isFrontCamera by viewModel.isFrontCamera.collectAsStateWithLifecycle()
                     IconButton(
                         onClick = switchAction,
                         modifier = Modifier
-                            .size(38.dp)
+                            .size(40.dp)
                             .background(
-                                MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f),
+                                MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.72f else 0.90f),
                                 CircleShape
                             )
                             .border(
@@ -271,9 +288,9 @@ fun ModernArTopBar(
                             }
                         },
                         modifier = Modifier
-                            .size(38.dp)
+                            .size(40.dp)
                             .background(
-                                if (isTorchOn) colorPrimary else MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f),
+                                if (isTorchOn) colorPrimary else MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.72f else 0.90f),
                                 CircleShape
                             )
                             .border(
@@ -409,8 +426,8 @@ fun ModernArTopBar(
                 IconButton(
                     onClick = onShowHistoryClick,
                     modifier = Modifier
-                        .size(38.dp)
-                        .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f), CircleShape)
+                        .size(40.dp)
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.72f else 0.90f), CircleShape)
                         .border(
                             width = 0.8.dp,
                             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f),
@@ -429,8 +446,8 @@ fun ModernArTopBar(
                 IconButton(
                     onClick = onShowSettingsClick,
                     modifier = Modifier
-                        .size(38.dp)
-                        .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.65f else 0.88f), CircleShape)
+                        .size(40.dp)
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.72f else 0.90f), CircleShape)
                         .border(
                             width = 0.8.dp,
                             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f),
@@ -447,30 +464,14 @@ fun ModernArTopBar(
             }
         }
 
-        // 2. AR Horizon & Spatial Surface Guidance Indicator
-        ArHorizonGuidanceIndicator(
-            viewModel = viewModel,
-            planesCount = planesCount,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .statusBarsPadding()
-                .padding(top = 54.dp)
-        )
-
-
-
-        // 4. Video Recording Active HUD
+        // 2. Video Recording Active HUD OR AR Horizon Indicator (never overlapping)
         if (isRecordingVideo) {
             Surface(
                 color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.95f),
                 contentColor = MaterialTheme.colorScheme.onSurface,
                 shape = RoundedCornerShape(24.dp),
                 border = BorderStroke(1.5.dp, Color(0xFFE53935)),
-                shadowElevation = 0.dp,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(top = 58.dp)
+                shadowElevation = 0.dp
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
@@ -485,7 +486,7 @@ fun ModernArTopBar(
                     val mins = recordingSeconds / 60
                     val secs = recordingSeconds % 60
                     Text(
-                        text = String.format("REC %02d:%02d", mins, secs),
+                        text = String.format(java.util.Locale.US, "REC %02d:%02d", mins, secs),
                         color = Color.White,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
@@ -499,7 +500,15 @@ fun ModernArTopBar(
                     )
                 }
             }
+        } else {
+            ArHorizonGuidanceIndicator(
+                viewModel = viewModel,
+                planesCount = planesCount
+            )
         }
+
+        // 3. Optional Extra Top HUD Content (Guidance Pill, Stability Warning Banner) stacked cleanly
+        extraTopHudContent?.invoke(this)
     }
 }
 
@@ -509,14 +518,23 @@ private fun ArHorizonGuidanceIndicator(
     planesCount: Int,
     modifier: Modifier = Modifier
 ) {
-    val sensorTelemetry by viewModel.sensorTelemetry.collectAsState()
-    val pitch: Float = sensorTelemetry.pitchDeg
-    val roll: Float = sensorTelemetry.rollDeg
-    val pitchInt = kotlin.math.round(pitch).toInt()
-    val rollInt = kotlin.math.round(roll).toInt()
-    val isRollLevel = kotlin.math.abs(roll) < 2.0f
-    val isPitchLevel = kotlin.math.abs(pitch) < 2.5f || kotlin.math.abs(pitch - 90f) < 2.5f || kotlin.math.abs(pitch + 90f) < 2.5f
-    val isLevel = isRollLevel && isPitchLevel
+    val sensorTelemetryState = viewModel.sensorTelemetry.collectAsStateWithLifecycle()
+    val horizonUiState by remember {
+        derivedStateOf {
+            val t = sensorTelemetryState.value
+            val pitch = t.pitchDeg
+            val roll = t.rollDeg
+            val pitchInt = kotlin.math.round(pitch).toInt()
+            val rollInt = kotlin.math.round(roll).toInt()
+            val isRollLevel = kotlin.math.abs(roll) < 2.0f
+            val isPitchLevel = kotlin.math.abs(pitch) < 2.5f || kotlin.math.abs(pitch - 90f) < 2.5f || kotlin.math.abs(pitch + 90f) < 2.5f
+            val isLevel = isRollLevel && isPitchLevel
+            Triple(isLevel, pitchInt, rollInt)
+        }
+    }
+    val isLevel = horizonUiState.first
+    val pitchInt = horizonUiState.second
+    val rollInt = horizonUiState.third
 
     val levelText = remember(isLevel, pitchInt, rollInt) {
         if (isLevel) "🎯 基準水平對齊 (0°)" else "俯仰 $pitchInt° · 滾轉 $rollInt°"

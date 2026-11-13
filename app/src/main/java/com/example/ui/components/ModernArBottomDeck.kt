@@ -83,7 +83,9 @@ fun ModernArBottomDeck(
 
     Column(
         modifier = modifier
-            .padding(bottom = bottomPadding + 16.dp)
+            .fillMaxWidth()
+            .widthIn(max = 640.dp)
+            .padding(bottom = bottomPadding + 12.dp)
             .padding(horizontal = 16.dp, vertical = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -191,7 +193,7 @@ fun ModernArBottomDeck(
                 }
             }
 
-            // Center Slot: Primary Main Add Button (加號放大且稍微往上抬升)
+            // Center Slot: Primary Main Add Button (平衡置中、保留充足取景視野)
             val addFabInteractionSource = remember { MutableInteractionSource() }
             val isAddFabPressed by addFabInteractionSource.collectIsPressedAsState()
 
@@ -203,9 +205,7 @@ fun ModernArBottomDeck(
 
             Box(
                 contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .padding(horizontal = 4.dp)
-                    .padding(bottom = 8.dp)
+                modifier = Modifier.padding(horizontal = 6.dp)
             ) {
                 Surface(
                     color = addFabContainerColor,
@@ -213,7 +213,7 @@ fun ModernArBottomDeck(
                     border = if (!isMeasurementAvailable) BorderStroke(1.5.dp, MaterialTheme.colorScheme.outlineVariant) else null,
                     shadowElevation = 0.dp,
                     modifier = Modifier
-                        .size((90 * uiButtonScale).dp)
+                        .size((78 * uiButtonScale).dp)
                         .clickable(
                             interactionSource = addFabInteractionSource,
                             indication = null
@@ -240,7 +240,7 @@ fun ModernArBottomDeck(
                                 imageVector = if (waitingForSecond) Icons.Rounded.Check else Icons.Rounded.Add,
                                 contentDescription = if (waitingForSecond) "確認第二點 (Confirm Point)" else "加入點 (Add Point)",
                                 tint = addFabIconColor,
-                                modifier = Modifier.size((54 * uiButtonScale).dp)
+                                modifier = Modifier.size((44 * uiButtonScale).dp)
                             )
                         }
                     }
@@ -472,6 +472,8 @@ private fun MeasurementLiveSummaryCard(
     val effectiveType = if (subMode == 0) autoDetectedType else when (subMode) {
         1 -> "AREA"
         2 -> "HEIGHT"
+        3 -> "VOLUME"
+        4 -> "CIRCLE"
         5 -> "ANGLE"
         else -> "DISTANCE"
     }
@@ -489,6 +491,22 @@ private fun MeasurementLiveSummaryCard(
             val ft = String.format(Locale.US, "%.2f ft", h * 3.28084)
             val inch = String.format(Locale.US, "%.1f in", h * 39.3701)
             Triple("垂直高 ${viewModel.formatLength(h, selectedUnit)}", "$cm · $ft · $inch", Icons.Rounded.Height)
+        }
+        "VOLUME" -> {
+            val box = viewModel.calculateBoundingBox()
+            val liters = String.format(Locale.US, "%.1f L", box.volume * 1000.0)
+            val cuM = String.format(Locale.US, "%.3f m³", box.volume)
+            Triple(viewModel.formatVolume(box.volume, selectedUnit), "$cuM · $liters", Icons.Rounded.ViewInAr)
+        }
+        "CIRCLE" -> {
+            val circle = viewModel.calculateCircle()
+            val diameter = circle?.diameter ?: 0.0
+            val circum = circle?.circumference ?: 0.0
+            Triple(
+                "直徑 ${viewModel.formatLength(diameter, selectedUnit)}",
+                "周長 ${viewModel.formatLength(circum, selectedUnit)}",
+                Icons.Rounded.Adjust
+            )
         }
         "ANGLE" -> {
             val deg = viewModel.calculateAngle()
@@ -543,21 +561,25 @@ private fun MeasurementLiveSummaryCard(
                         text = primaryText,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.ExtraBold,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
                     Text(
                         text = secondaryText,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 11.sp
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
                 }
             }
 
-            // Quick Action Buttons (Copy, Save)
+            // Quick Action Buttons (Copy, Save) with comfortable touch targets
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 IconButton(
                     onClick = {
@@ -566,9 +588,9 @@ private fun MeasurementLiveSummaryCard(
                         isCopied = true
                     },
                     modifier = Modifier
-                        .size(34.dp)
+                        .size(40.dp)
                         .background(
-                            if (isCopied) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
+                            if (isCopied) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
                             CircleShape
                         )
                 ) {
@@ -576,7 +598,7 @@ private fun MeasurementLiveSummaryCard(
                         if (isCopied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
                         contentDescription = "複製測量數值",
                         tint = if (isCopied) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                 }
 
@@ -592,7 +614,7 @@ private fun MeasurementLiveSummaryCard(
                         }
                     },
                     modifier = Modifier
-                        .size(34.dp)
+                        .size(40.dp)
                         .background(
                             if (isSaved) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.primary,
                             CircleShape
@@ -602,7 +624,7 @@ private fun MeasurementLiveSummaryCard(
                         if (isSaved) Icons.Rounded.BookmarkAdded else Icons.Rounded.BookmarkAdd,
                         contentDescription = "儲存至紀錄",
                         tint = if (isSaved) MaterialTheme.colorScheme.onTertiaryContainer else MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }

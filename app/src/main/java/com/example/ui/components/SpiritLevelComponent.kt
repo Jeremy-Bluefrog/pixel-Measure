@@ -402,16 +402,18 @@ fun SpiritLevelComponent(
             )
         }
 
-        // 3. Precision Readout Deck with Mini-Axis Level Tracks
-        ElevatedCard(
+        // 3. Precision Readout Deck with Mini-Axis Level Tracks (Flat Design)
+        Card(
             modifier = Modifier
                 .fillMaxWidth()
+                .widthIn(max = 600.dp)
                 .padding(horizontal = 20.dp, vertical = 6.dp),
             shape = RoundedCornerShape(22.dp),
-            colors = CardDefaults.elevatedCardColors(
+            colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surfaceContainer
             ),
-            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
         ) {
             Row(
                 modifier = Modifier

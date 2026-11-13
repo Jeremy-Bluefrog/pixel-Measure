@@ -477,11 +477,6 @@ fun SettingsScreen(
                                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
                             )
 
-                            HorizontalDivider(
-                                modifier = Modifier.padding(vertical = 8.dp),
-                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                            )
-
                             // Language Selection
                             SettingActionRow(
                                 icon = Icons.Rounded.Language,

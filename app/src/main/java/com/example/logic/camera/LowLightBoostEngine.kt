@@ -100,9 +100,13 @@ class LowLightBoostEngine(private val context: Context) {
         }
     }
 
+    private val gammaLut = FloatArray(256) { i ->
+        Math.pow(i / 255.0, 0.75).toFloat()
+    }
+
     /**
      * Software ISP Brightness Enhancement Filter (for fallback / live preview boost).
-     * Applies an optimized tone-mapping & luminance lift curve for low-light frames.
+     * Uses precomputed 256-entry gamma LUT to avoid per-pixel Math.pow calls on Tensor CPUs.
      */
     fun enhanceLowLightBitmap(src: Bitmap, boostFactor: Float = 1.45f): Bitmap {
         if (boostFactor <= 1.0f) return src
@@ -112,22 +116,17 @@ class LowLightBoostEngine(private val context: Context) {
         val pixels = IntArray(width * height)
         src.getPixels(pixels, 0, width, 0, 0, width, height)
 
-        val gamma = 0.75f // Lift shadows without blowing out highlights
-        val invGamma = 1.0f / gamma
+        val channelLut = IntArray(256) { i ->
+            (gammaLut[i] * boostFactor * 255.0f).toInt().coerceIn(0, 255)
+        }
 
         for (i in pixels.indices) {
             val pixel = pixels[i]
-            val a = Color.alpha(pixel)
-            var r = Color.red(pixel) / 255.0f
-            var g = Color.green(pixel) / 255.0f
-            var b = Color.blue(pixel) / 255.0f
-
-            // Apply Gamma & Lift
-            r = (Math.pow(r.toDouble(), gamma.toDouble()) * boostFactor).toFloat().coerceIn(0.0f, 1.0f)
-            g = (Math.pow(g.toDouble(), gamma.toDouble()) * boostFactor).toFloat().coerceIn(0.0f, 1.0f)
-            b = (Math.pow(b.toDouble(), gamma.toDouble()) * boostFactor).toFloat().coerceIn(0.0f, 1.0f)
-
-            pixels[i] = Color.argb(a, (r * 255).toInt(), (g * 255).toInt(), (b * 255).toInt())
+            val a = pixel and 0xFF000000.toInt()
+            val r = channelLut[(pixel ushr 16) and 0xFF]
+            val g = channelLut[(pixel ushr 8) and 0xFF]
+            val b = channelLut[pixel and 0xFF]
+            pixels[i] = a or (r shl 16) or (g shl 8) or b
         }
 
         output.setPixels(pixels, 0, width, 0, 0, width, height)

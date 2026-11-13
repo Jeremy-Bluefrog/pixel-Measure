@@ -25,6 +25,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.data.model.MeasureRecord
 import com.example.logic.ShareUtility
@@ -49,18 +50,18 @@ import java.util.*
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(viewModel: MeasureViewModel) {
-    val currentMode by viewModel.currentMode.collectAsState()
-    val selectedUnit by viewModel.selectedUnit.collectAsState()
-    val savedRecords by viewModel.savedRecords.collectAsState()
-    val currentLang by viewModel.currentLanguage.collectAsState()
-    val isTorchOn by viewModel.isTorchOn.collectAsState()
-    val showWelcomeScreen by viewModel.showWelcomeScreen.collectAsState()
+    val currentMode by viewModel.currentMode.collectAsStateWithLifecycle()
+    val selectedUnit by viewModel.selectedUnit.collectAsStateWithLifecycle()
+    val savedRecords by viewModel.savedRecords.collectAsStateWithLifecycle()
+    val currentLang by viewModel.currentLanguage.collectAsStateWithLifecycle()
+    val isTorchOn by viewModel.isTorchOn.collectAsStateWithLifecycle()
+    val showWelcomeScreen by viewModel.showWelcomeScreen.collectAsStateWithLifecycle()
 
     var showHistorySheet by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showUnitMenu by remember { mutableStateOf(false) }
     var selectedRecordForDetail by remember { mutableStateOf<MeasureRecord?>(null) }
-    val lastSavedRecord by viewModel.lastSavedRecord.collectAsState()
+    val lastSavedRecord by viewModel.lastSavedRecord.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     val isOverlayActive by remember {
@@ -75,23 +76,47 @@ fun MainScreen(viewModel: MeasureViewModel) {
     )
 
     val colorPrimary = MaterialTheme.colorScheme.primary
-    val isTakingPhoto by viewModel.isTakingPhoto.collectAsState()
+    val isTakingPhoto by viewModel.isTakingPhoto.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(viewModel) {
+        viewModel.toastMessage.collect { msg ->
+            snackbarHostState.currentSnackbarData?.dismiss()
+            snackbarHostState.showSnackbar(
+                message = msg,
+                duration = SnackbarDuration.Short
+            )
+        }
+    }
 
     val cameraLabel = viewModel.getString("nav_camera").ifEmpty { "相機 AR" }
     val rulerLabel = viewModel.getString("nav_ruler").ifEmpty { "螢幕尺" }
     val levelLabel = viewModel.getString("nav_level").ifEmpty { "水平儀" }
 
-    // Predictive & standard system back handling for modal overlays and sub-screens
-    androidx.activity.compose.BackHandler(
-        enabled = showWelcomeScreen || selectedRecordForDetail != null || showHistorySheet || showSettingsDialog || currentMode != 0
-    ) {
-        when {
-            selectedRecordForDetail != null -> selectedRecordForDetail = null
-            showHistorySheet -> showHistorySheet = false
-            showSettingsDialog -> showSettingsDialog = false
-            showWelcomeScreen -> viewModel.dismissWelcomeScreen()
-            currentMode != 0 -> viewModel.setMode(0)
-        }
+    // Hierarchical Predictive-ready Back Handlers
+    // 1. Record Detail Dialog has highest priority
+    androidx.activity.compose.BackHandler(enabled = selectedRecordForDetail != null) {
+        selectedRecordForDetail = null
+    }
+
+    // 2. Settings Screen (Full page)
+    androidx.activity.compose.BackHandler(enabled = showSettingsDialog && selectedRecordForDetail == null) {
+        showSettingsDialog = false
+    }
+
+    // 3. History Bottom Sheet / Modal
+    androidx.activity.compose.BackHandler(enabled = showHistorySheet && !showSettingsDialog && selectedRecordForDetail == null) {
+        showHistorySheet = false
+    }
+
+    // 4. Welcome Screen (Onboarding overlay)
+    androidx.activity.compose.BackHandler(enabled = showWelcomeScreen && !showHistorySheet && !showSettingsDialog && selectedRecordForDetail == null) {
+        viewModel.dismissWelcomeScreen()
+    }
+
+    // 5. Secondary modes (Ruler / Level -> return to Camera AR Home)
+    androidx.activity.compose.BackHandler(enabled = currentMode != 0 && !showWelcomeScreen && !showHistorySheet && !showSettingsDialog && selectedRecordForDetail == null) {
+        viewModel.setMode(0)
     }
 
     val navItems = remember(cameraLabel, rulerLabel, levelLabel) {
@@ -152,6 +177,16 @@ fun MainScreen(viewModel: MeasureViewModel) {
             ) {
                 Scaffold(
                     containerColor = if (currentMode == 0) Color.Transparent else MaterialTheme.colorScheme.background,
+                    snackbarHost = {
+                        SnackbarHost(hostState = snackbarHostState) { data ->
+                            Snackbar(
+                                snackbarData = data,
+                                shape = RoundedCornerShape(16.dp),
+                                containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                contentColor = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    },
                     topBar = {
                         if (currentMode == 2) {
                             GradientBlurTopBar(
@@ -290,25 +325,24 @@ fun MainScreen(viewModel: MeasureViewModel) {
                             }
                         }
 
-                        // Quick Floating Share Banner when a record is newly saved
+                        // Quick Floating Share Banner when a record is newly saved (positioned at top to avoid blocking bottom controls)
                         androidx.compose.animation.AnimatedVisibility(
                             visible = lastSavedRecord != null,
-                            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-                            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+                            enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+                            exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
                             modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(
-                                    bottom = (if (isCompact) innerPadding.calculateBottomPadding() else 16.dp) + 16.dp,
-                                    start = 16.dp,
-                                    end = 16.dp
-                                )
+                                .align(Alignment.TopCenter)
+                                .statusBarsPadding()
+                                .padding(top = 60.dp, start = 16.dp, end = 16.dp)
                                 .widthIn(max = 560.dp)
+                                .zIndex(20f)
                         ) {
                             lastSavedRecord?.let { saved ->
                                 Surface(
                                     color = MaterialTheme.colorScheme.primaryContainer,
                                     contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
                                     shape = RoundedCornerShape(20.dp),
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
                                     shadowElevation = 0.dp,
                                     modifier = Modifier.fillMaxWidth()
                                 ) {

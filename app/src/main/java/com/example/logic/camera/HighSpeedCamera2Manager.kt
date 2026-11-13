@@ -38,7 +38,13 @@ class HighSpeedCamera2Manager(private val context: Context) {
     private var backgroundHandler: Handler? = null
 
     var sharedCamera: SharedCamera? = null
+    var preferredCameraId: String? = null
+    var preferredAspectRatio: Float? = null
+    var onArSessionReadyToResume: (() -> Unit)? = null
+    var isArCoreResumedChecker: (() -> Boolean)? = null
+
     private var activeTextureView: WeakReference<TextureView>? = null
+    private val arResumeTriggeredForSession = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private var currentTorchState = false
     private var previewRequestBuilder: CaptureRequest.Builder? = null
@@ -48,6 +54,15 @@ class HighSpeedCamera2Manager(private val context: Context) {
     var onFrameFpsUpdated: ((Int) -> Unit)? = null
     private var frameCounter = 0
     private var lastFpsTimestampNs = 0L
+    private var captureResultCounter = 0
+
+    @Volatile
+    var preferHighFps: Boolean = true
+    @Volatile
+    var preferHighDef: Boolean = true
+    @Volatile
+    var thermalMaxFps: Int = 60
+    private var activeCharacteristics: CameraCharacteristics? = null
 
     private var isClosed = false
     private var openRetryCount = 0
@@ -58,6 +73,8 @@ class HighSpeedCamera2Manager(private val context: Context) {
     var previewSize: Size? = null
         private set
 
+    var onCameraUnavailable: (() -> Unit)? = null
+
     var preferredFacing: Int = CameraCharacteristics.LENS_FACING_BACK
         private set
     var isFrontFacing: Boolean = false
@@ -66,6 +83,12 @@ class HighSpeedCamera2Manager(private val context: Context) {
         private set
     var isHorizontallyMirrored: Boolean = false
         private set
+
+    private fun isSharedCameraArActive(): Boolean {
+        return preferredFacing == CameraCharacteristics.LENS_FACING_BACK &&
+            sharedCamera != null &&
+            (isArCoreResumedChecker?.invoke() == true)
+    }
 
     fun setHorizontallyMirrored(mirrored: Boolean, textureView: TextureView?) {
         isHorizontallyMirrored = mirrored
@@ -80,6 +103,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
 
     fun switchCamera(
         textureView: TextureView,
+        onBeforeCloseCamera: (() -> Unit)? = null,
         onSessionConfigured: ((Boolean, Size) -> Unit)? = null
     ) {
         if (!isSwitchingCamera.compareAndSet(false, true)) {
@@ -92,6 +116,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
         } else {
             CameraCharacteristics.LENS_FACING_BACK
         }
+        onBeforeCloseCamera?.invoke()
         closeCamera()
 
         // Allow HAL hardware pipe 120ms to completely tear down previous camera instance
@@ -117,6 +142,10 @@ class HighSpeedCamera2Manager(private val context: Context) {
 
     fun setLowLightBoostEnabled(enabled: Boolean = true) {
         isLowLightBoostEnabled = enabled
+        if (isSharedCameraArActive()) {
+            // While ARCore SharedCamera is resumed, ARCore manages CaptureSession repeating requests.
+            return
+        }
         val session = captureSession ?: return
         val builder = previewRequestBuilder ?: return
         try {
@@ -129,7 +158,10 @@ class HighSpeedCamera2Manager(private val context: Context) {
 
     fun startBackgroundThread() {
         if (backgroundThread == null) {
-            backgroundThread = HandlerThread("HighSpeedCameraBackground").apply { start() }
+            backgroundThread = HandlerThread(
+                "HighSpeedCameraBackground",
+                android.os.Process.THREAD_PRIORITY_MORE_FAVORABLE
+            ).apply { start() }
             backgroundHandler = Handler(backgroundThread!!.looper)
         }
     }
@@ -150,7 +182,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
      * Selects the optimal preview resolution supported by the device's SurfaceTexture map.
      * Capped at 1080p (1920x1080) for high frame-rate rendering and low GPU memory overhead.
      */
-    fun selectOptimalPreviewSize(characteristics: CameraCharacteristics): Size {
+    fun selectOptimalPreviewSize(characteristics: CameraCharacteristics, targetAspect: Float? = null): Size {
         val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         val outputSizes = map?.getOutputSizes(SurfaceTexture::class.java) ?: emptyArray()
 
@@ -158,9 +190,36 @@ class HighSpeedCamera2Manager(private val context: Context) {
             return Size(1280, 720)
         }
 
-        // Prioritize 720p (1280x720) for optimal 60 FPS performance and reduced GPU/CPU memory overhead
-        return outputSizes.firstOrNull { it.width == 1280 && it.height == 720 }
-            ?: outputSizes.firstOrNull { it.width == 1920 && it.height == 1080 }
+        val want1080p = preferHighDef && thermalMaxFps >= 60
+
+        // If ARCore specified an active CameraConfig aspect ratio, match it first to prevent FOV/crop mismatch
+        if (targetAspect != null && targetAspect > 0f) {
+            val matching = outputSizes.filter { s ->
+                val aspect = s.width.toFloat() / s.height.coerceAtLeast(1)
+                kotlin.math.abs(aspect - targetAspect) < 0.05f
+            }
+            if (matching.isNotEmpty()) {
+                val preferred = if (want1080p) {
+                    matching.firstOrNull { it.width == 1920 && it.height == 1080 }
+                        ?: matching.firstOrNull { it.width == 1280 && it.height == 720 }
+                } else {
+                    matching.firstOrNull { it.width == 1280 && it.height == 720 }
+                        ?: matching.firstOrNull { it.width == 1920 && it.height == 1080 }
+                }
+                return preferred
+                    ?: matching.firstOrNull { it.width in 960..1440 }
+                    ?: matching.maxByOrNull { it.width * it.height }
+                    ?: matching.first()
+            }
+        }
+
+        return if (want1080p) {
+            outputSizes.firstOrNull { it.width == 1920 && it.height == 1080 }
+                ?: outputSizes.firstOrNull { it.width == 1280 && it.height == 720 }
+        } else {
+            outputSizes.firstOrNull { it.width == 1280 && it.height == 720 }
+                ?: outputSizes.firstOrNull { it.width == 1920 && it.height == 1080 }
+        }
             ?: outputSizes.firstOrNull { it.width == 960 && it.height == 540 }
             ?: outputSizes.firstOrNull { it.width in 1000..1400 }
             ?: outputSizes.maxByOrNull { it.width * it.height }
@@ -178,28 +237,50 @@ class HighSpeedCamera2Manager(private val context: Context) {
     }
 
     /**
-     * Safely queries supported AE target FPS ranges to prevent IllegalArgumentException.
+     * Safely queries supported AE target FPS ranges respecting user preference & thermal cap.
      */
     private fun selectOptimalFpsRange(characteristics: CameraCharacteristics): Range<Int> {
         val fpsRanges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: emptyArray()
+        val effectiveMaxFps = if (preferHighFps) thermalMaxFps.coerceAtMost(60) else 30
 
-        // 1. Fixed 60 FPS: [60, 60] or higher for maximum hardware fluidity
-        fpsRanges.firstOrNull { it.lower >= 60 && it.upper >= 60 }?.let { return it }
+        if (effectiveMaxFps >= 60) {
+            fpsRanges.firstOrNull { it.lower >= 60 && it.upper >= 60 }?.let { return it }
+            fpsRanges.firstOrNull { it.lower >= 30 && it.upper >= 60 }?.let { return it }
+            fpsRanges.firstOrNull { it.upper >= 60 }?.let { return it }
+        }
 
-        // 2. Dynamic 30-60 FPS: maintains at least 30 FPS while allowing silky 60 FPS
-        fpsRanges.firstOrNull { it.lower >= 30 && it.upper >= 60 }?.let { return it }
-
-        // 3. Dynamic wide range up to 60 (e.g., [15, 60], [24, 60])
-        fpsRanges.firstOrNull { it.upper >= 60 }?.let { return it }
-
-        // 4. Standard smooth [30, 30]
+        // Standard smooth 30 FPS (also used in Power Saver / thermal step-down)
         fpsRanges.firstOrNull { it.lower == 30 && it.upper == 30 }?.let { return it }
-
-        // 5. Any range with upper >= 30
+        fpsRanges.firstOrNull { it.upper in 30..effectiveMaxFps }?.let { return it }
         fpsRanges.firstOrNull { it.upper >= 30 }?.let { return it }
 
-        // 6. Default to first hardware reported range or standard [30, 30]
         return fpsRanges.firstOrNull() ?: Range(30, 30)
+    }
+
+    fun updatePerformanceConfig(highFps: Boolean, highDef: Boolean, maxFps: Int) {
+        preferHighFps = highFps
+        preferHighDef = highDef
+        thermalMaxFps = maxFps
+        val targetRate = if (highFps) maxFps.toFloat().coerceAtMost(60f) else 30f
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                previewSurface?.let { s ->
+                    if (s.isValid) s.setFrameRate(targetRate, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
+                }
+            } catch (_: Throwable) {}
+        }
+        if (isSharedCameraArActive()) return
+        val session = captureSession ?: return
+        val builder = previewRequestBuilder ?: return
+        val chars = activeCharacteristics ?: return
+        try {
+            val fpsRange = selectOptimalFpsRange(chars)
+            builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fpsRange)
+            isHighSpeedSessionActive = fpsRange.upper >= 60
+            session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
+        } catch (e: Throwable) {
+            Log.w(TAG, "Dynamic FPS range update skipped: ${e.message}")
+        }
     }
 
     /**
@@ -221,7 +302,9 @@ class HighSpeedCamera2Manager(private val context: Context) {
             result: TotalCaptureResult
         ) {
             countFrameAndCalculateFps()
-            lowLightBoostEngine.onCaptureResult(result)
+            if (captureResultCounter++ % 6 == 0) {
+                lowLightBoostEngine.onCaptureResult(result)
+            }
         }
     }
 
@@ -260,33 +343,46 @@ class HighSpeedCamera2Manager(private val context: Context) {
         startBackgroundThread()
 
         try {
-            val cameraIdList = cameraManager.cameraIdList
+            val cameraIdList = try { cameraManager.cameraIdList } catch (_: Throwable) { emptyArray() }
             if (cameraIdList.isEmpty()) {
-                Log.e(TAG, "No camera available on device")
+                Log.e(TAG, "No camera available on device, entering simulation fallback mode.")
                 isOpening = false
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    onCameraUnavailable?.invoke()
+                }
                 return
             }
 
-            // Select camera according to preferred facing (Back vs Front)
+            // Select camera according to preferred facing (Back vs Front) and ARCore CameraConfig ID
             val targetFacing = preferredFacing
-            val cameraId = cameraIdList.firstOrNull { id ->
-                try {
-                    cameraManager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) == targetFacing
-                } catch (_: Throwable) { false }
-            } ?: cameraIdList.firstOrNull { id ->
-                try {
-                    cameraManager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) ==
-                            CameraCharacteristics.LENS_FACING_BACK
-                } catch (_: Throwable) { false }
-            } ?: cameraIdList.first()
+            val activeSharedCamera = if (targetFacing == CameraCharacteristics.LENS_FACING_BACK) sharedCamera else null
+            val cameraId = if (targetFacing == CameraCharacteristics.LENS_FACING_BACK &&
+                preferredCameraId != null &&
+                cameraIdList.contains(preferredCameraId)
+            ) {
+                preferredCameraId!!
+            } else {
+                cameraIdList.firstOrNull { id ->
+                    try {
+                        cameraManager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) == targetFacing
+                    } catch (_: Throwable) { false }
+                } ?: cameraIdList.firstOrNull { id ->
+                    try {
+                        cameraManager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) ==
+                                CameraCharacteristics.LENS_FACING_BACK
+                    } catch (_: Throwable) { false }
+                } ?: cameraIdList.first()
+            }
 
             activeCameraId = cameraId
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            activeCharacteristics = characteristics
             val facing = characteristics.get(CameraCharacteristics.LENS_FACING)
             isFrontFacing = facing == CameraCharacteristics.LENS_FACING_FRONT
             sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
             isFlashSupported = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
-            val optimalSize = selectOptimalPreviewSize(characteristics)
+            val aspectToMatch = if (activeSharedCamera != null) preferredAspectRatio else null
+            val optimalSize = selectOptimalPreviewSize(characteristics, aspectToMatch)
             previewSize = optimalSize
 
             val texture = textureView.surfaceTexture
@@ -304,7 +400,8 @@ class HighSpeedCamera2Manager(private val context: Context) {
             val surface = Surface(texture)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 try {
-                    surface.setFrameRate(60.0f, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
+                    val targetRate = if (preferHighFps) thermalMaxFps.toFloat().coerceAtMost(60f) else 30f
+                    surface.setFrameRate(targetRate, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT)
                 } catch (_: Throwable) {}
             }
             previewSurface = surface
@@ -318,7 +415,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
                     }
                     cameraDevice = camera
                     openRetryCount = 0
-                    configureSession(camera, surface, optimalSize, characteristics, onSessionConfigured)
+                    configureSession(camera, surface, optimalSize, characteristics, activeSharedCamera, onSessionConfigured)
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
@@ -350,12 +447,15 @@ class HighSpeedCamera2Manager(private val context: Context) {
                 }
             }
 
-            val wrappedCallback = sharedCamera?.createARDeviceStateCallback(stateCallback, backgroundHandler) ?: stateCallback
+            val wrappedCallback = activeSharedCamera?.createARDeviceStateCallback(stateCallback, backgroundHandler) ?: stateCallback
             cameraManager.openCamera(cameraId, wrappedCallback, backgroundHandler)
 
         } catch (e: Throwable) {
             isOpening = false
             Log.e(TAG, "Failed to open camera: ${e.message}", e)
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                onCameraUnavailable?.invoke()
+            }
         }
     }
 
@@ -367,6 +467,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
         surface: Surface,
         size: Size,
         characteristics: CameraCharacteristics,
+        currentSharedCamera: SharedCamera?,
         onSessionConfigured: ((Boolean, Size) -> Unit)?
     ) {
         if (!surface.isValid) {
@@ -382,7 +483,6 @@ class HighSpeedCamera2Manager(private val context: Context) {
             val targetFpsRange = selectOptimalFpsRange(characteristics)
             val targetAfMode = selectOptimalAfMode(characteristics)
 
-            val currentSharedCamera = sharedCamera
             val template = if (currentSharedCamera != null) {
                 CameraDevice.TEMPLATE_RECORD
             } else {
@@ -420,18 +520,19 @@ class HighSpeedCamera2Manager(private val context: Context) {
             surfaceList.add(surface)
             if (currentSharedCamera != null) {
                 try {
+                    currentSharedCamera.setAppSurfaces(activeCameraId ?: camera.id, listOf(surface))
                     val arSurfaces = currentSharedCamera.arCoreSurfaces
                     surfaceList.addAll(arSurfaces)
                     for (arSurface in arSurfaces) {
                         requestBuilder.addTarget(arSurface)
                     }
-                    currentSharedCamera.setAppSurfaces(activeCameraId ?: "0", listOf(surface))
-                    Log.i(TAG, "Configured SharedCamera with ${arSurfaces.size} ARCore surfaces added to capture request.")
+                    Log.i(TAG, "Configured SharedCamera (cam=${activeCameraId}) with ${arSurfaces.size} ARCore surfaces.")
                 } catch (t: Throwable) {
                     Log.w(TAG, "Error binding SharedCamera surfaces: ${t.message}")
                 }
             }
             previewRequestBuilder = requestBuilder
+            arResumeTriggeredForSession.set(false)
 
             val stateCallback = object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
@@ -454,14 +555,22 @@ class HighSpeedCamera2Manager(private val context: Context) {
                             } catch (cbEx: Throwable) {
                                 Log.w(TAG, "SharedCamera setCaptureCallback note: ${cbEx.message}")
                             }
-                            Log.i(TAG, "CameraCaptureSession started with SharedCamera! FPS Range: $targetFpsRange, Size: ${size.width}x${size.height}")
+                            Log.i(TAG, "CameraCaptureSession configured with SharedCamera! FPS=$targetFpsRange, Size=${size.width}x${size.height}")
                         } else {
-                            Log.i(TAG, "CameraCaptureSession successfully started! FPS Range: $targetFpsRange, Size: ${size.width}x${size.height}")
+                            Log.i(TAG, "CameraCaptureSession started! FPS=$targetFpsRange, Size=${size.width}x${size.height}")
                         }
                         onSessionConfigured?.invoke(isHighSpeedSessionActive, size)
                     } catch (e: Throwable) {
                         Log.e(TAG, "setRepeatingRequest error: ${e.message}", e)
                         onSessionConfigured?.invoke(isHighSpeedSessionActive, size)
+                    }
+                }
+
+                override fun onActive(session: CameraCaptureSession) {
+                    super.onActive(session)
+                    if (!isClosed && currentSharedCamera != null && arResumeTriggeredForSession.compareAndSet(false, true)) {
+                        Log.i(TAG, "CaptureSession onActive -> notifying ARCore ready to resume")
+                        onArSessionReadyToResume?.invoke()
                     }
                 }
 
@@ -477,10 +586,23 @@ class HighSpeedCamera2Manager(private val context: Context) {
 
             val wrappedSessionCallback = currentSharedCamera?.createARSessionStateCallback(stateCallback, backgroundHandler) ?: stateCallback
 
-            // API 28+ SessionConfiguration with safe fallback
+            // API 28+ SessionConfiguration with Android 13+ StreamUseCase for Pixel Tensor ISP efficiency
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 try {
-                    val outputConfigs = surfaceList.map { OutputConfiguration(it) }
+                    val supportsPreviewUseCase = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        val useCases = characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_STREAM_USE_CASES)
+                        useCases?.contains(CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_PREVIEW.toLong()) == true
+                    } else false
+
+                    val outputConfigs = surfaceList.mapIndexed { idx, s ->
+                        OutputConfiguration(s).apply {
+                            if (idx == 0 && supportsPreviewUseCase && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                try {
+                                    streamUseCase = CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_PREVIEW.toLong()
+                                } catch (_: Throwable) {}
+                            }
+                        }
+                    }
                     val executor = java.util.concurrent.Executor { command ->
                         backgroundHandler?.post(command) ?: command.run()
                     }
@@ -505,14 +627,30 @@ class HighSpeedCamera2Manager(private val context: Context) {
         }
     }
 
-    fun reconnectWithSharedCamera(sharedCam: SharedCamera, onConfigured: ((Boolean, Size) -> Unit)? = null) {
-        if (sharedCamera == sharedCam && captureSession != null && !isClosed) {
-            Log.i(TAG, "Camera already active with this SharedCamera instance.")
+    fun reconnectWithSharedCamera(
+        sharedCam: SharedCamera,
+        cameraId: String? = null,
+        imageSize: Size? = null,
+        onBeforeCloseCamera: (() -> Unit)? = null,
+        onConfigured: ((Boolean, Size) -> Unit)? = null
+    ) {
+        val aspect = if (imageSize != null && imageSize.height > 0) {
+            imageSize.width.toFloat() / imageSize.height.toFloat()
+        } else null
+        if (sharedCamera == sharedCam &&
+            preferredCameraId == cameraId &&
+            (captureSession != null || isOpening) &&
+            !isClosed
+        ) {
+            Log.i(TAG, "Camera already active or opening with this SharedCamera instance.")
             return
         }
         sharedCamera = sharedCam
+        preferredCameraId = cameraId
+        preferredAspectRatio = aspect
         val tv = activeTextureView?.get() ?: return
-        if (tv.isAvailable) {
+        if (tv.isAvailable && preferredFacing == CameraCharacteristics.LENS_FACING_BACK) {
+            onBeforeCloseCamera?.invoke()
             closeCamera()
             val mainHandler = Handler(android.os.Looper.getMainLooper())
             mainHandler.postDelayed({
@@ -526,10 +664,11 @@ class HighSpeedCamera2Manager(private val context: Context) {
     /**
      * Configures the transformation matrix on TextureView to prevent distortion
      * and stretch, adapting preview aspect ratio to match the camera sensor.
+     * Follows official Android Camera2 rotation and aspect ratio compensation guidelines.
      */
     fun configureTransform(textureView: TextureView, viewWidth: Int, viewHeight: Int) {
         val size = previewSize ?: return
-        if (viewWidth == 0 || viewHeight == 0) return
+        if (viewWidth <= 0 || viewHeight <= 0) return
 
         val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             context.display
@@ -539,43 +678,43 @@ class HighSpeedCamera2Manager(private val context: Context) {
         }
         val rotation = display?.rotation ?: Surface.ROTATION_0
         val matrix = android.graphics.Matrix()
-        val centerX = viewWidth / 2f
-        val centerY = viewHeight / 2f
+        val viewRect = android.graphics.RectF(0f, 0f, viewWidth.toFloat(), viewHeight.toFloat())
+        val bufferRect = android.graphics.RectF(0f, 0f, size.height.toFloat(), size.width.toFloat())
+        val centerX = viewRect.centerX()
+        val centerY = viewRect.centerY()
 
-        // Camera2 preview buffer dimensions (e.g. 1280x720)
-        // In natural portrait orientation, the buffer effectively has short edge as width, long edge as height
-        val bufferW = minOf(size.width, size.height).toFloat() // e.g. 720f
-        val bufferH = maxOf(size.width, size.height).toFloat() // e.g. 1280f
+        if (Surface.ROTATION_90 == rotation || Surface.ROTATION_270 == rotation) {
+            bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY())
+            matrix.setRectToRect(viewRect, bufferRect, android.graphics.Matrix.ScaleToFit.FILL)
+            val scale = maxOf(
+                viewHeight.toFloat() / size.height,
+                viewWidth.toFloat() / size.width
+            )
+            matrix.postScale(scale, scale, centerX, centerY)
+            matrix.postRotate((90 * (rotation - 2)).toFloat(), centerX, centerY)
+        } else {
+            // Surface.ROTATION_0 and Surface.ROTATION_180 (Portrait orientations):
+            // Camera sensor buffer is landscape (e.g. 1280x720).
+            // When oriented in portrait, the effective aspect ratio is (size.height : size.width), e.g. 720:1280 (9:16).
+            // Scale TextureView with center-crop so the buffer fills the view without aspect ratio distortion or stretching.
+            val bufferAspect = size.height.toFloat() / size.width.toFloat()
+            val viewAspect = viewWidth.toFloat() / viewHeight.toFloat()
 
-        when (rotation) {
-            Surface.ROTATION_0 -> {
-                // Natural Portrait orientation:
-                // TextureView automatically displays the sensor buffer aligned to the device.
-                // Apply Center-Crop scale to fill view without stretching or aspect distortion.
-                val scale = maxOf(viewWidth / bufferW, viewHeight / bufferH)
-                val scaleX = scale * (bufferW / viewWidth)
-                val scaleY = scale * (bufferH / viewHeight)
-                matrix.setScale(scaleX, scaleY, centerX, centerY)
+            val scaleX: Float
+            val scaleY: Float
+            if (viewAspect > bufferAspect) {
+                // View is wider than camera buffer: match width, expand height
+                scaleX = 1f
+                scaleY = (viewWidth.toFloat() / bufferAspect) / viewHeight.toFloat()
+            } else {
+                // View is taller than camera buffer: match height, expand width
+                scaleX = (viewHeight.toFloat() * bufferAspect) / viewWidth.toFloat()
+                scaleY = 1f
             }
-            Surface.ROTATION_180 -> {
-                val scale = maxOf(viewWidth / bufferW, viewHeight / bufferH)
-                val scaleX = scale * (bufferW / viewWidth)
-                val scaleY = scale * (bufferH / viewHeight)
-                matrix.setScale(scaleX, scaleY, centerX, centerY)
+            matrix.setScale(scaleX, scaleY, centerX, centerY)
+
+            if (Surface.ROTATION_180 == rotation) {
                 matrix.postRotate(180f, centerX, centerY)
-            }
-            Surface.ROTATION_90, Surface.ROTATION_270 -> {
-                // Landscape orientations: buffer width corresponds to view width, buffer height to view height
-                val bufferRect = android.graphics.RectF(0f, 0f, size.height.toFloat(), size.width.toFloat())
-                val viewRect = android.graphics.RectF(0f, 0f, viewWidth.toFloat(), viewHeight.toFloat())
-                bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY())
-                matrix.setRectToRect(viewRect, bufferRect, android.graphics.Matrix.ScaleToFit.FILL)
-                val scale = maxOf(
-                    viewHeight.toFloat() / size.height,
-                    viewWidth.toFloat() / size.width
-                )
-                matrix.postScale(scale, scale, centerX, centerY)
-                matrix.postRotate((90 * (rotation - 2)).toFloat(), centerX, centerY)
             }
         }
 
@@ -608,6 +747,10 @@ class HighSpeedCamera2Manager(private val context: Context) {
         currentTorchState = enable
         if (enable && !isFlashSupported) {
             Log.w(TAG, "Hardware flash is not supported on this camera device.")
+            return
+        }
+        if (isSharedCameraArActive()) {
+            // Handled via ModernArEngine.setTorchMode while ARCore SharedCamera owns repeating requests
             return
         }
         val session = captureSession ?: return
