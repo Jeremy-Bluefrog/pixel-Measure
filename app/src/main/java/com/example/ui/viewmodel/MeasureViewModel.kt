@@ -1618,6 +1618,12 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
 
     fun requestHitTest(pixelX: Float? = null, pixelY: Float? = null) {
+        val context = getApplication<Application>()
+        if (!ModernArEngine.isArCorePackageInstalled(context)) {
+            _toastMessage.tryEmit("⚠️ 請先安裝 Google Play Services for AR (com.google.ar.core) 應用程式才能進行測量")
+            return
+        }
+
         val now = System.currentTimeMillis()
         if (now - lastTapTimestampMs < 180L) {
             return // Debounce rapid double taps to avoid duplicate points

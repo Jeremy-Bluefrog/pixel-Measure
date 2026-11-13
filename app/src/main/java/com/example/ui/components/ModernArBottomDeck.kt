@@ -118,104 +118,110 @@ fun ModernArBottomDeck(
             }
         }
 
-        // 3. Interactive Bottom Action Deck (Aligned Plus, Shutter, and Conditional Back button)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
+        // 3. Interactive Bottom Action Deck (Plus button fixed dead-center, back button on left, shutter on right)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(84.dp),
+            contentAlignment = Alignment.Center
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                // Back / Undo button on the left of the plus button when hasCapturedPoints is true
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = hasCapturedPoints,
-                    enter = fadeIn(animationSpec = tween(180)) + scaleIn(
-                        initialScale = 0.80f,
-                        animationSpec = tween(180, easing = FastOutSlowInEasing)
-                    ) + slideInHorizontally(
-                        initialOffsetX = { -it / 2 },
-                        animationSpec = tween(180, easing = FastOutSlowInEasing)
-                    ),
-                    exit = fadeOut(animationSpec = tween(140)) + scaleOut(
-                        targetScale = 0.80f,
-                        animationSpec = tween(140, easing = FastOutLinearInEasing)
-                    ) + slideOutHorizontally(
-                        targetOffsetX = { -it / 2 },
-                        animationSpec = tween(140, easing = FastOutLinearInEasing)
-                    )
-                ) {
-                    IconButton(
-                        onClick = {
-                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
-                            viewModel.undo()
-                        },
-                        modifier = Modifier
-                            .size((48 * uiButtonScale).dp)
-                            .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.75f else 0.90f), CircleShape)
-                            .border(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), CircleShape)
-                            .testTag("back_step_button")
+            // Center: Plus FAB Button (Always fixed dead-center)
+            val addFabInteractionSource = remember { MutableInteractionSource() }
+            val isAddFabPressed by addFabInteractionSource.collectIsPressedAsState()
+
+            val addFabCornerRadius by animateDpAsState(
+                targetValue = if (isAddFabPressed) 18.dp else 32.dp,
+                animationSpec = tween(150),
+                label = "addFabCornerRadius"
+            )
+
+            Surface(
+                color = addFabContainerColor,
+                shape = RoundedCornerShape(addFabCornerRadius),
+                border = if (!isMeasurementAvailable) BorderStroke(1.5.dp, MaterialTheme.colorScheme.outlineVariant) else null,
+                shadowElevation = 0.dp,
+                modifier = Modifier
+                    .size((64 * uiButtonScale).dp)
+                    .clickable(
+                        interactionSource = addFabInteractionSource,
+                        indication = null
                     ) {
+                        if (isMeasurementAvailable) {
+                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                            viewModel.requestHitTest()
+                        } else {
+                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                        }
+                    }
+                    .testTag("add_point_fab")
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    AnimatedContent(
+                        targetState = isWaitingForSecondPoint,
+                        transitionSpec = {
+                            (fadeIn(animationSpec = tween(150)) + scaleIn(initialScale = 0.6f, animationSpec = tween(150)))
+                                .togetherWith(fadeOut(animationSpec = tween(110)) + scaleOut(targetScale = 0.6f, animationSpec = tween(110)))
+                        },
+                        label = "AddPointFabIconTransition"
+                    ) { waitingForSecond ->
                         Icon(
-                            Icons.Rounded.ArrowBack,
-                            contentDescription = "返回上一步",
-                            tint = colorOnSurface,
-                            modifier = Modifier.size((24 * uiButtonScale).dp)
+                            imageVector = if (waitingForSecond) Icons.Rounded.Check else Icons.Rounded.Add,
+                            contentDescription = if (waitingForSecond) "確認第二點" else "加入點",
+                            tint = addFabIconColor,
+                            modifier = Modifier.size((36 * uiButtonScale).dp)
                         )
                     }
                 }
+            }
 
-                // Smaller Plus FAB Button (Add Point)
-                val addFabInteractionSource = remember { MutableInteractionSource() }
-                val isAddFabPressed by addFabInteractionSource.collectIsPressedAsState()
-
-                val addFabCornerRadius by animateDpAsState(
-                    targetValue = if (isAddFabPressed) 18.dp else 32.dp,
-                    animationSpec = tween(150),
-                    label = "addFabCornerRadius"
-                )
-
-                Surface(
-                    color = addFabContainerColor,
-                    shape = RoundedCornerShape(addFabCornerRadius),
-                    border = if (!isMeasurementAvailable) BorderStroke(1.5.dp, MaterialTheme.colorScheme.outlineVariant) else null,
-                    shadowElevation = 0.dp,
-                    modifier = Modifier
-                        .size((64 * uiButtonScale).dp)
-                        .clickable(
-                            interactionSource = addFabInteractionSource,
-                            indication = null
-                        ) {
-                            if (isMeasurementAvailable) {
-                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                viewModel.requestHitTest()
-                            } else {
+            // Left Side (Back Button) & Right Side (Shutter Button)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(modifier = Modifier.size(48.dp)) {
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = hasCapturedPoints,
+                        enter = fadeIn(animationSpec = tween(180)) + scaleIn(
+                            initialScale = 0.80f,
+                            animationSpec = tween(180, easing = FastOutSlowInEasing)
+                        ) + slideInHorizontally(
+                            initialOffsetX = { -it },
+                            animationSpec = tween(180, easing = FastOutSlowInEasing)
+                        ),
+                        exit = fadeOut(animationSpec = tween(140)) + scaleOut(
+                            targetScale = 0.80f,
+                            animationSpec = tween(140, easing = FastOutLinearInEasing)
+                        ) + slideOutHorizontally(
+                            targetOffsetX = { -it },
+                            animationSpec = tween(140, easing = FastOutLinearInEasing)
+                        )
+                    ) {
+                        IconButton(
+                            onClick = {
                                 haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
-                            }
-                        }
-                        .testTag("add_point_fab")
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        AnimatedContent(
-                            targetState = isWaitingForSecondPoint,
-                            transitionSpec = {
-                                (fadeIn(animationSpec = tween(150)) + scaleIn(initialScale = 0.6f, animationSpec = tween(150)))
-                                    .togetherWith(fadeOut(animationSpec = tween(110)) + scaleOut(targetScale = 0.6f, animationSpec = tween(110)))
+                                viewModel.undo()
                             },
-                            label = "AddPointFabIconTransition"
-                        ) { waitingForSecond ->
+                            modifier = Modifier
+                                .size((48 * uiButtonScale).dp)
+                                .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.75f else 0.90f), CircleShape)
+                                .border(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), CircleShape)
+                                .testTag("back_step_button")
+                        ) {
                             Icon(
-                                imageVector = if (waitingForSecond) Icons.Rounded.Check else Icons.Rounded.Add,
-                                contentDescription = if (waitingForSecond) "確認第二點" else "加入點",
-                                tint = addFabIconColor,
-                                modifier = Modifier.size((36 * uiButtonScale).dp)
+                                Icons.Rounded.ArrowBack,
+                                contentDescription = "返回上一步",
+                                tint = colorOnSurface,
+                                modifier = Modifier.size((24 * uiButtonScale).dp)
                             )
                         }
                     }
                 }
 
-                // Camera Shutter Button aligned right next to the plus button
+                // Camera Shutter Button
                 val isCameraVideoMode by viewModel.isCameraVideoMode.collectAsStateWithLifecycle()
 
                 PixelShutterButton(

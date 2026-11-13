@@ -192,46 +192,62 @@ fun MainScreen(viewModel: MeasureViewModel) {
                                 baseColor = MaterialTheme.colorScheme.surface,
                                 modifier = Modifier.testTag("level_top_gradient_blur_bar")
                             ) {
-                                CenterAlignedTopAppBar(
+                                TopAppBar(
                                     title = {
                                         Text(
                                             text = "高精度電子水平儀",
                                             fontWeight = FontWeight.Bold,
-                                            style = MaterialTheme.typography.titleMedium
+                                            style = MaterialTheme.typography.titleMedium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
                                         )
                                     },
                                     actions = {
-                                        // Flashlight button
-                                        IconButton(
-                                            onClick = { viewModel.toggleTorch(context) },
-                                            modifier = Modifier.testTag("level_flashlight_button")
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(2.dp)
                                         ) {
-                                            Icon(
-                                                if (isTorchOn) Icons.Rounded.FlashlightOn else Icons.Rounded.FlashlightOff,
-                                                contentDescription = "手電筒",
-                                                tint = if (isTorchOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                            )
-                                        }
+                                            // Flashlight button
+                                            IconButton(
+                                                onClick = { viewModel.toggleTorch(context) },
+                                                modifier = Modifier.testTag("level_flashlight_button").size(38.dp)
+                                            ) {
+                                                Icon(
+                                                    if (isTorchOn) Icons.Rounded.FlashlightOn else Icons.Rounded.FlashlightOff,
+                                                    contentDescription = "手電筒",
+                                                    tint = if (isTorchOn) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
 
-                                        // History button
-                                        IconButton(onClick = { showHistorySheet = !showHistorySheet }) {
-                                            Icon(
-                                                Icons.Rounded.History,
-                                                contentDescription = "歷史記錄",
-                                                tint = if (showHistorySheet) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                            )
-                                        }
+                                            // History button
+                                            IconButton(
+                                                onClick = { showHistorySheet = !showHistorySheet },
+                                                modifier = Modifier.size(38.dp)
+                                            ) {
+                                                Icon(
+                                                    Icons.Rounded.History,
+                                                    contentDescription = "歷史記錄",
+                                                    tint = if (showHistorySheet) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
 
-                                        // Settings dialog button
-                                        IconButton(onClick = { showSettingsDialog = true }) {
-                                            Icon(
-                                                Icons.Rounded.Settings,
-                                                contentDescription = "設定",
-                                                tint = MaterialTheme.colorScheme.onSurface
-                                            )
+                                            // Settings dialog button
+                                            IconButton(
+                                                onClick = { showSettingsDialog = true },
+                                                modifier = Modifier.size(38.dp)
+                                            ) {
+                                                Icon(
+                                                    Icons.Rounded.Settings,
+                                                    contentDescription = "設定",
+                                                    tint = MaterialTheme.colorScheme.onSurface,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
                                         }
                                     },
-                                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                                    colors = TopAppBarDefaults.topAppBarColors(
                                         containerColor = Color.Transparent
                                     )
                                 )
