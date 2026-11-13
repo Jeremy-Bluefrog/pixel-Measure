@@ -17,6 +17,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.logic.ar.ArTrackingStability
 import com.example.logic.ar.StabilityLevel
 import com.example.ui.viewmodel.MeasureViewModel
@@ -310,13 +311,13 @@ private fun ModernArSensorStatusDialog(
     viewModel: MeasureViewModel,
     onDismiss: () -> Unit
 ) {
-    val sensorTelemetry by viewModel.sensorTelemetry.collectAsState()
-    val antiJitter by viewModel.antiJitterEnabled.collectAsState()
-    val rawDepthConfidenceEnabled by viewModel.rawDepthConfidenceEnabled.collectAsState()
-    val rawDepthConfidenceThreshold by viewModel.rawDepthConfidenceThreshold.collectAsState()
-    val highFpsModeEnabled by viewModel.highFpsModeEnabled.collectAsState()
-    val arCoreStatus by viewModel.arCoreStatus.collectAsState()
-    val arCoreStatusMessage by viewModel.arCoreStatusMessage.collectAsState()
+    val sensorTelemetry by viewModel.sensorTelemetry.collectAsStateWithLifecycle()
+    val antiJitter by viewModel.antiJitterEnabled.collectAsStateWithLifecycle()
+    val rawDepthConfidenceEnabled by viewModel.rawDepthConfidenceEnabled.collectAsStateWithLifecycle()
+    val rawDepthConfidenceThreshold by viewModel.rawDepthConfidenceThreshold.collectAsStateWithLifecycle()
+    val highFpsModeEnabled by viewModel.highFpsModeEnabled.collectAsStateWithLifecycle()
+    val arCoreStatus by viewModel.arCoreStatus.collectAsStateWithLifecycle()
+    val arCoreStatusMessage by viewModel.arCoreStatusMessage.collectAsStateWithLifecycle()
     val colorPrimary = MaterialTheme.colorScheme.primary
 
     val df1 = remember { DecimalFormat("#,##0") }

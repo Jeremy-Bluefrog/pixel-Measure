@@ -22,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.viewmodel.HapticType
 import com.example.ui.viewmodel.MeasureViewModel
 import java.util.Locale
@@ -49,8 +50,8 @@ fun RulerComponent(
     val displayMetrics = context.resources.displayMetrics
 
     // Calibration factor from ViewModel state (persisted in SharedPreferences)
-    val calibrationFactor by viewModel.rulerCalibration.collectAsState()
-    val rulerTheme by viewModel.rulerTheme.collectAsState()
+    val calibrationFactor by viewModel.rulerCalibration.collectAsStateWithLifecycle()
+    val rulerTheme by viewModel.rulerTheme.collectAsStateWithLifecycle()
 
     val rulerAccentColor = when (rulerTheme) {
         "NEON_CYAN" -> androidx.compose.ui.graphics.Color(0xFF00E5FF)

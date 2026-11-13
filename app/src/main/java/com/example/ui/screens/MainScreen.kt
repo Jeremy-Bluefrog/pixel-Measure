@@ -37,7 +37,6 @@ import com.example.ui.components.GradientBlurTopBar
 import com.example.ui.components.ModernArCameraView
 import com.example.ui.components.RulerComponent
 import com.example.ui.components.SpiritLevelComponent
-import com.example.ui.components.SupportingPaneHistory
 import com.example.ui.components.hardwareBackdropBlur
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.theme.getGroupedPosition
@@ -412,26 +411,10 @@ fun MainScreen(viewModel: MeasureViewModel) {
                     }
                 }
             }
-
-            // Right: Supporting Pane on Expanded Displays (width >= 840.dp)
-            this@Row.AnimatedVisibility(
-                visible = isExpanded && showHistorySheet,
-                enter = fadeIn(tween(140)) + expandHorizontally(tween(200)),
-                exit = fadeOut(tween(100)) + shrinkHorizontally(tween(160))
-            ) {
-                SupportingPaneHistory(
-                    records = savedRecords,
-                    viewModel = viewModel,
-                    onSelectRecord = { record ->
-                        selectedRecordForDetail = record
-                    },
-                    onClose = { showHistorySheet = false }
-                )
-            }
         }
 
-        // History Bottom Sheet for Compact & Medium Screens (when not in expanded side-by-side mode)
-        if (!isExpanded && showHistorySheet) {
+        // Unified History Modal Bottom Sheet for all screen sizes
+        if (showHistorySheet) {
             ModalBottomSheet(
                 onDismissRequest = { showHistorySheet = false },
                 containerColor = MaterialTheme.colorScheme.surface

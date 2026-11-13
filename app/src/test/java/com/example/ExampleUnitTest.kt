@@ -550,6 +550,25 @@ class ExampleUnitTest {
     val missSnap = com.example.logic.ar.ArMath.findVertexSnap(farPoint, segment, snapThresholdMeters = 0.075)
     assertNull(missSnap)
   }
+
+  @Test
+  fun `verify MeasureFormatter formats length area and volume across units`() {
+    assertEquals("120 cm", com.example.logic.MeasureFormatter.formatLength(1.2, "cm"))
+    assertEquals("12.3 cm", com.example.logic.MeasureFormatter.formatLength(0.1234, "cm"))
+    assertEquals("1.50 m", com.example.logic.MeasureFormatter.formatLength(1.5, "m"))
+    assertEquals("250 mm", com.example.logic.MeasureFormatter.formatLength(0.25, "mm"))
+    assertEquals("39.37 in", com.example.logic.MeasureFormatter.formatLength(1.0, "in"))
+    assertEquals("3.28 ft", com.example.logic.MeasureFormatter.formatLength(1.0, "ft"))
+    assertEquals("1.09 yd", com.example.logic.MeasureFormatter.formatLength(1.0, "yd"))
+
+    assertEquals("2.50 m²", com.example.logic.MeasureFormatter.formatArea(2.5, "m"))
+    assertEquals("100 cm²", com.example.logic.MeasureFormatter.formatArea(0.01, "cm"))
+    assertEquals("50.0 cm²", com.example.logic.MeasureFormatter.formatArea(0.005, "cm"))
+
+    assertEquals("1.250 m³", com.example.logic.MeasureFormatter.formatVolume(1.25, "m"))
+    assertEquals("12.0 L", com.example.logic.MeasureFormatter.formatVolume(0.012, "cm"))
+    assertEquals("2.50 L", com.example.logic.MeasureFormatter.formatVolume(0.0025, "cm"))
+  }
 }
 
 

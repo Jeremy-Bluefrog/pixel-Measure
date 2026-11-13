@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Pixel Measure"
+rootProject.name = "Measure"
 
 include(":app")

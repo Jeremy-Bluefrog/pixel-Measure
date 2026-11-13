@@ -15,9 +15,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -25,6 +22,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.viewmodel.MeasureViewModel
 
 /**
@@ -50,8 +48,8 @@ fun MeasurementGuidancePill(
     onOpenTutorial: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val liveDistanceMeters by viewModel.liveDistanceMeters.collectAsState()
-    val selectedUnit by viewModel.selectedUnit.collectAsState()
+    val liveDistanceMeters by viewModel.liveDistanceMeters.collectAsStateWithLifecycle()
+    val selectedUnit by viewModel.selectedUnit.collectAsStateWithLifecycle()
 
     // Pulse & radar animations strictly active when required (lazy animation state)
     val infiniteTransition = rememberInfiniteTransition(label = "GuidancePillPulse")
@@ -134,7 +132,7 @@ fun MeasurementGuidancePill(
                 val role = if (capturedPointsCount == 0) "起點" else "線段 $nextSegment 起點"
                 Quad(
                     Icons.Rounded.Adjust,
-                    "對準 $role",
+                    role,
                     "瞄準目標表面，點擊「＋」按鈕定點",
                     Color(0xFF3B82F6) // Bright Indigo Blue
                 )
@@ -223,7 +221,3 @@ fun MeasurementGuidancePill(
 }
 
 private data class Quad<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
-
-private fun Modifier.scale(scale: Float): Modifier = this.then(
-    Modifier.graphicsLayer(scaleX = scale, scaleY = scale)
-)

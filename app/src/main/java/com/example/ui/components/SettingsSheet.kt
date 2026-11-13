@@ -30,6 +30,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.logic.ShareUtility
 import com.example.logic.TranslationManager
 import com.example.ui.viewmodel.MeasureViewModel
@@ -51,14 +52,14 @@ fun SettingsSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var showClearRecordsConfirmDialog by remember { mutableStateOf(false) }
 
-    val vibrateOnAlign by viewModel.vibrateOnAlignment.collectAsState()
-    val showPointCloud by viewModel.showPointCloud.collectAsState()
-    val selectedUnit by viewModel.selectedUnit.collectAsState()
-    val rulerCalibration by viewModel.rulerCalibration.collectAsState()
-    val highFpsModeEnabled by viewModel.highFpsModeEnabled.collectAsState()
-    val highDefinitionQualityEnabled by viewModel.highDefinitionQualityEnabled.collectAsState()
-    val sensorCorrectionEnabled by viewModel.sensorCorrectionEnabled.collectAsState()
-    val torchBrightness by viewModel.torchBrightness.collectAsState()
+    val vibrateOnAlign by viewModel.vibrateOnAlignment.collectAsStateWithLifecycle()
+    val showPointCloud by viewModel.showPointCloud.collectAsStateWithLifecycle()
+    val selectedUnit by viewModel.selectedUnit.collectAsStateWithLifecycle()
+    val rulerCalibration by viewModel.rulerCalibration.collectAsStateWithLifecycle()
+    val highFpsModeEnabled by viewModel.highFpsModeEnabled.collectAsStateWithLifecycle()
+    val highDefinitionQualityEnabled by viewModel.highDefinitionQualityEnabled.collectAsStateWithLifecycle()
+    val sensorCorrectionEnabled by viewModel.sensorCorrectionEnabled.collectAsStateWithLifecycle()
+    val torchBrightness by viewModel.torchBrightness.collectAsStateWithLifecycle()
 
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
@@ -503,26 +504,7 @@ fun SettingsSheet(
 
             Spacer(modifier = Modifier.height(28.dp))
 
-            // M3 Footer App Identity
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    text = "AR 尺子與空間測量儀",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = "Material 3 · Google ARCore & Camera2 Engine",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline
-                )
-            }
+
         }
     }
 

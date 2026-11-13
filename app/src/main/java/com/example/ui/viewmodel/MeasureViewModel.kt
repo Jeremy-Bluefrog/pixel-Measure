@@ -22,6 +22,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.db.MeasureDatabase
 import com.example.data.model.MeasureRecord
 import com.example.data.repository.MeasureRepository
+import com.example.logic.MeasureFormatter
 import com.example.logic.PixelPerformanceMonitor
 import com.example.logic.PixelThermalPolicy
 import com.example.logic.ThermalTier
@@ -37,7 +38,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import java.text.DecimalFormat
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.*
 
@@ -365,10 +365,6 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     private val vulkanViewMatrixBuffer = FloatArray(16)
     private val vulkanProjMatrixBuffer = FloatArray(16)
     private var lastTapTimestampMs = 0L
-    @Deprecated("Legacy alias for Vulkan view matrix buffer")
-    private val glViewMatrixBuffer: FloatArray get() = vulkanViewMatrixBuffer
-    @Deprecated("Legacy alias for Vulkan projection matrix buffer")
-    private val glProjMatrixBuffer: FloatArray get() = vulkanProjMatrixBuffer
     private val screenPosBuffer = FloatArray(2)
 
     private val _liveTargetScreenPos = MutableStateFlow<androidx.compose.ui.geometry.Offset?>(null)
@@ -1441,24 +1437,14 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 val charCode = ('A'.code + (nextIndex % 26)).toChar()
                 val namedP = correctedP.copy(label = "線段$lineNum $role $charCode")
 
-                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                    synchronized(pointsLock) {
-                        if (capturedPoints.size >= 256) {
-                            try { hitResult.anchor?.detach() } catch (_: Throwable) {}
-                            _toastMessage.tryEmit("已達最大測量點上限 (256點)，請儲存或清除後再繼續")
-                            return@post
-                        }
-                        saveUndoState()
-                        capturedPoints.add(namedP)
-                        updateCapturedPointsSnapshotCache()
-                    }
-                    triggerHapticFeedback(if (isActivelyDrawingLine) HapticType.HEAVY else HapticType.CLICK)
-                    if (isActivelyDrawingLine) {
-                        _toastMessage.tryEmit("線段 $lineNum 完成（兩點成一線）")
-                    } else {
-                        _toastMessage.tryEmit("已設定線段 $lineNum 起點 ($charCode)，請瞄準終點")
-                    }
-                    updateAutoDetectedGeometry()
+                mainHandler.post {
+                    appendMeasuredPointOnMainThread(
+                        point = namedP,
+                        isClosingLine = isActivelyDrawingLine,
+                        successToast = if (isActivelyDrawingLine) "線段 $lineNum 完成（兩點成一線）" else "已設定線段 $lineNum 起點 ($charCode)，請瞄準終點",
+                        overflowToast = "已達最大測量點上限 (256點)，請儲存或清除後再繼續",
+                        onOverflow = { try { hitResult.anchor?.detach() } catch (_: Throwable) {} }
+                    )
                 }
             } else {
                 // If raycast hit no plane directly at tap coordinate, use live target only if tracking is active;
@@ -1473,26 +1459,16 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                     val charCode = ('A'.code + (nextIndex % 26)).toChar()
                     val namedP = livePt.copy(label = "線段$lineNum $role $charCode")
 
-                    android.os.Handler(android.os.Looper.getMainLooper()).post {
-                        synchronized(pointsLock) {
-                            if (capturedPoints.size >= 256) {
-                                _toastMessage.tryEmit("已達最大測量點上限 (256點)")
-                                return@post
-                            }
-                            saveUndoState()
-                            capturedPoints.add(namedP)
-                            updateCapturedPointsSnapshotCache()
-                        }
-                        triggerHapticFeedback(if (isActivelyDrawingLine) HapticType.HEAVY else HapticType.CLICK)
-                        if (isActivelyDrawingLine) {
-                            _toastMessage.tryEmit("線段 $lineNum 完成")
-                        } else {
-                            _toastMessage.tryEmit("已設定線段 $lineNum 起點 ($charCode)")
-                        }
-                        updateAutoDetectedGeometry()
+                    mainHandler.post {
+                        appendMeasuredPointOnMainThread(
+                            point = namedP,
+                            isClosingLine = isActivelyDrawingLine,
+                            successToast = if (isActivelyDrawingLine) "線段 $lineNum 完成" else "已設定線段 $lineNum 起點 ($charCode)",
+                            overflowToast = "已達最大測量點上限 (256點)"
+                        )
                     }
                 } else {
-                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    mainHandler.post {
                         _toastMessage.tryEmit("尚未鎖定空間平面，請稍微緩慢平移相機掃描表面")
                     }
                 }
@@ -1501,9 +1477,26 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         return centerHit
     }
 
-    @Deprecated("Legacy alias for processVulkanFrame")
-    fun processGlFrame(frame: Frame, engine: ModernArEngine): HitTestResult? {
-        return processVulkanFrame(frame, engine)
+    private fun appendMeasuredPointOnMainThread(
+        point: Point3D,
+        isClosingLine: Boolean,
+        successToast: String,
+        overflowToast: String,
+        onOverflow: (() -> Unit)? = null
+    ) {
+        synchronized(pointsLock) {
+            if (capturedPoints.size >= 256) {
+                onOverflow?.invoke()
+                _toastMessage.tryEmit(overflowToast)
+                return
+            }
+            saveUndoState()
+            capturedPoints.add(point)
+            updateCapturedPointsSnapshotCache()
+        }
+        triggerHapticFeedback(if (isClosingLine) HapticType.HEAVY else HapticType.CLICK)
+        _toastMessage.tryEmit(successToast)
+        updateAutoDetectedGeometry()
     }
 
 
@@ -1822,31 +1815,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun switchCameraFacing(textureView: android.view.TextureView?, onConfigured: ((Boolean) -> Unit)? = null) {
-        val manager = highSpeedCamera2Manager ?: return
-        if (textureView != null) {
-            manager.switchCamera(
-                textureView = textureView,
-                onBeforeCloseCamera = {
-                    // Must pause ARCore BEFORE closing Camera2 device/session
-                    modernArEngine.pause()
-                    releaseVulkanPipelineBuffers()
-                    _detectedPlanes.value = emptyList()
-                    _arPlanesCount.value = 0
-                }
-            ) { ok, _ ->
-                _isFrontCamera.value = manager.isFrontFacing
-                _isHorizontallyMirrored.value = manager.isHorizontallyMirrored || manager.isFrontFacing
-                if (manager.isFrontFacing) {
-                    _isMeasurementAvailable.value = true
-                    updateFallbackCameraMatrices()
-                } else {
-                    _isMeasurementAvailable.value = (modernArEngine.session == null)
-                }
-                onConfigured?.invoke(ok)
-            }
-        }
-    }
+
 
     fun pauseArAndCamera(manager: com.example.logic.camera.HighSpeedCamera2Manager? = highSpeedCamera2Manager) {
         modernArEngine.pause()
@@ -1886,15 +1855,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     private fun applyTorchWithBrightness(context: Context, newState: Boolean, brightness: Float) {
         var success = false
 
-        // 1. If ARCore SharedCamera session is resumed on rear camera, configure flashMode via ARCore first
-        if (!success && modernArEngine.session != null && modernArEngine.isSessionResumed && !_isFrontCamera.value) {
-            val arOk = modernArEngine.setTorchMode(newState)
-            if (arOk) {
-                success = true
-            }
-        }
-
-        // 2. Android 13+ (API 33+) Hardware Torch Strength Level via CameraManager
+        // 1. Android 13+ (API 33+) Hardware Torch Strength Level via CameraManager
         if (!success && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             try {
                 val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -1910,38 +1871,21 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 if (targetCameraId != null) {
                     val chars = cameraManager.getCameraCharacteristics(targetCameraId)
                     val maxLevel = chars.get(CameraCharacteristics.FLASH_INFO_STRENGTH_MAXIMUM_LEVEL) ?: 1
-                    if (maxLevel > 1) {
+                    if (newState && maxLevel > 1) {
                         val targetLevel = (brightness * maxLevel).toInt().coerceIn(1, maxLevel)
                         cameraManager.turnOnTorchWithStrengthLevel(targetCameraId, targetLevel)
+                        success = true
+                    } else {
+                        cameraManager.setTorchMode(targetCameraId, newState)
                         success = true
                     }
                 }
             } catch (e: Throwable) {
-                Log.w("MeasureViewModel", "turnOnTorchWithStrengthLevel fallback: ${e.message}")
+                Log.w("MeasureViewModel", "CameraManager torch strength fallback: ${e.message}")
             }
         }
 
-        // 3. If Direct HighSpeedCamera2Manager is active
-        if (!success && highSpeedCamera2Manager != null) {
-            try {
-                highSpeedCamera2Manager?.toggleTorch(newState)
-                success = true
-            } catch (e: Exception) {
-                Log.w("MeasureViewModel", "HighSpeedCamera2Manager toggleTorch error: ${e.message}")
-            }
-        }
-
-        // 4. If CameraX is active and controlling the camera
-        if (!success && cameraControl != null) {
-            try {
-                cameraControl?.enableTorch(newState)
-                success = true
-            } catch (e: Exception) {
-                Log.w("MeasureViewModel", "CameraX enableTorch failed: ${e.message}")
-            }
-        }
-
-        // 5. Fallback: Standard CameraManager setTorchMode
+        // 2. Standard CameraManager setTorchMode
         if (!success) {
             try {
                 val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -1960,6 +1904,34 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
             } catch (e: Exception) {
                 Log.w("MeasureViewModel", "CameraManager setTorchMode error: ${e.message}")
+            }
+        }
+
+        // 3. HighSpeedCamera2Manager
+        if (!success && highSpeedCamera2Manager != null) {
+            try {
+                highSpeedCamera2Manager?.toggleTorch(newState)
+                success = true
+            } catch (e: Exception) {
+                Log.w("MeasureViewModel", "HighSpeedCamera2Manager toggleTorch error: ${e.message}")
+            }
+        }
+
+        // 4. CameraX
+        if (!success && cameraControl != null) {
+            try {
+                cameraControl?.enableTorch(newState)
+                success = true
+            } catch (e: Exception) {
+                Log.w("MeasureViewModel", "CameraX enableTorch failed: ${e.message}")
+            }
+        }
+
+        // 5. ARCore flashMode
+        if (!success && modernArEngine.session != null && modernArEngine.isSessionResumed && !_isFrontCamera.value) {
+            val arOk = modernArEngine.setTorchMode(newState)
+            if (arOk) {
+                success = true
             }
         }
 
@@ -2048,85 +2020,14 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     // Formatting utilities with precise and adaptive decimal places
-    fun formatLength(meters: Double, unit: String = _selectedUnit.value): String {
-        return when (unit.lowercase().trim()) {
-            "m" -> {
-                String.format(Locale.US, "%.2f m", meters)
-            }
-            "in" -> {
-                val inches = meters * 39.3701
-                if (inches >= 100.0) String.format(Locale.US, "%.1f in", inches) else String.format(Locale.US, "%.2f in", inches)
-            }
-            "ft" -> {
-                val ft = meters * 3.28084
-                String.format(Locale.US, "%.2f ft", ft)
-            }
-            "yd" -> {
-                val yd = meters * 1.09361
-                String.format(Locale.US, "%.2f yd", yd)
-            }
-            "mm" -> {
-                val mm = meters * 1000.0
-                String.format(Locale.US, "%.0f mm", mm)
-            }
-            else -> {
-                val cm = meters * 100.0
-                if (abs(cm - round(cm)) < 0.05) {
-                    String.format(Locale.US, "%.0f cm", cm)
-                } else {
-                    String.format(Locale.US, "%.1f cm", cm)
-                }
-            }
-        }
-    }
+    fun formatLength(meters: Double, unit: String = _selectedUnit.value): String =
+        MeasureFormatter.formatLength(meters, unit)
 
-    fun formatArea(sqMeters: Double, unit: String = _selectedUnit.value): String {
-        return when (unit.lowercase().trim()) {
-            "m" -> {
-                String.format(Locale.US, "%.2f m²", sqMeters)
-            }
-            "in" -> {
-                val in2 = sqMeters * 1550.0
-                String.format(Locale.US, "%.1f in²", in2)
-            }
-            "ft" -> {
-                val ft2 = sqMeters * 10.7639
-                String.format(Locale.US, "%.2f sq ft", ft2)
-            }
-            "yd" -> {
-                val yd2 = sqMeters * 1.19599
-                String.format(Locale.US, "%.2f sq yd", yd2)
-            }
-            else -> {
-                val sqCm = sqMeters * 10000.0
-                if (sqCm >= 100.0) {
-                    String.format(Locale.US, "%.0f cm²", sqCm)
-                } else {
-                    String.format(Locale.US, "%.1f cm²", sqCm)
-                }
-            }
-        }
-    }
+    fun formatArea(sqMeters: Double, unit: String = _selectedUnit.value): String =
+        MeasureFormatter.formatArea(sqMeters, unit)
 
-    fun formatVolume(cuMeters: Double, unit: String = _selectedUnit.value): String {
-        return when (unit.lowercase().trim()) {
-            "m" -> {
-                String.format(Locale.US, "%.3f m³", cuMeters)
-            }
-            "ft" -> {
-                val ft3 = cuMeters * 35.3147
-                String.format(Locale.US, "%.2f cu ft", ft3)
-            }
-            else -> {
-                val liters = cuMeters * 1000.0
-                if (liters >= 10.0) {
-                    String.format(Locale.US, "%.1f L", liters)
-                } else {
-                    String.format(Locale.US, "%.2f L", liters)
-                }
-            }
-        }
-    }
+    fun formatVolume(cuMeters: Double, unit: String = _selectedUnit.value): String =
+        MeasureFormatter.formatVolume(cuMeters, unit)
 
     // Last saved record for quick share affordance
     private val _lastSavedRecord = MutableStateFlow<MeasureRecord?>(null)

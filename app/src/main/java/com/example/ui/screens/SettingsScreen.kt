@@ -31,6 +31,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.logic.ShareUtility
 import com.example.logic.TranslationManager
 import com.example.ui.components.LanguageSelectionDialog
@@ -65,36 +66,36 @@ fun SettingsScreen(
     var searchQuery by remember { mutableStateOf("") }
 
     // ViewModel States
-    val currentLanguage by viewModel.currentLanguage.collectAsState()
-    val vibrateOnAlign by viewModel.vibrateOnAlignment.collectAsState()
-    val showPointCloud by viewModel.showPointCloud.collectAsState()
-    val selectedUnit by viewModel.selectedUnit.collectAsState()
-    val rulerCalibration by viewModel.rulerCalibration.collectAsState()
-    val highFpsModeEnabled by viewModel.highFpsModeEnabled.collectAsState()
-    val highDefinitionQualityEnabled by viewModel.highDefinitionQualityEnabled.collectAsState()
-    val torchBrightness by viewModel.torchBrightness.collectAsState()
+    val currentLanguage by viewModel.currentLanguage.collectAsStateWithLifecycle()
+    val vibrateOnAlign by viewModel.vibrateOnAlignment.collectAsStateWithLifecycle()
+    val showPointCloud by viewModel.showPointCloud.collectAsStateWithLifecycle()
+    val selectedUnit by viewModel.selectedUnit.collectAsStateWithLifecycle()
+    val rulerCalibration by viewModel.rulerCalibration.collectAsStateWithLifecycle()
+    val highFpsModeEnabled by viewModel.highFpsModeEnabled.collectAsStateWithLifecycle()
+    val highDefinitionQualityEnabled by viewModel.highDefinitionQualityEnabled.collectAsStateWithLifecycle()
+    val torchBrightness by viewModel.torchBrightness.collectAsStateWithLifecycle()
 
     // Battery & Power Optimization States
-    val batteryLevel by viewModel.batteryLevel.collectAsState()
-    val isPowerSaveMode by viewModel.isPowerSaveMode.collectAsState()
-    val autoBatteryProfileEnabled by viewModel.autoBatteryProfileEnabled.collectAsState()
-    val currentAppliedProfile by viewModel.currentAppliedProfile.collectAsState()
+    val batteryLevel by viewModel.batteryLevel.collectAsStateWithLifecycle()
+    val isPowerSaveMode by viewModel.isPowerSaveMode.collectAsStateWithLifecycle()
+    val autoBatteryProfileEnabled by viewModel.autoBatteryProfileEnabled.collectAsStateWithLifecycle()
+    val currentAppliedProfile by viewModel.currentAppliedProfile.collectAsStateWithLifecycle()
 
     // Advanced Sensor Fusion & Hardware States
-    val sensorCorrectionEnabled by viewModel.sensorCorrectionEnabled.collectAsState()
-    val antiJitterEnabled by viewModel.antiJitterEnabled.collectAsState()
-    val gravityAlignmentEnabled by viewModel.gravityAlignmentEnabled.collectAsState()
-    val barometerFusionEnabled by viewModel.barometerFusionEnabled.collectAsState()
-    val jerkRejectionEnabled by viewModel.jerkRejectionEnabled.collectAsState()
-    val orthogonalSnapEnabled by viewModel.orthogonalSnapEnabled.collectAsState()
-    val multiSampleAveragingEnabled by viewModel.multiSampleAveragingEnabled.collectAsState()
-    val coplanarProjectionEnabled by viewModel.coplanarProjectionEnabled.collectAsState()
-    val isVulkanGraphicsEnabled by viewModel.isVulkanGraphicsEnabled.collectAsState()
+    val sensorCorrectionEnabled by viewModel.sensorCorrectionEnabled.collectAsStateWithLifecycle()
+    val antiJitterEnabled by viewModel.antiJitterEnabled.collectAsStateWithLifecycle()
+    val gravityAlignmentEnabled by viewModel.gravityAlignmentEnabled.collectAsStateWithLifecycle()
+    val barometerFusionEnabled by viewModel.barometerFusionEnabled.collectAsStateWithLifecycle()
+    val jerkRejectionEnabled by viewModel.jerkRejectionEnabled.collectAsStateWithLifecycle()
+    val orthogonalSnapEnabled by viewModel.orthogonalSnapEnabled.collectAsStateWithLifecycle()
+    val multiSampleAveragingEnabled by viewModel.multiSampleAveragingEnabled.collectAsStateWithLifecycle()
+    val coplanarProjectionEnabled by viewModel.coplanarProjectionEnabled.collectAsStateWithLifecycle()
+    val isVulkanGraphicsEnabled by viewModel.isVulkanGraphicsEnabled.collectAsStateWithLifecycle()
 
     // UI Styles
-    val reticleStyle by viewModel.reticleStyle.collectAsState()
-    val lineThickness by viewModel.lineThickness.collectAsState()
-    val cameraAspectRatio by viewModel.cameraAspectRatio.collectAsState()
+    val reticleStyle by viewModel.reticleStyle.collectAsStateWithLifecycle()
+    val lineThickness by viewModel.lineThickness.collectAsStateWithLifecycle()
+    val cameraAspectRatio by viewModel.cameraAspectRatio.collectAsStateWithLifecycle()
 
     val currentLanguageDisplay = remember(currentLanguage) {
         TranslationManager.supportedLanguages.find { it.code == currentLanguage }?.name ?: currentLanguage
@@ -900,26 +901,7 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(24.dp))
                 }
 
-                // App Info Footer
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "相機 AR 測量儀 Pro",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "Google ARCore & Camera2 Engine · Vulkan 1.3",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                }
+
             }
         }
     }

@@ -1,7 +1,5 @@
 package com.example.ui.components
 
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
@@ -11,7 +9,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -25,20 +22,9 @@ import kotlin.math.*
 private val DASH_10_6 = floatArrayOf(10f, 6f)
 private val DASH_10_8 = floatArrayOf(10f, 8f)
 private val DASH_14_10 = floatArrayOf(14f, 10f)
-private val DASH_15_10 = floatArrayOf(15f, 10f)
-private val DASH_20_10 = floatArrayOf(20f, 10f)
-private val DASH_12_12 = floatArrayOf(12f, 12f)
-private val DASH_24_12 = floatArrayOf(24f, 12f)
 private val BOX_EDGE_A = intArrayOf(0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3)
 private val BOX_EDGE_B = intArrayOf(1, 2, 3, 0, 5, 6, 7, 4, 4, 5, 6, 7)
 
-private const val SAMPLES_COUNT = 32
-private val UNIT_COS_TABLE = FloatArray(SAMPLES_COUNT) { i ->
-    kotlin.math.cos(i * (2.0 * Math.PI / SAMPLES_COUNT)).toFloat()
-}
-private val UNIT_SIN_TABLE = FloatArray(SAMPLES_COUNT) { i ->
-    kotlin.math.sin(i * (2.0 * Math.PI / SAMPLES_COUNT)).toFloat()
-}
 private val TEMP_PROJ_HOLDER = FloatArray(2)
 
 /**
@@ -258,13 +244,9 @@ private fun DrawScope.drawArMeasurementAnchor(
 @Composable
 fun ArMeasurementCanvasOverlay(
     viewModel: MeasureViewModel,
-    pings: List<Pair<Offset, Animatable<Float, AnimationVector1D>>>,
     dashPhase: State<Float>,
     reticlePulseScale: State<Float>,
     snapScaleAnimated: State<Float>,
-    snapGlowAlphaAnimated: State<Float>,
-    planeLockedParticleAnim: State<Float>? = null,
-    density: Float = androidx.compose.ui.platform.LocalDensity.current.density,
     modifier: Modifier = Modifier
 ) {
     val colorPrimary = MaterialTheme.colorScheme.primary
@@ -273,8 +255,6 @@ fun ArMeasurementCanvasOverlay(
     val colorPrimaryContainer = MaterialTheme.colorScheme.primaryContainer
     val colorOnPrimaryContainer = MaterialTheme.colorScheme.onPrimaryContainer
     val colorOnPrimary = MaterialTheme.colorScheme.onPrimary
-    val colorSurface = MaterialTheme.colorScheme.surface
-    val colorOnSurface = MaterialTheme.colorScheme.onSurface
 
     // High-frequency AR states collected as State<T> objects (read inside Canvas {} only)
     // so 30/60fps telemetry updates invalidate only the Draw phase and avoid Compose recomposition.
@@ -526,17 +506,6 @@ fun ArMeasurementCanvasOverlay(
                     pathEffect = PathEffect.dashPathEffect(DASH_10_6, currentDashPhase)
                 )
             }
-        }
-
-        // Draw touch ripples
-        pings.forEach { (offset, anim) ->
-            val progress = anim.value
-            drawCircle(
-                color = colorPrimary.copy(alpha = 0.5f * (1f - progress)),
-                center = offset,
-                radius = 8.dp.toPx() + 36.dp.toPx() * progress,
-                style = Stroke(width = 2.5.dp.toPx())
-            )
         }
 
         // Project 3D points to 2D screen coordinates using Kalman filter, zero-alloc buffer pool & temporal screen smoothing

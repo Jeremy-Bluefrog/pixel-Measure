@@ -20,7 +20,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -31,6 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.logic.ShareUtility
 import com.example.logic.vulkan.VulkanArSceneView
 import com.example.logic.camera.ArVideoRecorder
@@ -52,7 +52,6 @@ fun ModernArBottomDeck(
     bottomPadding: Dp,
     textureViewRef: () -> TextureView?,
     modernArVulkanViewRef: () -> VulkanArSceneView? = { null },
-    modernArGlViewRef: () -> VulkanArSceneView? = modernArVulkanViewRef,
     cameraAspectRatio: String,
     useDisplayP3ColorSpace: Boolean,
     videoRecorder: ArVideoRecorder,
@@ -119,101 +118,71 @@ fun ModernArBottomDeck(
             }
         }
 
-        // 3. Interactive Bottom Action Deck (Left, Center, Right Symmetrical Layout)
+        // 3. Interactive Bottom Action Deck (Aligned Plus, Shutter, and Conditional Back button)
         Row(
             modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Left Slot: Undo & Clear buttons
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(start = 4.dp),
-                contentAlignment = Alignment.CenterStart
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
             ) {
+                // Back / Undo button on the left of the plus button when hasCapturedPoints is true
                 androidx.compose.animation.AnimatedVisibility(
                     visible = hasCapturedPoints,
                     enter = fadeIn(animationSpec = tween(180)) + scaleIn(
-                        initialScale = 0.85f,
+                        initialScale = 0.80f,
                         animationSpec = tween(180, easing = FastOutSlowInEasing)
                     ) + slideInHorizontally(
                         initialOffsetX = { -it / 2 },
                         animationSpec = tween(180, easing = FastOutSlowInEasing)
                     ),
                     exit = fadeOut(animationSpec = tween(140)) + scaleOut(
-                        targetScale = 0.85f,
+                        targetScale = 0.80f,
                         animationSpec = tween(140, easing = FastOutLinearInEasing)
                     ) + slideOutHorizontally(
                         targetOffsetX = { -it / 2 },
                         animationSpec = tween(140, easing = FastOutLinearInEasing)
                     )
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    IconButton(
+                        onClick = {
+                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                            viewModel.undo()
+                        },
+                        modifier = Modifier
+                            .size((48 * uiButtonScale).dp)
+                            .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.75f else 0.90f), CircleShape)
+                            .border(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), CircleShape)
+                            .testTag("back_step_button")
                     ) {
-                        IconButton(
-                            onClick = {
-                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
-                                viewModel.undo()
-                            },
-                            modifier = Modifier
-                                .size((48 * uiButtonScale).dp)
-                                .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.70f else 0.88f), CircleShape)
-                                .border(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f), CircleShape)
-                                .testTag("undo_button")
-                        ) {
-                            Icon(
-                                Icons.Rounded.Undo,
-                                contentDescription = "復原上一點",
-                                tint = colorOnSurface,
-                                modifier = Modifier.size((24 * uiButtonScale).dp)
-                            )
-                        }
-
-                        IconButton(
-                            onClick = {
-                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                viewModel.clearActivePoints()
-                            },
-                            modifier = Modifier
-                                .size((48 * uiButtonScale).dp)
-                                .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.85f), CircleShape)
-                                .border(0.8.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.55f), CircleShape)
-                                .testTag("clear_all_button")
-                        ) {
-                            Icon(
-                                Icons.Rounded.DeleteOutline,
-                                contentDescription = "全部清除",
-                                tint = MaterialTheme.colorScheme.onErrorContainer,
-                                modifier = Modifier.size((24 * uiButtonScale).dp)
-                            )
-                        }
+                        Icon(
+                            Icons.Rounded.ArrowBack,
+                            contentDescription = "返回上一步",
+                            tint = colorOnSurface,
+                            modifier = Modifier.size((24 * uiButtonScale).dp)
+                        )
                     }
                 }
-            }
 
-            // Center Slot: Primary Main Add Button (平衡置中、保留充足取景視野)
-            val addFabInteractionSource = remember { MutableInteractionSource() }
-            val isAddFabPressed by addFabInteractionSource.collectIsPressedAsState()
+                // Smaller Plus FAB Button (Add Point)
+                val addFabInteractionSource = remember { MutableInteractionSource() }
+                val isAddFabPressed by addFabInteractionSource.collectIsPressedAsState()
 
-            val addFabCornerRadius by animateDpAsState(
-                targetValue = if (isAddFabPressed) 20.dp else 39.dp,
-                animationSpec = tween(150),
-                label = "addFabCornerRadius"
-            )
+                val addFabCornerRadius by animateDpAsState(
+                    targetValue = if (isAddFabPressed) 18.dp else 32.dp,
+                    animationSpec = tween(150),
+                    label = "addFabCornerRadius"
+                )
 
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier.padding(horizontal = 6.dp)
-            ) {
                 Surface(
                     color = addFabContainerColor,
                     shape = RoundedCornerShape(addFabCornerRadius),
                     border = if (!isMeasurementAvailable) BorderStroke(1.5.dp, MaterialTheme.colorScheme.outlineVariant) else null,
                     shadowElevation = 0.dp,
                     modifier = Modifier
-                        .size((78 * uiButtonScale).dp)
+                        .size((64 * uiButtonScale).dp)
                         .clickable(
                             interactionSource = addFabInteractionSource,
                             indication = null
@@ -238,60 +207,19 @@ fun ModernArBottomDeck(
                         ) { waitingForSecond ->
                             Icon(
                                 imageVector = if (waitingForSecond) Icons.Rounded.Check else Icons.Rounded.Add,
-                                contentDescription = if (waitingForSecond) "確認第二點 (Confirm Point)" else "加入點 (Add Point)",
+                                contentDescription = if (waitingForSecond) "確認第二點" else "加入點",
                                 tint = addFabIconColor,
-                                modifier = Modifier.size((44 * uiButtonScale).dp)
+                                modifier = Modifier.size((36 * uiButtonScale).dp)
                             )
                         }
                     }
                 }
-            }
 
-            // Right Slot: Camera Shutter & Mode Switch
-            val isCameraVideoMode by viewModel.isCameraVideoMode.collectAsState()
-
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(end = 4.dp),
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                // Photo vs Video Mode Selector Pill
-                Surface(
-                    onClick = {
-                        if (!isRecordingVideo) {
-                            viewModel.toggleCameraVideoMode()
-                        }
-                    },
-                    shape = RoundedCornerShape(10.dp),
-                    color = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.70f else 0.90f),
-                    border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-                    shadowElevation = 0.dp,
-                    modifier = Modifier.testTag("photo_video_mode_toggle")
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (isCameraVideoMode) Icons.Rounded.Videocam else Icons.Rounded.PhotoCamera,
-                            contentDescription = if (isCameraVideoMode) "錄影模式" else "拍照模式",
-                            tint = if (isCameraVideoMode) Color(0xFFE53935) else colorPrimary,
-                            modifier = Modifier.size(13.dp)
-                        )
-                        Text(
-                            text = if (isCameraVideoMode) "錄影" else "拍照",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isCameraVideoMode) Color(0xFFE53935) else colorPrimary
-                        )
-                    }
-                }
+                // Camera Shutter Button aligned right next to the plus button
+                val isCameraVideoMode by viewModel.isCameraVideoMode.collectAsStateWithLifecycle()
 
                 PixelShutterButton(
-                    size = (50 * uiButtonScale).dp,
+                    size = (54 * uiButtonScale).dp,
                     isRecording = isRecordingVideo,
                     innerCircleColor = if (isCameraVideoMode) Color(0xFFE53935) else Color.White,
                     onClick = {
@@ -310,21 +238,21 @@ fun ModernArBottomDeck(
                             }
                         } else if (isCameraVideoMode) {
                             val currentTv = textureViewRef()
-                            val currentGl = modernArGlViewRef()
+                            val currentVulkan = modernArVulkanViewRef()
                             videoRecorder.startRecording(
                                 view = localView,
                                 cameraBitmapProvider = {
                                     if (currentTv != null && currentTv.isAvailable) {
                                         try { currentTv.bitmap } catch (_: Throwable) { null }
-                                    } else if (currentGl != null) {
-                                        var glBmp: Bitmap? = null
+                                    } else if (currentVulkan != null) {
+                                        var vkBmp: Bitmap? = null
                                         val latch = java.util.concurrent.CountDownLatch(1)
-                                        currentGl.captureBitmap { bmp ->
-                                            glBmp = bmp
+                                        currentVulkan.captureBitmap { bmp ->
+                                            vkBmp = bmp
                                             latch.countDown()
                                         }
                                         latch.await(80, java.util.concurrent.TimeUnit.MILLISECONDS)
-                                        glBmp
+                                        vkBmp
                                     } else {
                                         null
                                     }
@@ -340,14 +268,14 @@ fun ModernArBottomDeck(
                                     kotlinx.coroutines.delay(40)
 
                                     val currentTv = textureViewRef()
-                                    val currentGl = modernArGlViewRef()
+                                    val currentVulkan = modernArVulkanViewRef()
 
                                     val onCameraFrameReady: (Bitmap?) -> Unit = { cameraBmp ->
                                         ShareUtility.captureArCompositeSnapshot(
                                             view = localView,
                                             cameraBitmap = cameraBmp,
                                             textureView = currentTv,
-                                            glView = currentGl,
+                                            glView = currentVulkan,
                                             aspectRatio = cameraAspectRatio,
                                             useDisplayP3 = useDisplayP3ColorSpace,
                                             primaryMeasurement = viewModel.getPrimaryMeasurementDisplayString()
@@ -367,9 +295,9 @@ fun ModernArBottomDeck(
                                             try { currentTv.bitmap } catch (_: Throwable) { null }
                                         }
                                         onCameraFrameReady(bmp)
-                                    } else if (currentGl != null) {
-                                        currentGl.captureBitmap { glBmp ->
-                                            onCameraFrameReady(glBmp)
+                                    } else if (currentVulkan != null) {
+                                        currentVulkan.captureBitmap { vkBmp ->
+                                            onCameraFrameReady(vkBmp)
                                         }
                                     } else {
                                         onCameraFrameReady(null)
@@ -385,21 +313,21 @@ fun ModernArBottomDeck(
                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                         if (!isRecordingVideo) {
                             val currentTv = textureViewRef()
-                            val currentGl = modernArGlViewRef()
+                            val currentVulkan = modernArVulkanViewRef()
                             videoRecorder.startRecording(
                                 view = localView,
                                 cameraBitmapProvider = {
                                     if (currentTv != null && currentTv.isAvailable) {
                                         try { currentTv.bitmap } catch (_: Throwable) { null }
-                                    } else if (currentGl != null) {
-                                        var glBmp: Bitmap? = null
+                                    } else if (currentVulkan != null) {
+                                        var vkBmp: Bitmap? = null
                                         val latch = java.util.concurrent.CountDownLatch(1)
-                                        currentGl.captureBitmap { bmp ->
-                                            glBmp = bmp
+                                        currentVulkan.captureBitmap { bmp ->
+                                            vkBmp = bmp
                                             latch.countDown()
                                         }
                                         latch.await(80, java.util.concurrent.TimeUnit.MILLISECONDS)
-                                        glBmp
+                                        vkBmp
                                     } else {
                                         null
                                     }
@@ -422,7 +350,7 @@ private fun LiveDistanceBadge(
     viewModel: MeasureViewModel,
     selectedUnit: String
 ) {
-    val liveDistanceMeters by viewModel.liveDistanceMeters.collectAsState()
+    val liveDistanceMeters by viewModel.liveDistanceMeters.collectAsStateWithLifecycle()
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
         shape = RoundedCornerShape(18.dp),
@@ -468,7 +396,7 @@ private fun MeasurementLiveSummaryCard(
         isCopied = false
     }
 
-    val autoDetectedType by viewModel.autoDetectedType.collectAsState()
+    val autoDetectedType by viewModel.autoDetectedType.collectAsStateWithLifecycle()
     val effectiveType = if (subMode == 0) autoDetectedType else when (subMode) {
         1 -> "AREA"
         2 -> "HEIGHT"

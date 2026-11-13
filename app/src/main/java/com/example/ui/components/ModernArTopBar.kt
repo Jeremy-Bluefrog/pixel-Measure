@@ -17,7 +17,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
@@ -25,9 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.logic.sensor.SensorCorrectionTelemetry
 import com.example.ui.viewmodel.MeasureViewModel
-import java.util.Locale
 
 @Composable
 fun ModernArTopBar(
@@ -42,10 +39,8 @@ fun ModernArTopBar(
     planesCount: Int,
     isRecordingVideo: Boolean,
     recordingSeconds: Int,
-    onShowHelp: () -> Unit,
     onShowHistoryClick: () -> Unit,
     onShowSettingsClick: () -> Unit,
-    onSwitchCamera: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     extraTopHudContent: (@Composable ColumnScope.() -> Unit)? = null
 ) {
@@ -250,32 +245,7 @@ fun ModernArTopBar(
             ) {
 
 
-                // Camera Flip / Switch Button (Front <-> Rear)
-                onSwitchCamera?.let { switchAction ->
-                    val isFrontCamera by viewModel.isFrontCamera.collectAsStateWithLifecycle()
-                    IconButton(
-                        onClick = switchAction,
-                        modifier = Modifier
-                            .size(40.dp)
-                            .background(
-                                MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.72f else 0.90f),
-                                CircleShape
-                            )
-                            .border(
-                                width = 0.8.dp,
-                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f),
-                                shape = CircleShape
-                            )
-                            .testTag("switch_camera_facing_button")
-                    ) {
-                        Icon(
-                            Icons.Rounded.FlipCameraAndroid,
-                            contentDescription = if (isFrontCamera) "切換至後鏡頭" else "切換至前鏡頭",
-                            tint = if (isFrontCamera) colorPrimary else colorOnSurface,
-                            modifier = Modifier.size(19.dp)
-                        )
-                    }
-                }
+
 
                 // Torch Button
                 Box {
