@@ -40,6 +40,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
     var sharedCamera: SharedCamera? = null
     var preferredCameraId: String? = null
     var preferredAspectRatio: Float? = null
+    var preferredFpsRange: Range<Int>? = null
     var onArSessionReadyToResume: (() -> Unit)? = null
     var isArCoreResumedChecker: (() -> Boolean)? = null
 
@@ -84,7 +85,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
     var isHorizontallyMirrored: Boolean = false
         private set
 
-    private fun isSharedCameraArActive(): Boolean {
+    fun isSharedCameraArActive(): Boolean {
         return preferredFacing == CameraCharacteristics.LENS_FACING_BACK &&
             sharedCamera != null &&
             (isArCoreResumedChecker?.invoke() == true)
@@ -239,9 +240,21 @@ class HighSpeedCamera2Manager(private val context: Context) {
     /**
      * Safely queries supported AE target FPS ranges respecting user preference & thermal cap.
      */
-    private fun selectOptimalFpsRange(characteristics: CameraCharacteristics): Range<Int> {
+    private fun selectOptimalFpsRange(
+        characteristics: CameraCharacteristics,
+        forceSafe30Fps: Boolean = false,
+        matchArPreferred: Boolean = (sharedCamera != null)
+    ): Range<Int> {
         val fpsRanges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: emptyArray()
-        val effectiveMaxFps = if (preferHighFps) thermalMaxFps.coerceAtMost(60) else 30
+        if (matchArPreferred && !forceSafe30Fps) {
+            val arFps = preferredFpsRange
+            if (arFps != null) {
+                fpsRanges.firstOrNull { it == arFps }?.let { return it }
+                fpsRanges.firstOrNull { it.upper == arFps.upper && it.lower <= arFps.lower }?.let { return it }
+                fpsRanges.firstOrNull { it.upper == arFps.upper }?.let { return it }
+            }
+        }
+        val effectiveMaxFps = if (!forceSafe30Fps && preferHighFps) thermalMaxFps.coerceAtMost(60) else 30
 
         if (effectiveMaxFps >= 60) {
             fpsRanges.firstOrNull { it.lower >= 60 && it.upper >= 60 }?.let { return it }
@@ -468,7 +481,8 @@ class HighSpeedCamera2Manager(private val context: Context) {
         size: Size,
         characteristics: CameraCharacteristics,
         currentSharedCamera: SharedCamera?,
-        onSessionConfigured: ((Boolean, Size) -> Unit)?
+        onSessionConfigured: ((Boolean, Size) -> Unit)?,
+        fallbackStep: Int = 0
     ) {
         if (!surface.isValid) {
             Log.w(TAG, "Surface is invalid, aborting configureSession.")
@@ -480,10 +494,15 @@ class HighSpeedCamera2Manager(private val context: Context) {
         try {
             lowLightBoostEngine.checkHardwareSupport(characteristics)
 
-            val targetFpsRange = selectOptimalFpsRange(characteristics)
+            val forceSafeFallback = fallbackStep > 0
+            val targetFpsRange = selectOptimalFpsRange(
+                characteristics = characteristics,
+                forceSafe30Fps = forceSafeFallback,
+                matchArPreferred = currentSharedCamera != null && !forceSafeFallback
+            )
             val targetAfMode = selectOptimalAfMode(characteristics)
 
-            val template = if (currentSharedCamera != null) {
+            val template = if (currentSharedCamera != null && !forceSafeFallback) {
                 CameraDevice.TEMPLATE_RECORD
             } else {
                 CameraDevice.TEMPLATE_PREVIEW
@@ -495,20 +514,25 @@ class HighSpeedCamera2Manager(private val context: Context) {
                 set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, targetFpsRange)
                 set(CaptureRequest.CONTROL_AF_MODE, targetAfMode)
 
-                // Edge enhancement mode if supported
-                val edgeModes = characteristics.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)
-                if (edgeModes?.contains(CaptureRequest.EDGE_MODE_FAST) == true) {
-                    set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
-                }
+                if (currentSharedCamera != null) {
+                    // Keep deterministic CONTROL_AE_MODE_ON during SharedCamera AR tracking
+                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
+                } else {
+                    // Edge enhancement mode if supported
+                    val edgeModes = characteristics.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)
+                    if (edgeModes?.contains(CaptureRequest.EDGE_MODE_FAST) == true) {
+                        set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
+                    }
 
-                // Noise reduction mode if supported
-                val noiseModes = characteristics.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES)
-                if (noiseModes?.contains(CaptureRequest.NOISE_REDUCTION_MODE_FAST) == true) {
-                    set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
-                }
+                    // Noise reduction mode if supported
+                    val noiseModes = characteristics.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES)
+                    if (noiseModes?.contains(CaptureRequest.NOISE_REDUCTION_MODE_FAST) == true) {
+                        set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
+                    }
 
-                // Apply Low Light Boost if enabled
-                lowLightBoostEngine.applyLowLightBoost(this, isLowLightBoostEnabled)
+                    // Apply Low Light Boost when operating standalone Camera2 preview
+                    lowLightBoostEngine.applyLowLightBoost(this, isLowLightBoostEnabled)
+                }
 
                 // Restore torch state if active
                 if (currentTorchState && isFlashSupported) {
@@ -526,7 +550,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
                     for (arSurface in arSurfaces) {
                         requestBuilder.addTarget(arSurface)
                     }
-                    Log.i(TAG, "Configured SharedCamera (cam=${activeCameraId}) with ${arSurfaces.size} ARCore surfaces.")
+                    Log.i(TAG, "Configured SharedCamera (cam=${activeCameraId}, step=$fallbackStep) with ${arSurfaces.size} ARCore surfaces.")
                 } catch (t: Throwable) {
                     Log.w(TAG, "Error binding SharedCamera surfaces: ${t.message}")
                 }
@@ -575,10 +599,25 @@ class HighSpeedCamera2Manager(private val context: Context) {
                 }
 
                 override fun onConfigureFailed(session: CameraCaptureSession) {
-                    Log.e(TAG, "CameraCaptureSession configuration failed")
+                    Log.e(TAG, "CameraCaptureSession configuration failed (step=$fallbackStep, shared=${currentSharedCamera != null})")
                     try { session.close() } catch (_: Exception) {}
                     if (captureSession == session) {
                         captureSession = null
+                    }
+                    if (!isClosed && fallbackStep == 0 && cameraDevice == camera && surface.isValid) {
+                        Log.w(TAG, "Retrying CameraCaptureSession with safe 30fps preview fallback...")
+                        backgroundHandler?.post {
+                            configureSession(
+                                camera = camera,
+                                surface = surface,
+                                size = size,
+                                characteristics = characteristics,
+                                currentSharedCamera = currentSharedCamera,
+                                onSessionConfigured = onSessionConfigured,
+                                fallbackStep = 1
+                            )
+                        }
+                        return
                     }
                     onSessionConfigured?.invoke(false, size)
                 }
@@ -586,41 +625,30 @@ class HighSpeedCamera2Manager(private val context: Context) {
 
             val wrappedSessionCallback = currentSharedCamera?.createARSessionStateCallback(stateCallback, backgroundHandler) ?: stateCallback
 
-            // API 28+ SessionConfiguration with Android 13+ StreamUseCase for Pixel Tensor ISP efficiency
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                try {
-                    val supportsPreviewUseCase = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        val useCases = characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_STREAM_USE_CASES)
-                        useCases?.contains(CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_PREVIEW.toLong()) == true
-                    } else false
+            val supportsPreviewUseCase = if (currentSharedCamera == null && !forceSafeFallback && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val useCases = characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_STREAM_USE_CASES)
+                useCases?.contains(CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_PREVIEW.toLong()) == true
+            } else false
 
-                    val outputConfigs = surfaceList.mapIndexed { idx, s ->
-                        OutputConfiguration(s).apply {
-                            if (idx == 0 && supportsPreviewUseCase && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                try {
-                                    streamUseCase = CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_PREVIEW.toLong()
-                                } catch (_: Throwable) {}
-                            }
-                        }
+            val outputConfigs = surfaceList.mapIndexed { idx, s ->
+                OutputConfiguration(s).apply {
+                    if (idx == 0 && supportsPreviewUseCase && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        try {
+                            streamUseCase = CameraMetadata.SCALER_AVAILABLE_STREAM_USE_CASES_PREVIEW.toLong()
+                        } catch (_: Throwable) {}
                     }
-                    val executor = java.util.concurrent.Executor { command ->
-                        backgroundHandler?.post(command) ?: command.run()
-                    }
-                    val sessionConfig = SessionConfiguration(
-                        SessionConfiguration.SESSION_REGULAR,
-                        outputConfigs,
-                        executor,
-                        wrappedSessionCallback
-                    )
-                    camera.createCaptureSession(sessionConfig)
-                    return
-                } catch (t: Throwable) {
-                    Log.w(TAG, "SessionConfiguration failed, falling back to legacy createCaptureSession: ${t.message}")
                 }
             }
-
-            @Suppress("DEPRECATION")
-            camera.createCaptureSession(surfaceList, wrappedSessionCallback, backgroundHandler)
+            val executor = java.util.concurrent.Executor { command ->
+                backgroundHandler?.post(command) ?: command.run()
+            }
+            val sessionConfig = SessionConfiguration(
+                SessionConfiguration.SESSION_REGULAR,
+                outputConfigs,
+                executor,
+                wrappedSessionCallback
+            )
+            camera.createCaptureSession(sessionConfig)
 
         } catch (e: Throwable) {
             Log.e(TAG, "configureSession failed: ${e.message}", e)
@@ -631,6 +659,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
         sharedCam: SharedCamera,
         cameraId: String? = null,
         imageSize: Size? = null,
+        fpsRange: Range<Int>? = null,
         onBeforeCloseCamera: (() -> Unit)? = null,
         onConfigured: ((Boolean, Size) -> Unit)? = null
     ) {
@@ -639,6 +668,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
         } else null
         if (sharedCamera == sharedCam &&
             preferredCameraId == cameraId &&
+            preferredFpsRange == fpsRange &&
             (captureSession != null || isOpening) &&
             !isClosed
         ) {
@@ -648,6 +678,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
         sharedCamera = sharedCam
         preferredCameraId = cameraId
         preferredAspectRatio = aspect
+        preferredFpsRange = fpsRange
         val tv = activeTextureView?.get() ?: return
         if (tv.isAvailable && preferredFacing == CameraCharacteristics.LENS_FACING_BACK) {
             onBeforeCloseCamera?.invoke()
@@ -743,27 +774,29 @@ class HighSpeedCamera2Manager(private val context: Context) {
         }
     }
 
-    fun toggleTorch(enable: Boolean) {
+    fun toggleTorch(enable: Boolean): Boolean {
         currentTorchState = enable
         if (enable && !isFlashSupported) {
             Log.w(TAG, "Hardware flash is not supported on this camera device.")
-            return
+            return false
         }
         if (isSharedCameraArActive()) {
             // Handled via ModernArEngine.setTorchMode while ARCore SharedCamera owns repeating requests
-            return
+            return false
         }
-        val session = captureSession ?: return
-        val builder = previewRequestBuilder ?: return
-        try {
+        val session = captureSession ?: return false
+        val builder = previewRequestBuilder ?: return false
+        return try {
             if (enable && isFlashSupported) {
                 builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
             } else {
                 builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
             }
             session.setRepeatingRequest(builder.build(), captureCallback, backgroundHandler)
+            true
         } catch (e: Throwable) {
             Log.w(TAG, "Failed to toggle torch: ${e.message}")
+            false
         }
     }
 

@@ -1,10 +1,16 @@
 package com.example.ui.components
 
-import androidx.compose.animation.*
-import androidx.compose.animation.core.*
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -20,19 +26,22 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.logic.ar.ArCoreEngineStatus
+import com.example.ui.theme.ExpressiveCookie8Shape
+import com.example.ui.theme.ExpressiveMotion
+import com.example.ui.theme.ExpressiveTypography
 import com.example.ui.viewmodel.MeasureViewModel
 
 /**
- * Pure visual dynamic guidance pill HUD.
- * Completely silent (no voice/audio) as requested.
- * Provides real-time context cues across measurement steps:
- * 1. Searching plane / motion guidance
- * 2. Pin first point
- * 3. Extend measuring line & distance feedback
- * 4. Magnetic vertex snapping & closing
+ * Pure visual dynamic guidance pill HUD enhanced with Material 3 Expressive motion & morphing indicator:
+ * - Uses ExpressiveContainedLoadingIndicator (morphing geometric shape) during ARCore plane scanning
+ * - Uses ExpressiveCookie8Shape badge when magnetic vertex snap activates
+ * - Uses ExpressiveMotion.spatialDefault() physics-based expansion and pop transitions
+ * - Uses tabular numerals (`tnum`) for live distance values
  */
 @Composable
 fun MeasurementGuidancePill(
@@ -46,19 +55,25 @@ fun MeasurementGuidancePill(
     isMeasurementAvailable: Boolean,
     isSnapped: Boolean,
     onOpenTutorial: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    arCoreStatus: ArCoreEngineStatus = ArCoreEngineStatus.ACTIVE,
+    arCoreStatusMessage: String = ""
 ) {
     val liveDistanceMeters by viewModel.liveDistanceMeters.collectAsStateWithLifecycle()
     val selectedUnit by viewModel.selectedUnit.collectAsStateWithLifecycle()
 
-    // Pulse & radar animations strictly active when required (lazy animation state)
+    val isScanningPlanes = arCoreStatus == ArCoreEngineStatus.ACTIVE &&
+        !isSnapped &&
+        !isWaitingForSecondPoint &&
+        !isMeasurementAvailable
+
     val infiniteTransition = rememberInfiniteTransition(label = "GuidancePillPulse")
     val pulseScale by if (isSnapped) {
         infiniteTransition.animateFloat(
-            initialValue = 0.95f,
-            targetValue = 1.05f,
+            initialValue = 0.94f,
+            targetValue = 1.08f,
             animationSpec = infiniteRepeatable(
-                animation = tween(1000, easing = FastOutSlowInEasing),
+                animation = tween(900, easing = FastOutSlowInEasing),
                 repeatMode = RepeatMode.Reverse
             ),
             label = "pulseScale"
@@ -66,21 +81,7 @@ fun MeasurementGuidancePill(
     } else {
         remember { mutableFloatStateOf(1.0f) }
     }
-    val radarRotation by if (!hasCapturedPoints && planesCount == 0) {
-        infiniteTransition.animateFloat(
-            initialValue = 0f,
-            targetValue = 360f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(2800, easing = LinearEasing),
-                repeatMode = RepeatMode.Restart
-            ),
-            label = "radarRotation"
-        )
-    } else {
-        remember { mutableFloatStateOf(0f) }
-    }
 
-    // Compute current guidance step state
     val (icon: ImageVector, title: String, subtitle: String, accentColor: Color) = remember(
         planesCount,
         hasCapturedPoints,
@@ -90,19 +91,35 @@ fun MeasurementGuidancePill(
         isSnapped,
         subMode,
         autoDetectedType,
-        liveDistanceMeters
+        liveDistanceMeters,
+        arCoreStatus,
+        arCoreStatusMessage
     ) {
         when {
-            // Snapped state takes priority for vertex magnetic pull
+            arCoreStatus == ArCoreEngineStatus.NEEDS_INSTALLATION -> {
+                Quad(
+                    Icons.Rounded.DownloadForOffline,
+                    "需先安裝 Google ARCore",
+                    "com.google.ar.core",
+                    Color(0xFFF59E0B)
+                )
+            }
+            arCoreStatus == ArCoreEngineStatus.UNSUPPORTED || arCoreStatus == ArCoreEngineStatus.ERROR -> {
+                Quad(
+                    Icons.Rounded.WarningAmber,
+                    arCoreStatusMessage.ifBlank { "ARCore 尚未就緒" },
+                    "",
+                    Color(0xFFEF4444)
+                )
+            }
             isSnapped -> {
                 Quad(
                     Icons.Rounded.AllInclusive,
                     "已磁吸端點",
                     "已對齊現有端點，點擊「＋」完美閉合",
-                    Color(0xFF38BDF8) // Electric Sky Blue
+                    Color(0xFF38BDF8)
                 )
             }
-            // Actively drawing line segment (odd number of points: 1, 3, 5...)
             isWaitingForSecondPoint -> {
                 val distStr = liveDistanceMeters?.let { viewModel.formatLength(it, selectedUnit) } ?: "量測中..."
                 when (subMode) {
@@ -110,23 +127,22 @@ fun MeasurementGuidancePill(
                         Icons.Rounded.Height,
                         "向頂部延伸垂直高度",
                         "目前高程：$distStr · 對齊後點擊「＋」",
-                        Color(0xFFF59E0B) // Amber
+                        Color(0xFFF59E0B)
                     )
                     1 -> Quad(
                         Icons.Rounded.SquareFoot,
                         "設定多邊形第 ${capturedPointsCount + 1} 個頂點",
                         "當前線段：$distStr · 點擊「＋」新增",
-                        Color(0xFF10B981) // Emerald Green
+                        Color(0xFF10B981)
                     )
                     else -> Quad(
                         Icons.Rounded.Straighten,
                         "向終點延伸線段",
                         "即時長度：$distStr · 點擊「＋」確定",
-                        Color(0xFF06B6D4) // Cyan
+                        Color(0xFF06B6D4)
                     )
                 }
             }
-            // Ready to pin start point (surface is detected and stable)
             isMeasurementAvailable -> {
                 val nextSegment = (capturedPointsCount / 2) + 1
                 val role = if (capturedPointsCount == 0) "起點" else "線段 $nextSegment 起點"
@@ -134,68 +150,88 @@ fun MeasurementGuidancePill(
                     Icons.Rounded.Adjust,
                     role,
                     "瞄準目標表面，點擊「＋」按鈕定點",
-                    Color(0xFF3B82F6) // Bright Indigo Blue
+                    Color(0xFF3B82F6)
                 )
             }
-            // Searching for surface planes in space
             else -> {
                 Quad(
                     Icons.Rounded.Radar,
                     "正在辨識空間平面",
                     "請握持手機平緩平移掃描周圍地面或桌面",
-                    Color(0xFFA855F7) // Purple
+                    Color(0xFFA855F7)
                 )
             }
         }
     }
 
+    val animatedAccent by animateColorAsState(
+        targetValue = accentColor,
+        animationSpec = ExpressiveMotion.effectsDefault(),
+        label = "guidanceAccentColor"
+    )
+    val pillScale by animateFloatAsState(
+        targetValue = if (isSnapped) 1.04f else 1.0f,
+        animationSpec = ExpressiveMotion.spatialFast(),
+        label = "guidancePillPopScale"
+    )
+
     Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = Color(0xB80F172A), // Dark Glassmorphism 72% opacity
-        border = BorderStroke(0.8.dp, accentColor.copy(alpha = 0.35f)),
+        shape = RoundedCornerShape(22.dp),
+        color = Color(0xBD0F172A),
+        border = BorderStroke(1.dp, animatedAccent.copy(alpha = 0.42f)),
         shadowElevation = 0.dp,
         modifier = modifier
             .padding(horizontal = 8.dp)
+            .graphicsLayer {
+                scaleX = pillScale
+                scaleY = pillScale
+            }
+            .animateContentSize(animationSpec = ExpressiveMotion.spatialDefault())
             .testTag("measurement_guidance_pill")
     ) {
         Row(
-            modifier = Modifier
-                .padding(horizontal = 14.dp, vertical = 6.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Minimal Icon
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .size(24.dp)
-                    .clip(CircleShape)
-                    .background(accentColor.copy(alpha = 0.20f))
-                    .graphicsLayer {
-                        if (icon == Icons.Rounded.Radar) {
-                            rotationZ = radarRotation
-                        } else if (isSnapped) {
-                            scaleX = pulseScale
-                            scaleY = pulseScale
-                        }
-                    }
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = accentColor,
-                    modifier = Modifier.size(14.dp)
+            if (isScanningPlanes) {
+                ExpressiveContainedLoadingIndicator(
+                    containerSize = 26.dp,
+                    indicatorSize = 15.dp,
+                    containerColor = animatedAccent.copy(alpha = 0.22f),
+                    indicatorColor = animatedAccent
                 )
+            } else {
+                val badgeShape = if (isSnapped) ExpressiveCookie8Shape else CircleShape
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(26.dp)
+                        .clip(badgeShape)
+                        .background(animatedAccent.copy(alpha = 0.22f))
+                        .graphicsLayer {
+                            if (isSnapped) {
+                                scaleX = pulseScale
+                                scaleY = pulseScale
+                            }
+                        }
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = animatedAccent,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
             }
 
-            // Streamlined single-focus message
             Text(
                 text = title,
                 fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
+                fontWeight = FontWeight.Bold,
                 color = Color.White,
                 maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false)
             )
 
@@ -209,8 +245,8 @@ fun MeasurementGuidancePill(
                     )
                     Text(
                         text = valuePart,
+                        style = ExpressiveTypography.labelNumeral,
                         fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
                         color = Color(0xFFE2E8F0),
                         maxLines = 1
                     )

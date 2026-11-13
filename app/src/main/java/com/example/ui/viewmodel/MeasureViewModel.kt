@@ -286,18 +286,21 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                         camMgr.preferredAspectRatio = modernArEngine.selectedCameraImageSize?.let {
                             if (it.height > 0) it.width.toFloat() / it.height.toFloat() else null
                         }
+                        camMgr.preferredFpsRange = modernArEngine.selectedCameraFpsRange
                     }
                     // Keep _isMeasurementAvailable driven truthfully by tracked surface hits once frames arrive
-                    Log.i("MeasureViewModel", "Google ARCore session initialized (camId=${modernArEngine.selectedCameraId}).")
+                    Log.i("MeasureViewModel", "Google ARCore session initialized (camId=${modernArEngine.selectedCameraId}, fps=${modernArEngine.selectedCameraFpsRange}).")
                 } else {
-                    _isMeasurementAvailable.value = true
+                    _isMeasurementAvailable.value = false
                     updateFallbackCameraMatrices()
-                    Log.i("MeasureViewModel", "ARCore session unavailable, optical & sensor fusion measurement active.")
+                    Log.w("MeasureViewModel", "ARCore session unavailable (status=${modernArEngine.arCoreStatus.value}); measurement gated until ARCore is ready.")
                 }
             }
             created
         }
     }
+
+    fun isArCoreInstalled(): Boolean = ModernArEngine.isArCorePackageInstalled(app)
 
     fun checkAndInitArCore(activity: Activity? = null, forceRetry: Boolean = false) {
         if (!isCameraPermissionGranted()) return
@@ -314,6 +317,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                         sharedCam = sc,
                         cameraId = modernArEngine.selectedCameraId,
                         imageSize = modernArEngine.selectedCameraImageSize,
+                        fpsRange = modernArEngine.selectedCameraFpsRange,
                         onBeforeCloseCamera = { modernArEngine.pause() }
                     )
                 }
@@ -940,7 +944,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         _toastMessage.tryEmit(if (enabled) "已啟用 Full HD 高畫質採樣" else "已切換至 720p 效能省電畫質")
     }
 
-    // Vulkan 1.3 AR Hardware Accelerated Graphics Engine
+    // Vulkan 1.4 AR Hardware Accelerated Graphics Engine
     val vulkanGraphicsPipeline = VulkanArGraphicsPipeline(app)
 
     val isVulkanGraphicsEnabled = MutableStateFlow(prefs.getBoolean("vulkan_graphics_enabled", true))
@@ -1270,6 +1274,16 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         // 3. Synchronously extract frame data (view/projection matrices, detected planes, light, stability)
         val frameData = engine.extractFrameData(frame, centerHit)
         onArFrameUpdated(frameData)
+
+        if (isVulkanGraphicsEnabled.value) {
+            vulkanGraphicsPipeline.recordAndExecuteDrawPass(
+                viewMatrix = vulkanViewMatrixBuffer,
+                projectionMatrix = vulkanProjMatrixBuffer,
+                capturedPoints = getCapturedPointsSnapshot(),
+                liveTarget = _liveTargetPoint.value,
+                boxCorners = null
+            )
+        }
 
         if (centerHit != null) {
             lastValidHitTimestampMs = System.currentTimeMillis()
@@ -1788,9 +1802,14 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         if (manager != null) {
             manager.onCameraUnavailable = {
                 _isCameraSimulationActive.value = true
-                _isMeasurementAvailable.value = true
-                updateFallbackCameraMatrices()
-                _toastMessage.tryEmit("已自動切換至虛擬 3D 模擬測量模式（無實體相機環境）")
+                if (ModernArEngine.isArCorePackageInstalled(app)) {
+                    _isMeasurementAvailable.value = true
+                    updateFallbackCameraMatrices()
+                    _toastMessage.tryEmit("已自動切換至虛擬 3D 模擬測量模式（無實體相機環境）")
+                } else {
+                    _isMeasurementAvailable.value = false
+                    _toastMessage.tryEmit("⚠️ 請先安裝 Google Play Services for AR (com.google.ar.core)")
+                }
                 Log.i("MeasureViewModel", "Camera unavailable callback invoked, simulation mode active.")
             }
             manager.onArSessionReadyToResume = {
@@ -1806,6 +1825,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 manager.preferredAspectRatio = modernArEngine.selectedCameraImageSize?.let {
                     if (it.height > 0) it.width.toFloat() / it.height.toFloat() else null
                 }
+                manager.preferredFpsRange = modernArEngine.selectedCameraFpsRange
             }
             _isFrontCamera.value = manager.isFrontFacing
             _isHorizontallyMirrored.value = manager.isHorizontallyMirrored || manager.isFrontFacing
@@ -1860,9 +1880,25 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private fun applyTorchWithBrightness(context: Context, newState: Boolean, brightness: Float) {
         var success = false
+        val isArSharedActive = highSpeedCamera2Manager?.isSharedCameraArActive() == true ||
+            (modernArEngine.session != null && modernArEngine.isSessionResumed && !_isFrontCamera.value)
 
-        // 1. Android 13+ (API 33+) Hardware Torch Strength Level via CameraManager
-        if (!success && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+        // 0. When ARCore SharedCamera owns the repeating CaptureSession, route directly through ARCore flashMode
+        if (isArSharedActive && modernArEngine.session != null && modernArEngine.isSessionResumed && !_isFrontCamera.value) {
+            success = modernArEngine.setTorchMode(newState)
+        }
+
+        // 1. Standalone HighSpeedCamera2Manager CaptureRequest repeating update
+        if (!success && highSpeedCamera2Manager != null) {
+            try {
+                success = highSpeedCamera2Manager?.toggleTorch(newState) == true
+            } catch (e: Exception) {
+                Log.w("MeasureViewModel", "HighSpeedCamera2Manager toggleTorch error: ${e.message}")
+            }
+        }
+
+        // 2. Android 13+ (API 33+) Hardware Torch Strength Level via CameraManager (when camera is idle / not owned by ARCore)
+        if (!success && !isArSharedActive && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             try {
                 val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
                 val targetCameraId = cameraManager.cameraIdList.firstOrNull { id ->
@@ -1891,8 +1927,8 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             }
         }
 
-        // 2. Standard CameraManager setTorchMode
-        if (!success) {
+        // 3. Standard CameraManager setTorchMode fallback
+        if (!success && !isArSharedActive) {
             try {
                 val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
                 val targetCameraId = cameraManager.cameraIdList.firstOrNull { id ->
@@ -1913,17 +1949,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             }
         }
 
-        // 3. HighSpeedCamera2Manager
-        if (!success && highSpeedCamera2Manager != null) {
-            try {
-                highSpeedCamera2Manager?.toggleTorch(newState)
-                success = true
-            } catch (e: Exception) {
-                Log.w("MeasureViewModel", "HighSpeedCamera2Manager toggleTorch error: ${e.message}")
-            }
-        }
-
-        // 4. CameraX
+        // 4. CameraX fallback
         if (!success && cameraControl != null) {
             try {
                 cameraControl?.enableTorch(newState)
@@ -1933,18 +1959,20 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             }
         }
 
-        // 5. ARCore flashMode
+        // 5. Final ARCore flashMode attempt
         if (!success && modernArEngine.session != null && modernArEngine.isSessionResumed && !_isFrontCamera.value) {
-            val arOk = modernArEngine.setTorchMode(newState)
-            if (arOk) {
-                success = true
-            }
+            success = modernArEngine.setTorchMode(newState)
         }
 
-        _isTorchOn.value = newState
-        triggerHapticFeedback()
-        val percent = (brightness * 100).toInt()
-        _toastMessage.tryEmit(if (newState) "已開啟手電筒補光 (${percent}%)" else "已關閉手電筒")
+        if (!newState || success) {
+            _isTorchOn.value = newState
+            triggerHapticFeedback()
+            val percent = (brightness * 100).toInt()
+            _toastMessage.tryEmit(if (newState) "已開啟手電筒補光 (${percent}%)" else "已關閉手電筒")
+        } else {
+            _isTorchOn.value = false
+            _toastMessage.tryEmit("⚠️ 目前相機模式或硬體不支援手電筒補光")
+        }
     }
 
     fun turnOffTorch(context: Context? = null) {
@@ -2315,6 +2343,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             getApplication<Application>().unregisterReceiver(batteryReceiver)
         } catch (_: Exception) {}
         turnOffTorch(getApplication())
+        vulkanGraphicsPipeline.release()
         modernArEngine.destroy()
         try {
             highSpeedCamera2Manager?.closeCamera()

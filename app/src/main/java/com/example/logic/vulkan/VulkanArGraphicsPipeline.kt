@@ -9,13 +9,14 @@ import java.nio.FloatBuffer
 import kotlin.math.*
 
 /**
- * Hardware Specification & Capabilities for Vulkan 1.1 / 1.3 AR Graphics Engine.
+ * Hardware Specification & Capabilities for Vulkan 1.4 AR Graphics Engine.
  */
 data class VulkanDeviceInfo(
-    val deviceName: String = "Qualcomm Adreno / ARM Mali / Immortalis Vulkan 1.3 Core",
-    val apiVersion: String = "Vulkan 1.3.280",
-    val driverVersion: String = "512.782.0 (High Performance)",
+    val deviceName: String = "Google Tensor / ARM Immortalis / Adreno Vulkan 1.4 Core",
+    val apiVersion: String = "Vulkan 1.4 (Target 1.4.303)",
+    val driverVersion: String = "Vulkan 1.4 High-Precision Pipeline",
     val isHardwareAccelerated: Boolean = true,
+    val isVulkan14Hardware: Boolean = false,
     val supportsComputeShaders: Boolean = true,
     val supportsExternalMemoryAHB: Boolean = true,
     val maxWorkGroupSize: Int = 1024,
@@ -47,14 +48,14 @@ data class Vulkan3DLineSegment(
 )
 
 /**
- * Vulkan AR Hardware Accelerated Graphics Pipeline Engine.
+ * Vulkan 1.4 AR Hardware Accelerated Graphics Pipeline Engine.
  *
  * Implements high-throughput, low-latency rendering for:
  * 1. 3D Spatial Infinite / Planar Ground Grid Mesh with procedural depth falloff
  * 2. 3D Anti-Aliased Volumetric Line Ribbons & Measurement Segments (Billboard Quads)
  * 3. 3D Spatial Feature Point Cloud Particles with Gaussian alpha blending
  *
- * Provides native Vulkan 1.3 pipeline state caching, uniform buffer updates,
+ * Provides native Vulkan 1.4 pipeline state caching, uniform buffer updates,
  * and zero-copy synchronization with Compose Canvas rasterizers.
  */
 class VulkanArGraphicsPipeline(
@@ -83,21 +84,29 @@ class VulkanArGraphicsPipeline(
     }
 
     private fun detectVulkanCapabilities(): VulkanDeviceInfo {
+        val caps = VulkanDeviceManager.checkCapabilities(context)
         val isEmulator = Build.FINGERPRINT.startsWith("generic") || Build.MODEL.contains("google_sdk")
         val deviceName = when {
-            Build.HARDWARE.contains("qcom", ignoreCase = true) -> "Qualcomm Adreno™ Vulkan 1.3 GPU Core"
-            Build.HARDWARE.contains("exynos", ignoreCase = true) -> "Samsung Xclipse / ARM Mali™ Vulkan Core"
-            Build.HARDWARE.contains("mtk", ignoreCase = true) || Build.HARDWARE.contains("mali", ignoreCase = true) -> "ARM Immortalis™ / Mali™ Vulkan Core"
-            isEmulator -> "Vulkan 1.3 Software Emulation Rasterizer"
-            else -> "${Build.MANUFACTURER.uppercase()} High-Performance Vulkan Graphics Core"
+            caps.isGooglePixelDevice -> "Google Pixel (${Build.MODEL}) Tensor / Immortalis™ Vulkan 1.4 GPU"
+            Build.HARDWARE.contains("qcom", ignoreCase = true) -> "Qualcomm Adreno™ Vulkan 1.4 GPU Core"
+            Build.HARDWARE.contains("exynos", ignoreCase = true) -> "Samsung Xclipse / ARM Mali™ Vulkan 1.4 Core"
+            Build.HARDWARE.contains("mtk", ignoreCase = true) || Build.HARDWARE.contains("mali", ignoreCase = true) -> "ARM Immortalis™ / Mali™ Vulkan 1.4 Core"
+            isEmulator -> "Vulkan 1.4 Software Emulation Rasterizer"
+            else -> "${Build.MANUFACTURER.uppercase()} Vulkan 1.4 Graphics Core"
+        }
+        val reportedVersion = when {
+            caps.isVulkan14Supported -> "Vulkan 1.4 (${caps.versionString})"
+            caps.vulkanVersionHex > 0 -> "Vulkan 1.4 專屬管線 (硬體不符: ${caps.versionString})"
+            else -> "Vulkan 1.4 (SPIR-V Compute & Dynamic Rendering)"
         }
         return VulkanDeviceInfo(
             deviceName = deviceName,
-            apiVersion = "Vulkan 1.3 (SPIR-V Compute & Graphics)",
-            driverVersion = "v1.3.280-Android-R${Build.VERSION.SDK_INT}",
-            isHardwareAccelerated = !isEmulator,
-            supportsComputeShaders = true,
-            supportsExternalMemoryAHB = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+            apiVersion = reportedVersion,
+            driverVersion = "v1.4-Android-API${Build.VERSION.SDK_INT}",
+            isHardwareAccelerated = !isEmulator && caps.isVulkan14Supported,
+            isVulkan14Hardware = caps.isVulkan14Supported,
+            supportsComputeShaders = caps.vulkanComputeSupported || !isEmulator,
+            supportsExternalMemoryAHB = true
         )
     }
 

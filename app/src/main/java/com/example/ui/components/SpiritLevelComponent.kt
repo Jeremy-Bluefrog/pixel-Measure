@@ -20,6 +20,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -47,7 +49,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.ui.theme.ExpressiveCookie8Shape
+import com.example.ui.theme.ExpressiveMotion
+import com.example.ui.theme.ExpressiveTypography
 import com.example.ui.theme.GoogleSansRounded
+import com.example.ui.theme.rememberExpressiveConnectedShape
 import com.example.ui.viewmodel.MeasureViewModel
 import kotlinx.coroutines.isActive
 import java.util.Locale
@@ -257,7 +263,7 @@ fun SpiritLevelComponent(
     val levelColor = Color(0xFF00E676) // Radiant Emerald Green for level state
     val accentColor by animateColorAsState(
         targetValue = if (stateHolder.isLevel) levelColor else MaterialTheme.colorScheme.primary,
-        animationSpec = tween(220),
+        animationSpec = ExpressiveMotion.effectsDefault(),
         label = "levelAccentColor"
     )
 
@@ -291,11 +297,21 @@ fun SpiritLevelComponent(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                val logoScale by animateFloatAsState(
+                    targetValue = if (stateHolder.isLevel) 1.08f else 1.0f,
+                    animationSpec = ExpressiveMotion.spatialFast(),
+                    label = "levelLogoPop"
+                )
                 Surface(
-                    shape = CircleShape,
-                    color = accentColor.copy(alpha = 0.12f),
-                    border = BorderStroke(1.dp, accentColor.copy(alpha = 0.35f)),
-                    modifier = Modifier.size(38.dp)
+                    shape = ExpressiveCookie8Shape,
+                    color = accentColor.copy(alpha = 0.16f),
+                    border = BorderStroke(1.dp, accentColor.copy(alpha = 0.42f)),
+                    modifier = Modifier
+                        .size(42.dp)
+                        .graphicsLayer {
+                            scaleX = logoScale
+                            scaleY = logoScale
+                        }
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
@@ -332,53 +348,77 @@ fun SpiritLevelComponent(
                 }
             }
 
-            // Quick Audio & Save Actions
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                // Sound Toggle
-                IconButton(
+            // Quick Audio & Save Actions as M3 Expressive Connected Pair
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                val soundInteraction = remember { MutableInteractionSource() }
+                val isSoundPressed by soundInteraction.collectIsPressedAsState()
+                val soundShape = rememberExpressiveConnectedShape(
+                    index = 0,
+                    count = 2,
+                    isActive = isAudioEnabled,
+                    isPressed = isSoundPressed,
+                    outerCorner = 21.dp,
+                    innerRestingCorner = 6.dp,
+                    innerActiveCorner = 16.dp
+                )
+                Surface(
                     onClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         isAudioEnabled = !isAudioEnabled
                     },
+                    interactionSource = soundInteraction,
+                    shape = soundShape,
+                    color = if (isAudioEnabled) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainer,
+                    border = BorderStroke(
+                        1.dp,
+                        if (isAudioEnabled) MaterialTheme.colorScheme.primary.copy(alpha = 0.4f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
+                    ),
                     modifier = Modifier
                         .size(42.dp)
-                        .background(
-                            if (isAudioEnabled) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainer,
-                            CircleShape
-                        )
-                        .border(
-                            1.dp,
-                            if (isAudioEnabled) MaterialTheme.colorScheme.primary.copy(alpha = 0.4f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f),
-                            CircleShape
-                        )
                         .testTag("level_btn_sound")
                 ) {
-                    Icon(
-                        imageVector = if (isAudioEnabled) Icons.Rounded.VolumeUp else Icons.Rounded.VolumeOff,
-                        contentDescription = "提示音開關",
-                        tint = if (isAudioEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
-                    )
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = if (isAudioEnabled) Icons.Rounded.VolumeUp else Icons.Rounded.VolumeOff,
+                            contentDescription = "提示音開關",
+                            tint = if (isAudioEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
 
-                // Quick Save Record Button
-                IconButton(
+                val saveInteraction = remember { MutableInteractionSource() }
+                val isSavePressed by saveInteraction.collectIsPressedAsState()
+                val saveShape = rememberExpressiveConnectedShape(
+                    index = 1,
+                    count = 2,
+                    isActive = showSaveDialog,
+                    isPressed = isSavePressed,
+                    outerCorner = 21.dp,
+                    innerRestingCorner = 6.dp,
+                    innerActiveCorner = 16.dp
+                )
+                Surface(
                     onClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         recordNotesInput = ""
                         showSaveDialog = true
                     },
+                    interactionSource = saveInteraction,
+                    shape = saveShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
                     modifier = Modifier
                         .size(42.dp)
-                        .background(MaterialTheme.colorScheme.primaryContainer, CircleShape)
                         .testTag("level_btn_save")
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.BookmarkAdd,
-                        contentDescription = "儲存紀錄",
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.size(20.dp)
-                    )
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Rounded.BookmarkAdd,
+                            contentDescription = "儲存紀錄",
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
             }
         }
@@ -442,9 +482,7 @@ fun SpiritLevelComponent(
                     Row(verticalAlignment = Alignment.Bottom) {
                         Text(
                             text = String.format(Locale.US, "%.1f", stateHolder.displayDeviation),
-                            style = MaterialTheme.typography.displaySmall,
-                            fontWeight = FontWeight.Black,
-                            fontFamily = GoogleSansRounded,
+                            style = ExpressiveTypography.displayNumeralHero,
                             color = if (stateHolder.isLevel) levelColor else MaterialTheme.colorScheme.onSurface
                         )
                         Text(
@@ -475,14 +513,48 @@ fun SpiritLevelComponent(
             }
         }
 
-        // 4. Primary Tactile Bottom Controls: Zero (Calibrate) & Hold (Freeze)
+        // 4. Primary Tactile Bottom Controls: M3 Expressive Connected Button Group
+        val zeroInteraction = remember { MutableInteractionSource() }
+        val isZeroPressed by zeroInteraction.collectIsPressedAsState()
+        val zeroShape = rememberExpressiveConnectedShape(
+            index = 0,
+            count = 2,
+            isActive = isRelativeZeroActive,
+            isPressed = isZeroPressed,
+            outerCorner = 24.dp,
+            innerRestingCorner = 8.dp,
+            innerActiveCorner = 18.dp
+        )
+        val zeroScale by animateFloatAsState(
+            targetValue = if (isZeroPressed) 0.96f else 1.0f,
+            animationSpec = ExpressiveMotion.spatialFast(),
+            label = "zeroScale"
+        )
+
+        val holdInteraction = remember { MutableInteractionSource() }
+        val isHoldPressed by holdInteraction.collectIsPressedAsState()
+        val holdShape = rememberExpressiveConnectedShape(
+            index = 1,
+            count = 2,
+            isActive = isHoldLocked,
+            isPressed = isHoldPressed,
+            outerCorner = 24.dp,
+            innerRestingCorner = 8.dp,
+            innerActiveCorner = 18.dp
+        )
+        val holdScale by animateFloatAsState(
+            targetValue = if (isHoldPressed) 0.96f else 1.0f,
+            animationSpec = ExpressiveMotion.spatialFast(),
+            label = "holdScale"
+        )
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .widthIn(max = 600.dp)
                 .padding(horizontal = 20.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            // Relative Zero Calibration Button
             Button(
                 onClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -494,11 +566,16 @@ fun SpiritLevelComponent(
                         zeroOffsetRoll = stateHolder.displayRoll + zeroOffsetRoll
                     }
                 },
+                interactionSource = zeroInteraction,
                 modifier = Modifier
                     .weight(1f)
-                    .height(52.dp)
+                    .height(54.dp)
+                    .graphicsLayer {
+                        scaleX = zeroScale
+                        scaleY = zeroScale
+                    }
                     .testTag("level_btn_zero"),
-                shape = RoundedCornerShape(16.dp),
+                shape = zeroShape,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = if (isRelativeZeroActive) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
                     contentColor = if (isRelativeZeroActive) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
@@ -522,7 +599,6 @@ fun SpiritLevelComponent(
                 )
             }
 
-            // Hold / Freeze Button
             Button(
                 onClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -534,11 +610,16 @@ fun SpiritLevelComponent(
                         isHoldLocked = false
                     }
                 },
+                interactionSource = holdInteraction,
                 modifier = Modifier
                     .weight(1f)
-                    .height(52.dp)
+                    .height(54.dp)
+                    .graphicsLayer {
+                        scaleX = holdScale
+                        scaleY = holdScale
+                    }
                     .testTag("level_btn_hold"),
-                shape = RoundedCornerShape(16.dp),
+                shape = holdShape,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = if (isHoldLocked) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.primaryContainer,
                     contentColor = if (isHoldLocked) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer
@@ -691,9 +772,9 @@ private fun MiniAxisTrackPill(
             Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = String.format(Locale.US, "%+.1f°", angle),
-                style = MaterialTheme.typography.bodyMedium,
+                style = ExpressiveTypography.labelNumeral,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
-                fontFamily = FontFamily.Monospace,
                 color = if (isLevel) levelColor else MaterialTheme.colorScheme.onSurface
             )
 

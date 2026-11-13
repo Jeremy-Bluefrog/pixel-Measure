@@ -3,10 +3,14 @@ package com.example.ui.screens
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -19,7 +23,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
@@ -34,7 +40,14 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.logic.ShareUtility
 import com.example.logic.TranslationManager
+import com.example.ui.components.ExpressiveButtonOption
+import com.example.ui.components.ExpressiveConnectedButtonGroup
+import com.example.ui.components.GradientBlurTopBar
 import com.example.ui.components.LanguageSelectionDialog
+import com.example.ui.components.gradientBlurSource
+import com.example.ui.components.rememberGradientBlurBackdropState
+import com.example.ui.theme.ExpressiveCookie8Shape
+import com.example.ui.theme.ExpressiveMotion
 import com.example.ui.theme.GroupedPosition
 import com.example.ui.theme.groupedItemShape
 import com.example.ui.viewmodel.MeasureViewModel
@@ -101,78 +114,92 @@ fun SettingsScreen(
         TranslationManager.supportedLanguages.find { it.code == currentLanguage }?.name ?: currentLanguage
     }
 
+    val settingsBackdropState = rememberGradientBlurBackdropState()
+
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
             .testTag("settings_screen"),
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = "設定",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
-                    )
-                },
-                navigationIcon = {
-                    IconButton(
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onNavigateBack()
-                        },
-                        modifier = Modifier.testTag("settings_back_btn")
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                            contentDescription = "返回測量"
+            GradientBlurTopBar(
+                backdropState = settingsBackdropState,
+                baseColor = MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = 0.84f),
+                blurRadius = 24.dp,
+                modifier = Modifier.testTag("settings_gradient_blur_topbar")
+            ) {
+                TopAppBar(
+                    title = {
+                        Text(
+                            text = "設定",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
                         )
-                    }
-                },
-                actions = {
-                    // Language switcher button
-                    IconButton(
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            showLanguageDialog = true
-                        },
-                        modifier = Modifier.testTag("settings_language_btn")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Language,
-                            contentDescription = "切換語言",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
+                    },
+                    navigationIcon = {
+                        IconButton(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onNavigateBack()
+                            },
+                            modifier = Modifier.testTag("settings_back_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                                contentDescription = "返回測量"
+                            )
+                        }
+                    },
+                    actions = {
+                        // Language switcher button
+                        IconButton(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                showLanguageDialog = true
+                            },
+                            modifier = Modifier.testTag("settings_language_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Language,
+                                contentDescription = "切換語言",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
 
-                    // Reset defaults button
-                    IconButton(
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            showResetDefaultsConfirmDialog = true
-                        },
-                        modifier = Modifier.testTag("settings_reset_defaults_btn")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.RestartAlt,
-                            contentDescription = "重設預設值",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    scrolledContainerColor = MaterialTheme.colorScheme.surfaceContainer
+                        // Reset defaults button
+                        IconButton(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                showResetDefaultsConfirmDialog = true
+                            },
+                            modifier = Modifier.testTag("settings_reset_defaults_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.RestartAlt,
+                                contentDescription = "重設預設值",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color.Transparent,
+                        scrolledContainerColor = Color.Transparent
+                    )
                 )
-            )
+            }
         },
         containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
     ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
+                .gradientBlurSource(settingsBackdropState)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .padding(
+                    top = innerPadding.calculateTopPadding() + 8.dp,
+                    bottom = innerPadding.calculateBottomPadding() + 8.dp,
+                    start = 16.dp,
+                    end = 16.dp
+                )
                 .navigationBarsPadding(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -411,37 +438,24 @@ fun SettingsScreen(
                             )
                             Spacer(modifier = Modifier.height(8.dp))
 
-                            val unitsList = listOf(
-                                "cm" to "公分 (cm)",
-                                "m" to "公尺 (m)",
-                                "in" to "英吋 (in)",
-                                "ft" to "英呎 (ft)"
-                            )
-
-                            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                                unitsList.forEachIndexed { index, (unitCode, label) ->
-                                    val isSelected = selectedUnit == unitCode
-                                    SegmentedButton(
-                                        selected = isSelected,
-                                        onClick = {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            viewModel.setSelectedUnit(unitCode)
-                                        },
-                                        shape = SegmentedButtonDefaults.itemShape(
-                                            index = index,
-                                            count = unitsList.size
-                                        ),
-                                        label = {
-                                            Text(
-                                                text = label,
-                                                style = MaterialTheme.typography.labelMedium,
-                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                                            )
-                                        },
-                                        modifier = Modifier.testTag("unit_chip_$unitCode")
-                                    )
-                                }
+                            val unitOptions = remember {
+                                listOf(
+                                    ExpressiveButtonOption("cm", "公分 (cm)", testTag = "unit_chip_cm"),
+                                    ExpressiveButtonOption("m", "公尺 (m)", testTag = "unit_chip_m"),
+                                    ExpressiveButtonOption("in", "英吋 (in)", testTag = "unit_chip_in"),
+                                    ExpressiveButtonOption("ft", "英呎 (ft)", testTag = "unit_chip_ft")
+                                )
                             }
+
+                            ExpressiveConnectedButtonGroup(
+                                options = unitOptions,
+                                selectedValue = selectedUnit,
+                                onValueSelected = { unitCode ->
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.setSelectedUnit(unitCode)
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            )
 
                             HorizontalDivider(
                                 modifier = Modifier.padding(vertical = 12.dp),
@@ -569,36 +583,24 @@ fun SettingsScreen(
                             )
                             Spacer(modifier = Modifier.height(8.dp))
 
-                            val ratios = listOf(
-                                "FULL" to "全螢幕",
-                                "16_9" to "16:9",
-                                "4_3" to "4:3",
-                                "1_1" to "1:1"
-                            )
-
-                            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                                ratios.forEachIndexed { index, (key, label) ->
-                                    val isSelected = cameraAspectRatio == key
-                                    SegmentedButton(
-                                        selected = isSelected,
-                                        onClick = {
-                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                            viewModel.setCameraAspectRatio(key)
-                                        },
-                                        shape = SegmentedButtonDefaults.itemShape(
-                                            index = index,
-                                            count = ratios.size
-                                        ),
-                                        label = {
-                                            Text(
-                                                text = label,
-                                                style = MaterialTheme.typography.labelMedium,
-                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                                            )
-                                        }
-                                    )
-                                }
+                            val ratioOptions = remember {
+                                listOf(
+                                    ExpressiveButtonOption("FULL", "全螢幕"),
+                                    ExpressiveButtonOption("16_9", "16:9"),
+                                    ExpressiveButtonOption("4_3", "4:3"),
+                                    ExpressiveButtonOption("1_1", "1:1")
+                                )
                             }
+
+                            ExpressiveConnectedButtonGroup(
+                                options = ratioOptions,
+                                selectedValue = cameraAspectRatio,
+                                onValueSelected = { key ->
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    viewModel.setCameraAspectRatio(key)
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            )
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
                                 text = if (cameraAspectRatio == "FULL") "✓ 目前為全螢幕無遮罩模式，視野完整填滿螢幕" else "• 目前啟用 $cameraAspectRatio 取景構圖遮罩（上下或兩側呈現半透明黑邊，可切換為「全螢幕」消除）",
@@ -765,8 +767,8 @@ fun SettingsScreen(
 
                                     SettingSwitchRow(
                                         icon = Icons.Rounded.Bolt,
-                                        title = "Vulkan 1.3 空間網格硬體加速",
-                                        subtitle = "GPU 批次頂點渲染與繪圖管線",
+                                        title = "Vulkan 1.4 空間網格硬體加速",
+                                        subtitle = "Pixel GPU 批次頂點渲染與繪圖管線 (${viewModel.vulkanGraphicsPipeline.deviceInfo.apiVersion})",
                                         checked = isVulkanGraphicsEnabled,
                                         onCheckedChange = { viewModel.setVulkanGraphicsEnabled(it) },
                                         testTag = "switch_vulkan_graphics"
@@ -776,17 +778,25 @@ fun SettingsScreen(
 
                             if (searchQuery.isEmpty()) {
                                 Spacer(modifier = Modifier.height(10.dp))
-                                TextButton(
+                                val chevronRot by animateFloatAsState(
+                                    targetValue = if (showAdvancedSettings) 180f else 0f,
+                                    animationSpec = ExpressiveMotion.spatialFast(),
+                                    label = "advChevronRot"
+                                )
+                                FilledTonalButton(
                                     onClick = {
                                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                         showAdvancedSettings = !showAdvancedSettings
                                     },
+                                    shape = RoundedCornerShape(18.dp),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Icon(
-                                        imageVector = if (showAdvancedSettings) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                                        imageVector = Icons.Rounded.ExpandMore,
                                         contentDescription = null,
-                                        modifier = Modifier.size(18.dp)
+                                        modifier = Modifier
+                                            .size(18.dp)
+                                            .graphicsLayer { rotationZ = chevronRot }
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
@@ -1070,8 +1080,30 @@ private fun QuickPresetChip(
     isSelected: Boolean,
     onClick: () -> Unit
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val corner by animateDpAsState(
+        targetValue = when {
+            isPressed -> 12.dp
+            isSelected -> 26.dp
+            else -> 16.dp
+        },
+        animationSpec = ExpressiveMotion.spatialFast(),
+        label = "presetCorner"
+    )
+    val scale by animateFloatAsState(
+        targetValue = when {
+            isPressed -> 0.94f
+            isSelected -> 1.02f
+            else -> 1.0f
+        },
+        animationSpec = ExpressiveMotion.spatialFast(),
+        label = "presetScale"
+    )
+    val shape = RoundedCornerShape(corner)
+
     Card(
-        shape = RoundedCornerShape(16.dp),
+        shape = shape,
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerLow
         ),
@@ -1080,22 +1112,53 @@ private fun QuickPresetChip(
             color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
         ),
         modifier = Modifier
-            .widthIn(min = 135.dp)
-            .clickable(onClick = onClick)
+            .widthIn(min = 140.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(shape)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = ripple(bounded = true),
+                onClick = onClick
+            )
     ) {
-        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.labelSmall,
-                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant
-            )
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (isSelected) {
+                Surface(
+                    shape = ExpressiveCookie8Shape,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.Rounded.Check,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(12.dp)
+                        )
+                    }
+                }
+            }
+            Column {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }

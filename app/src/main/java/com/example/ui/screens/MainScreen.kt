@@ -3,7 +3,10 @@ package com.example.ui.screens
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -16,7 +19,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -33,14 +38,21 @@ import com.example.ui.components.AdaptiveNavigationRail
 import com.example.ui.components.EnableWindowBlur
 import com.example.ui.components.FloatingPillNavigationBar
 import com.example.ui.components.FloatingPillNavItem
+import com.example.ui.components.GradientBlurScrim
 import com.example.ui.components.GradientBlurTopBar
 import com.example.ui.components.ModernArCameraView
 import com.example.ui.components.RulerComponent
 import com.example.ui.components.SpiritLevelComponent
+import com.example.ui.components.gradientBlurSource
 import com.example.ui.components.hardwareBackdropBlur
+import com.example.ui.components.rememberGradientBlurBackdropState
 import com.example.ui.screens.SettingsScreen
+import com.example.ui.theme.ExpressiveCookie9Shape
+import com.example.ui.theme.ExpressiveMotion
+import com.example.ui.theme.ExpressiveTypography
 import com.example.ui.theme.getGroupedPosition
 import com.example.ui.theme.groupedItemShape
+import com.example.ui.theme.rememberExpressiveConnectedShape
 import com.example.ui.viewmodel.MeasureViewModel
 import java.io.File
 import java.text.SimpleDateFormat
@@ -169,6 +181,7 @@ fun MainScreen(viewModel: MeasureViewModel) {
             }
 
             // Primary Workspace Layout
+            val mainBackdropState = rememberGradientBlurBackdropState()
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -189,7 +202,9 @@ fun MainScreen(viewModel: MeasureViewModel) {
                     topBar = {
                         if (currentMode == 2) {
                             GradientBlurTopBar(
-                                baseColor = MaterialTheme.colorScheme.surface,
+                                backdropState = mainBackdropState,
+                                baseColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.80f),
+                                blurRadius = 24.dp,
                                 modifier = Modifier.testTag("level_top_gradient_blur_bar")
                             ) {
                                 TopAppBar(
@@ -260,19 +275,36 @@ fun MainScreen(viewModel: MeasureViewModel) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .navigationBarsPadding()
-                                    .padding(bottom = 12.dp)
                                     .testTag("bottom_segmented_bar"),
-                                contentAlignment = Alignment.Center
+                                contentAlignment = Alignment.BottomCenter
                             ) {
-                                FloatingPillNavigationBar(
-                                    selectedIndex = currentMode,
-                                    items = navItems,
-                                    onItemSelected = { id ->
-                                        viewModel.setMode(id)
-                                    },
-                                    modifier = Modifier.testTag("mode_segmented_button_row")
-                                )
+                                if (currentMode != 0) {
+                                    GradientBlurScrim(
+                                        isTop = false,
+                                        backdropState = mainBackdropState,
+                                        blurRadius = 22.dp,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(92.dp)
+                                            .align(Alignment.BottomCenter)
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .navigationBarsPadding()
+                                        .padding(bottom = 12.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    FloatingPillNavigationBar(
+                                        selectedIndex = currentMode,
+                                        items = navItems,
+                                        onItemSelected = { id ->
+                                            viewModel.setMode(id)
+                                        },
+                                        modifier = Modifier.testTag("mode_segmented_button_row")
+                                    )
+                                }
                             }
                         }
                     }
@@ -282,33 +314,22 @@ fun MainScreen(viewModel: MeasureViewModel) {
                             .fillMaxSize()
                             .padding(if (currentMode == 0 || currentMode == 1) PaddingValues(0.dp) else innerPadding)
                     ) {
-                        // Smooth Fade & Subtle Scale Transition: Camera AR (0) <-> Screen Ruler (1)
+                        // Material 3 Expressive Spring Scale & Fade Transition
                         AnimatedContent(
                             targetState = currentMode,
                             transitionSpec = {
-                                (fadeIn(
-                                    animationSpec = tween(
-                                        durationMillis = 300,
-                                        easing = CubicBezierEasing(0.0f, 0.0f, 0.2f, 1.0f)
-                                    )
-                                ) + scaleIn(
-                                    initialScale = 0.98f,
-                                    animationSpec = tween(
-                                        durationMillis = 300,
-                                        easing = CubicBezierEasing(0.0f, 0.0f, 0.2f, 1.0f)
-                                    )
-                                )).togetherWith(
-                                    fadeOut(
-                                        animationSpec = tween(
-                                            durationMillis = 200,
-                                            easing = CubicBezierEasing(0.4f, 0.0f, 1.0f, 1.0f)
-                                        )
-                                    )
+                                (fadeIn(animationSpec = ExpressiveMotion.effectsDefault()) +
+                                    scaleIn(
+                                        initialScale = 0.96f,
+                                        animationSpec = ExpressiveMotion.spatialDefault()
+                                    )).togetherWith(
+                                    fadeOut(animationSpec = ExpressiveMotion.effectsFast())
                                 )
                             },
                             contentKey = { it },
                             modifier = Modifier
                                 .fillMaxSize()
+                                .gradientBlurSource(mainBackdropState)
                                 .hardwareBackdropBlur(
                                     enabled = isOverlayActive,
                                     blurRadius = hardwareBlurRadius
@@ -457,17 +478,17 @@ fun MainScreen(viewModel: MeasureViewModel) {
         )
     }
 
-    // Dedicated Full-Page Settings Screen (M3 Page Navigation)
+    // Dedicated Full-Page Settings Screen (Standard Android System-Built-in Transition)
     androidx.compose.animation.AnimatedVisibility(
         visible = showSettingsDialog,
         enter = slideInHorizontally(
             initialOffsetX = { it },
             animationSpec = tween(300, easing = FastOutSlowInEasing)
-        ) + fadeIn(animationSpec = tween(200)),
+        ) + fadeIn(animationSpec = tween(200, easing = LinearEasing)),
         exit = slideOutHorizontally(
             targetOffsetX = { it },
             animationSpec = tween(250, easing = FastOutSlowInEasing)
-        ) + fadeOut(animationSpec = tween(200)),
+        ) + fadeOut(animationSpec = tween(150, easing = LinearEasing)),
         modifier = Modifier
             .fillMaxSize()
             .zIndex(100f)
@@ -478,16 +499,16 @@ fun MainScreen(viewModel: MeasureViewModel) {
         )
     }
 
-    // Dedicated Full-Page Welcome & Onboarding Guide Screen (M3 Design)
+    // Dedicated Full-Page Welcome & Onboarding Guide Screen (M3 Expressive Spring Scale)
     androidx.compose.animation.AnimatedVisibility(
         visible = showWelcomeScreen,
-        enter = fadeIn(animationSpec = tween(280)) + scaleIn(
-            initialScale = 0.95f,
-            animationSpec = tween(280, easing = FastOutSlowInEasing)
+        enter = fadeIn(animationSpec = ExpressiveMotion.effectsDefault()) + scaleIn(
+            initialScale = 0.93f,
+            animationSpec = ExpressiveMotion.spatialDefault()
         ),
-        exit = fadeOut(animationSpec = tween(220)) + scaleOut(
-            targetScale = 0.95f,
-            animationSpec = tween(220, easing = FastOutSlowInEasing)
+        exit = fadeOut(animationSpec = ExpressiveMotion.effectsFast()) + scaleOut(
+            targetScale = 0.94f,
+            animationSpec = ExpressiveMotion.spatialFast()
         ),
         modifier = Modifier
             .fillMaxSize()
@@ -645,20 +666,70 @@ fun HistorySheetContent(
             Spacer(modifier = Modifier.height(8.dp))
         }
 
-        // Category Filter Chips Row
+        // Category Filter Connected Morphing Pills (M3 Expressive Connected Group)
         Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
         ) {
-            categories.forEach { (code, label) ->
-                FilterChip(
-                    selected = selectedCategory == code,
-                    onClick = { selectedCategory = code },
-                    label = { Text(label, fontSize = 12.sp, fontWeight = FontWeight.Bold) },
-                    shape = RoundedCornerShape(20.dp)
+            categories.forEachIndexed { idx, (code, label) ->
+                val isSelected = selectedCategory == code
+                val pillInteraction = remember { MutableInteractionSource() }
+                val isPressed by pillInteraction.collectIsPressedAsState()
+                val pillShape = rememberExpressiveConnectedShape(
+                    index = idx,
+                    count = categories.size,
+                    isActive = isSelected,
+                    isPressed = isPressed,
+                    outerCorner = 20.dp,
+                    innerRestingCorner = 7.dp,
+                    innerActiveCorner = 18.dp
                 )
+                val pillBg by animateColorAsState(
+                    targetValue = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+                    animationSpec = ExpressiveMotion.effectsDefault(),
+                    label = "catPillBg_$code"
+                )
+                val pillFg by animateColorAsState(
+                    targetValue = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                    animationSpec = ExpressiveMotion.effectsDefault(),
+                    label = "catPillFg_$code"
+                )
+                val pillScale by animateFloatAsState(
+                    targetValue = if (isPressed) 0.94f else 1f,
+                    animationSpec = ExpressiveMotion.spatialFast(),
+                    label = "catPillScale_$code"
+                )
+
+                Surface(
+                    color = pillBg,
+                    contentColor = pillFg,
+                    shape = pillShape,
+                    modifier = Modifier
+                        .heightIn(min = 38.dp)
+                        .graphicsLayer {
+                            scaleX = pillScale
+                            scaleY = pillScale
+                        }
+                        .clip(pillShape)
+                        .clickable(
+                            interactionSource = pillInteraction,
+                            indication = ripple(bounded = true)
+                        ) { selectedCategory = code }
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = label,
+                            fontSize = 12.sp,
+                            fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
+                            color = pillFg
+                        )
+                    }
+                }
             }
         }
 
@@ -668,21 +739,36 @@ fun HistorySheetContent(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(200.dp),
+                    .height(210.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        Icons.Rounded.HistoryToggleOff,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                        modifier = Modifier.size(48.dp)
-                    )
-                    Spacer(Modifier.height(8.dp))
+                    Surface(
+                        shape = ExpressiveCookie9Shape,
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                        modifier = Modifier.size(76.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                Icons.Rounded.HistoryToggleOff,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.size(34.dp)
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
                     Text(
                         text = if (records.isEmpty()) "尚未儲存任何測量紀錄" else "找不到符合的紀錄",
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = if (records.isEmpty()) "完成 AR、螢幕尺或水平儀量測後即可儲存於此" else "嘗試切換分類或清除搜尋關鍵字",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodyMedium
+                        style = MaterialTheme.typography.bodySmall
                     )
                 }
             }
@@ -801,8 +887,8 @@ fun HistorySheetContent(
                                 }
                                 Text(
                                     text = formattedVal,
-                                    style = MaterialTheme.typography.titleLarge,
-                                    fontWeight = FontWeight.Black,
+                                    style = ExpressiveTypography.displayNumeralMedium,
+                                    fontSize = 20.sp,
                                     color = MaterialTheme.colorScheme.primary
                                 )
 

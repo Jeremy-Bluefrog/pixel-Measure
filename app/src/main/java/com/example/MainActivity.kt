@@ -16,16 +16,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val isWide = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                this.display?.isWideColorGamut == true
-            } else {
-                @Suppress("DEPRECATION")
-                windowManager.defaultDisplay?.isWideColorGamut == true
-            }
-            if (isWide) {
-                window.colorMode = android.content.pm.ActivityInfo.COLOR_MODE_WIDE_COLOR_GAMUT
-            }
+        val isWide = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            this.display?.isWideColorGamut == true
+        } else {
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay?.isWideColorGamut == true
+        }
+        if (isWide) {
+            window.colorMode = android.content.pm.ActivityInfo.COLOR_MODE_WIDE_COLOR_GAMUT
         }
         enforceHighDisplayRefreshRate()
         super.onCreate(savedInstanceState)
@@ -51,39 +49,25 @@ class MainActivity : ComponentActivity() {
     fun enforceHighDisplayRefreshRate(targetHz: Float = 60.0f) {
         try {
             val desired = targetHz.coerceIn(30.0f, 60.0f)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                val currentDisplay = this.display
-                val modes = currentDisplay?.supportedModes ?: emptyArray()
-                val targetMode = modes
-                    .filter { it.refreshRate >= desired - 0.5f }
-                    .minByOrNull { kotlin.math.abs(it.refreshRate - desired) }
-                    ?: modes.maxByOrNull { it.refreshRate }
-
-                targetMode?.let { mode ->
-                    val lp = window.attributes
-                    if (lp.preferredDisplayModeId != mode.modeId || lp.preferredRefreshRate != desired) {
-                        lp.preferredDisplayModeId = mode.modeId
-                        lp.preferredRefreshRate = mode.refreshRate.coerceAtMost(60.0f).coerceAtLeast(desired)
-                        window.attributes = lp
-                        android.util.Log.i("MainActivity", "Aligned display refresh rate: ${mode.refreshRate}Hz (modeId=${mode.modeId})")
-                    }
-                }
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val currentDisplay = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                this.display
+            } else {
                 @Suppress("DEPRECATION")
-                val currentDisplay = windowManager.defaultDisplay
-                val modes = currentDisplay?.supportedModes ?: emptyArray()
-                val targetMode = modes
-                    .filter { it.refreshRate >= desired - 0.5f }
-                    .minByOrNull { kotlin.math.abs(it.refreshRate - desired) }
-                    ?: modes.maxByOrNull { it.refreshRate }
+                windowManager.defaultDisplay
+            }
+            val modes = currentDisplay?.supportedModes ?: emptyArray()
+            val targetMode = modes
+                .filter { it.refreshRate >= desired - 0.5f }
+                .minByOrNull { kotlin.math.abs(it.refreshRate - desired) }
+                ?: modes.maxByOrNull { it.refreshRate }
 
-                targetMode?.let { mode ->
-                    val lp = window.attributes
-                    if (lp.preferredDisplayModeId != mode.modeId) {
-                        lp.preferredDisplayModeId = mode.modeId
-                        window.attributes = lp
-                        android.util.Log.i("MainActivity", "Aligned display mode: ${mode.modeId} (${mode.refreshRate}Hz)")
-                    }
+            targetMode?.let { mode ->
+                val lp = window.attributes
+                if (lp.preferredDisplayModeId != mode.modeId || lp.preferredRefreshRate != desired) {
+                    lp.preferredDisplayModeId = mode.modeId
+                    lp.preferredRefreshRate = mode.refreshRate.coerceAtMost(60.0f).coerceAtLeast(desired)
+                    window.attributes = lp
+                    android.util.Log.i("MainActivity", "Aligned display refresh rate: ${mode.refreshRate}Hz (modeId=${mode.modeId})")
                 }
             }
         } catch (e: Throwable) {
@@ -99,6 +83,9 @@ class MainActivity : ComponentActivity() {
             viewModel.pixelPerformanceMonitor.applySustainedPerformanceMode(window, true)
             viewModel.syncWithSystemLocale()
             viewModel.onResume()
+            if (viewModel.arSession == null) {
+                viewModel.checkAndInitArCore(this, forceRetry = true)
+            }
         } else {
             enforceHighDisplayRefreshRate()
         }

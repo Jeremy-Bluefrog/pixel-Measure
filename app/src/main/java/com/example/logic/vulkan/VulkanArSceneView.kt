@@ -20,7 +20,7 @@ import com.google.ar.core.Session
  * Pure Vulkan AR Scene View.
  * Completely replaces legacy OpenGL ES GLSurfaceView and ArGlRenderer with:
  * 1. Zero OpenGL ES dependencies (no GLES20, no EGL, no GLSurfaceView)
- * 2. Vulkan 1.1+ compliance with SurfaceFlinger 60Hz lock
+ * 2. Vulkan 1.4 compliance with Pixel SurfaceFlinger 60Hz lock
  * 3. AHardwareBuffer zero-copy hardware buffer pipe
  * 4. Choreographer 60fps frame loop syncing ARCore updates with Compose
  */
@@ -248,6 +248,7 @@ class VulkanArSceneView(
             if (arEngine.makeGlContextCurrent()) {
                 try {
                     val frame = arSession.update()
+                    logThrottleCounter = 0
                     val frameTimestamp = frame.timestamp
                     if (frameTimestamp != 0L && frameTimestamp == lastArFrameTimestampNs) {
                         // Skip duplicate camera frame on higher-refresh VSync ticks unless tap is pending
@@ -261,10 +262,26 @@ class VulkanArSceneView(
                 } finally {
                     arEngine.detachGlContext()
                 }
+            } else {
+                if (logThrottleCounter++ % 60 == 0) {
+                    Log.w(TAG, "GL context unavailable on render thread, attempting texture rebind")
+                    arEngine.rebindCameraTexture()
+                }
+            }
+        } catch (e: com.google.ar.core.exceptions.MissingGlContextException) {
+            Log.w(TAG, "MissingGlContextException during ARCore update; rebinding camera texture")
+            modernArEngine?.rebindCameraTexture()
+        } catch (e: com.google.ar.core.exceptions.SessionPausedException) {
+            Log.w(TAG, "SessionPausedException during ARCore update; marking session paused")
+            modernArEngine?.markSessionPaused()
+        } catch (e: com.google.ar.core.exceptions.CameraNotAvailableException) {
+            if (logThrottleCounter++ % 90 == 0) {
+                Log.w(TAG, "ARCore CameraNotAvailableException: ${e.message}")
+                modernArEngine?.reportRuntimeError("⚠️ 相機串流尚未就緒，正在嘗試重新連線...")
             }
         } catch (e: Exception) {
-            if (logThrottleCounter++ % 180 == 0) {
-                Log.d(TAG, "ARCore update state: ${e.message}")
+            if (logThrottleCounter++ % 90 == 0) {
+                Log.w(TAG, "ARCore update state: ${e.message}", e)
             }
         } finally {
             frameSyncManager.signalFrameCompleted(slot)

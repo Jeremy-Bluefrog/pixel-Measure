@@ -1,11 +1,14 @@
 package com.example.ui.components
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
@@ -14,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
@@ -23,6 +27,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ui.theme.ExpressiveMotion
+import com.example.ui.theme.ExpressiveTypography
+import com.example.ui.theme.rememberExpressiveConnectedShape
+import com.example.ui.theme.rememberExpressivePressCorner
 import com.example.ui.viewmodel.HapticType
 import com.example.ui.viewmodel.MeasureViewModel
 import java.util.Locale
@@ -31,11 +39,7 @@ import kotlin.math.roundToInt
 
 /**
  * 全螢幕高精度雙邊螢幕直尺 (Full-Screen Precision Dual-Edge Screen Ruler)
- *
- * 核心特色：
- * 1. 自動全螢幕沉浸式量測，無頂部標題列與手電筒干擾，極致利用螢幕全高。
- * 2. 移除切換單位干擾按鈕，雙邊均勻清晰刻度，左側標註公制 (cm)，右側零點基準對齊。
- * 3. 矯正調整面板精簡移至左上角 (Top-Left)，以超小型 Mini-Strip 呈現微調步進 (0.002x) 與即時比例。
+ * Enhanced with Material 3 Expressive Floating Toolbar & Connected Micro-Calibration Controls.
  */
 private val PRECALCULATED_INT_STRINGS = Array(301) { "$it" }
 
@@ -49,17 +53,8 @@ fun RulerComponent(
     val density = LocalDensity.current
     val displayMetrics = context.resources.displayMetrics
 
-    // Calibration factor from ViewModel state (persisted in SharedPreferences)
     val calibrationFactor by viewModel.rulerCalibration.collectAsStateWithLifecycle()
-    val rulerTheme by viewModel.rulerTheme.collectAsStateWithLifecycle()
 
-    val rulerAccentColor = when (rulerTheme) {
-        "NEON_CYAN" -> androidx.compose.ui.graphics.Color(0xFF00E5FF)
-        "HIGH_CONTRAST" -> androidx.compose.ui.graphics.Color(0xFFFACC15)
-        else -> MaterialTheme.colorScheme.primary
-    }
-
-    // Device physical density and millimeter / inch pixel calculations
     val ydpi = remember(displayMetrics) {
         val y = displayMetrics.ydpi
         if (y > 50f && !y.isNaN() && !y.isInfinite()) y else displayMetrics.densityDpi.toFloat()
@@ -67,7 +62,6 @@ fun RulerComponent(
     val safeFactor = if (calibrationFactor > 0.05f && !calibrationFactor.isNaN() && !calibrationFactor.isInfinite()) calibrationFactor else 1.0f
     val mmInPx = ((ydpi / 25.4f) * safeFactor).coerceIn(1.5f, 50.0f)
 
-    // Full screen Zero Y baseline: positioned comfortably below top status bar / notch
     val zeroY = with(density) { 52.dp.toPx() }
 
     val colorPrimary = MaterialTheme.colorScheme.primary
@@ -75,7 +69,6 @@ fun RulerComponent(
     val colorOnSurface = MaterialTheme.colorScheme.onSurface
     val colorOutline = MaterialTheme.colorScheme.outlineVariant
 
-    // Native text paints with sp-scaled text sizes and font metrics
     val textPaintLeft = remember(colorOnSurface, density) {
         android.graphics.Paint().apply {
             color = colorOnSurface.copy(alpha = 0.85f).toArgb()
@@ -116,19 +109,17 @@ fun RulerComponent(
         }
     }
 
-    // Font vertical centering offset for tick alignment
     val fontVerticalOffset = remember(textPaintLeft) {
         (textPaintLeft.descent() + textPaintLeft.ascent()) / 2f
     }
+
+    val isCalibrated = abs(safeFactor - 1.0f) > 0.001f
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        // -------------------------------------------------------------
-        // Dual-Edge Full-Screen Ruler Canvas
-        // -------------------------------------------------------------
         Canvas(
             modifier = Modifier.fillMaxSize()
         ) {
@@ -147,13 +138,11 @@ fun RulerComponent(
             val strokeCmWidth = 2.dp.toPx()
             val strokeMmWidth = 1.dp.toPx()
 
-            // 1. Left Ruler Body Background
             drawRect(
                 color = colorSurface,
                 topLeft = Offset(0f, 0f),
                 size = Size(rulerWidth, h)
             )
-            // Left Ruler Boundary Line
             drawLine(
                 color = colorOutline.copy(alpha = 0.5f),
                 start = Offset(rulerWidth, 0f),
@@ -161,14 +150,12 @@ fun RulerComponent(
                 strokeWidth = borderStrokeWidth
             )
 
-            // 2. Right Ruler Body Background
             val rightRulerX = w - rulerWidth
             drawRect(
                 color = colorSurface,
                 topLeft = Offset(rightRulerX, 0f),
                 size = Size(rulerWidth, h)
             )
-            // Right Ruler Boundary Line
             drawLine(
                 color = colorOutline.copy(alpha = 0.5f),
                 start = Offset(rightRulerX, 0f),
@@ -176,7 +163,6 @@ fun RulerComponent(
                 strokeWidth = borderStrokeWidth
             )
 
-            // 3. Zero Reference Baseline connecting Left and Right Rulers across the full screen
             drawLine(
                 color = colorPrimary,
                 start = Offset(0f, zeroY),
@@ -184,11 +170,9 @@ fun RulerComponent(
                 strokeWidth = zeroStrokeWidth
             )
 
-            // Zero Unit Label Headers
             drawContext.canvas.nativeCanvas.drawText("cm", pad12Px, zeroY - pad10Px, unitPaintLeft)
             drawContext.canvas.nativeCanvas.drawText("cm", w - pad12Px, zeroY - pad10Px, unitPaintRight)
 
-            // 4. Left Edge Graduations (Centimeter & Millimeter ticks)
             var leftCurY = zeroY
             var leftMm = 0
             while (leftCurY < h && leftMm < 3000) {
@@ -225,7 +209,6 @@ fun RulerComponent(
                 leftMm++
             }
 
-            // 5. Right Edge Graduations (Matching Metric Centimeter & Millimeter ticks)
             var rightCurY = zeroY
             var rightMm = 0
             while (rightCurY < h && rightMm < 3000) {
@@ -264,117 +247,158 @@ fun RulerComponent(
         }
 
         // -------------------------------------------------------------
-        // TOP-LEFT CORNER: SHRUNK COMPACT CALIBRATION STRIP (左上角微縮校準條)
+        // TOP-LEFT: M3 EXPRESSIVE FLOATING TOOLBAR CALIBRATION STRIP
         // -------------------------------------------------------------
-        Surface(
-            shape = RoundedCornerShape(18.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.94f),
-            tonalElevation = 0.dp,
-            shadowElevation = 0.dp,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+        ExpressiveFloatingToolbar(
+            vibrant = isCalibrated,
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .statusBarsPadding()
                 .padding(start = 8.dp, top = 6.dp)
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                horizontalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                Icon(
-                    Icons.Rounded.Tune,
-                    contentDescription = "校準",
-                    tint = colorPrimary,
-                    modifier = Modifier.size(15.dp)
+            Icon(
+                Icons.Rounded.Tune,
+                contentDescription = "校準",
+                tint = if (isCalibrated) MaterialTheme.colorScheme.onPrimaryContainer else colorPrimary,
+                modifier = Modifier.size(15.dp)
+            )
+
+            Text(
+                text = String.format(Locale.US, "%.3fx", safeFactor),
+                style = ExpressiveTypography.labelNumeral,
+                fontSize = 11.5.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = if (isCalibrated) MaterialTheme.colorScheme.onPrimaryContainer else colorPrimary
+            )
+
+            // Connected [-], [+], [Reset] icon buttons
+            val btnCount = if (isCalibrated) 3 else 2
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                val decInteraction = remember { MutableInteractionSource() }
+                val isDecPressed by decInteraction.collectIsPressedAsState()
+                val decShape = rememberExpressiveConnectedShape(
+                    index = 0,
+                    count = btnCount,
+                    isActive = false,
+                    isPressed = isDecPressed,
+                    outerCorner = 14.dp,
+                    innerRestingCorner = 4.dp,
+                    innerActiveCorner = 12.dp
                 )
-
-                Spacer(modifier = Modifier.width(2.dp))
-
-                Text(
-                    text = String.format(Locale.US, "%.3fx", safeFactor),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = colorPrimary
-                )
-
-                // Micro Decrement [-] Button
-                IconButton(
+                Surface(
                     onClick = {
                         val next = ((safeFactor - 0.002f) * 1000f).roundToInt() / 1000f
                         viewModel.updateRulerCalibration(next.coerceIn(0.80f, 1.25f), persistImmediately = true)
                         viewModel.triggerHapticFeedback(HapticType.CLICK)
                     },
-                    modifier = Modifier.size(26.dp)
+                    interactionSource = decInteraction,
+                    shape = decShape,
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                    modifier = Modifier.size(28.dp)
                 ) {
-                    Icon(
-                        Icons.Rounded.Remove,
-                        contentDescription = "微調減少",
-                        modifier = Modifier.size(14.dp),
-                        tint = colorOnSurface
-                    )
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(Icons.Rounded.Remove, contentDescription = "微調減少", modifier = Modifier.size(14.dp), tint = colorOnSurface)
+                    }
                 }
 
-                // Micro Increment [+] Button
-                IconButton(
+                val incInteraction = remember { MutableInteractionSource() }
+                val isIncPressed by incInteraction.collectIsPressedAsState()
+                val incShape = rememberExpressiveConnectedShape(
+                    index = 1,
+                    count = btnCount,
+                    isActive = false,
+                    isPressed = isIncPressed,
+                    outerCorner = 14.dp,
+                    innerRestingCorner = 4.dp,
+                    innerActiveCorner = 12.dp
+                )
+                Surface(
                     onClick = {
                         val next = ((safeFactor + 0.002f) * 1000f).roundToInt() / 1000f
                         viewModel.updateRulerCalibration(next.coerceIn(0.80f, 1.25f), persistImmediately = true)
                         viewModel.triggerHapticFeedback(HapticType.CLICK)
                     },
-                    modifier = Modifier.size(26.dp)
+                    interactionSource = incInteraction,
+                    shape = incShape,
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                    modifier = Modifier.size(28.dp)
                 ) {
-                    Icon(
-                        Icons.Rounded.Add,
-                        contentDescription = "微調增加",
-                        modifier = Modifier.size(14.dp),
-                        tint = colorOnSurface
-                    )
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(Icons.Rounded.Add, contentDescription = "微調增加", modifier = Modifier.size(14.dp), tint = colorOnSurface)
+                    }
                 }
 
-                // Reset to Default (1.000x) if calibrated
-                if (abs(safeFactor - 1.0f) > 0.001f) {
-                    IconButton(
+                if (isCalibrated) {
+                    val rstInteraction = remember { MutableInteractionSource() }
+                    val isRstPressed by rstInteraction.collectIsPressedAsState()
+                    val rstShape = rememberExpressiveConnectedShape(
+                        index = 2,
+                        count = 3,
+                        isActive = false,
+                        isPressed = isRstPressed,
+                        outerCorner = 14.dp,
+                        innerRestingCorner = 4.dp,
+                        innerActiveCorner = 12.dp
+                    )
+                    Surface(
                         onClick = {
                             viewModel.updateRulerCalibration(1.0f, persistImmediately = true)
                             viewModel.triggerHapticFeedback(HapticType.CLICK)
                         },
-                        modifier = Modifier.size(26.dp)
+                        interactionSource = rstInteraction,
+                        shape = rstShape,
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                        modifier = Modifier.size(28.dp)
                     ) {
-                        Icon(
-                            Icons.Rounded.RestartAlt,
-                            contentDescription = "重設校準",
-                            modifier = Modifier.size(14.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(Icons.Rounded.RestartAlt, contentDescription = "重設校準", modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }
             }
         }
 
         // -------------------------------------------------------------
-        // TOP-RIGHT CORNER: MINIMAL HISTORY SHORTCUT
+        // TOP-RIGHT CORNER: EXPRESSIVE HISTORY SHORTCUT
         // -------------------------------------------------------------
+        val histInteraction = remember { MutableInteractionSource() }
+        val isHistPressed by histInteraction.collectIsPressedAsState()
+        val histCorner by rememberExpressivePressCorner(
+            isPressed = isHistPressed,
+            restingCorner = 18.dp,
+            pressedCorner = 10.dp
+        )
+        val histScale by animateFloatAsState(
+            targetValue = if (isHistPressed) 0.90f else 1.0f,
+            animationSpec = ExpressiveMotion.spatialFast(),
+            label = "rulerHistScale"
+        )
         Surface(
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.88f),
+            onClick = onShowHistoryClick,
+            interactionSource = histInteraction,
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(histCorner),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.90f),
             tonalElevation = 0.dp,
             shadowElevation = 0.dp,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .statusBarsPadding()
                 .padding(end = 8.dp, top = 6.dp)
+                .size(36.dp)
+                .graphicsLayer {
+                    scaleX = histScale
+                    scaleY = histScale
+                }
         ) {
-            IconButton(
-                onClick = onShowHistoryClick,
-                modifier = Modifier.size(32.dp)
-            ) {
+            Box(contentAlignment = Alignment.Center) {
                 Icon(
                     Icons.Rounded.History,
                     contentDescription = "歷史記錄",
                     tint = colorOnSurface,
-                    modifier = Modifier.size(16.dp)
+                    modifier = Modifier.size(18.dp)
                 )
             }
         }

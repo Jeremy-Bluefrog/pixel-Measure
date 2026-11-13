@@ -31,6 +31,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -40,6 +41,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.logic.ar.ArCoreEngineStatus
+import com.example.logic.ar.ModernArEngine
 import com.example.logic.vulkan.VulkanArSceneView
 import com.example.logic.ar.StabilityLevel
 import com.example.logic.camera.ArVideoRecorder
@@ -113,6 +116,7 @@ fun ModernArCameraView(
     val simulatedAlert by viewModel.simulatedAlert.collectAsStateWithLifecycle()
     val uiButtonScale by viewModel.uiButtonScale.collectAsStateWithLifecycle()
     val arCoreStatus by viewModel.arCoreStatus.collectAsStateWithLifecycle()
+    val arCoreStatusMessage by viewModel.arCoreStatusMessage.collectAsStateWithLifecycle()
     val isCameraSimulationActive by viewModel.isCameraSimulationActive.collectAsStateWithLifecycle()
 
     // Video Recorder
@@ -120,12 +124,14 @@ fun ModernArCameraView(
     val isRecordingVideo by videoRecorder.isRecording.collectAsStateWithLifecycle()
     val recordingSeconds by videoRecorder.recordingSeconds.collectAsStateWithLifecycle()
 
-    val startCameraAndArPipeline: (TextureView) -> Unit = remember(viewModel, camera2Manager) {
+    val hostActivity = remember(context) { context.findActivity() }
+
+    val startCameraAndArPipeline: (TextureView) -> Unit = remember(viewModel, camera2Manager, hostActivity) {
         { tv: TextureView ->
             coroutineScope.launch {
                 viewModel.setHighSpeedCamera2Manager(camera2Manager)
                 viewModel.ensureArCoreInitialized(
-                    activity = context as? android.app.Activity,
+                    activity = hostActivity,
                     forceRetry = (viewModel.modernArEngine.session == null)
                 )
                 if (!tv.isAvailable) return@launch
@@ -140,6 +146,7 @@ fun ModernArCameraView(
                     camera2Manager.preferredAspectRatio = viewModel.modernArEngine.selectedCameraImageSize?.let {
                         if (it.height > 0) it.width.toFloat() / it.height.toFloat() else null
                     }
+                    camera2Manager.preferredFpsRange = viewModel.modernArEngine.selectedCameraFpsRange
                 }
                 camera2Manager.openCameraAndStartSession(tv) { isHighSpeed, size ->
                     android.util.Log.i("CameraView", "Session ready. HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
@@ -165,8 +172,8 @@ fun ModernArCameraView(
     }
 
     LaunchedEffect(hasCameraPermission, isCameraSimulationActive) {
-        if (hasCameraPermission && isCameraSimulationActive && viewModel.modernArEngine.session == null) {
-            viewModel.checkAndInitArCore(context as? android.app.Activity, forceRetry = true)
+        if (hasCameraPermission && viewModel.modernArEngine.session == null) {
+            viewModel.checkAndInitArCore(hostActivity, forceRetry = true)
         }
     }
 
@@ -208,10 +215,11 @@ fun ModernArCameraView(
                     viewModel.onResume()
                     modernArVulkanViewRef?.onResume()
                     if (hasCameraPermission) {
-                        textureViewRef?.let { tv ->
-                            if (tv.isAvailable) {
-                                startCameraAndArPipeline(tv)
-                            }
+                        val tv = textureViewRef
+                        if (tv != null && tv.isAvailable) {
+                            startCameraAndArPipeline(tv)
+                        } else if (viewModel.modernArEngine.session == null) {
+                            viewModel.checkAndInitArCore(hostActivity, forceRetry = true)
                         }
                     }
                 }
@@ -250,48 +258,28 @@ fun ModernArCameraView(
 
             when (type) {
                 HapticType.SNAP -> {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        vibrator?.vibrate(
-                            VibrationEffect.createWaveform(
-                                longArrayOf(0, 18, 25, 28),
-                                intArrayOf(0, 255, 0, 160),
-                                -1
-                            )
+                    vibrator?.vibrate(
+                        VibrationEffect.createWaveform(
+                            longArrayOf(0, 18, 25, 28),
+                            intArrayOf(0, 255, 0, 160),
+                            -1
                         )
-                    } else {
-                        @Suppress("DEPRECATION")
-                        vibrator?.vibrate(35)
-                    }
+                    )
                 }
                 HapticType.CLICK -> {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        vibrator?.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK))
-                    } else {
-                        @Suppress("DEPRECATION")
-                        vibrator?.vibrate(20)
-                    }
+                    vibrator?.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK))
                 }
                 HapticType.HEAVY -> {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        vibrator?.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_HEAVY_CLICK))
-                    } else {
-                        @Suppress("DEPRECATION")
-                        vibrator?.vibrate(45)
-                    }
+                    vibrator?.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_HEAVY_CLICK))
                 }
                 HapticType.DOUBLE -> {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        vibrator?.vibrate(
-                            VibrationEffect.createWaveform(
-                                longArrayOf(0, 30, 40, 30),
-                                intArrayOf(0, 255, 0, 200),
-                                -1
-                            )
+                    vibrator?.vibrate(
+                        VibrationEffect.createWaveform(
+                            longArrayOf(0, 30, 40, 30),
+                            intArrayOf(0, 255, 0, 200),
+                            -1
                         )
-                    } else {
-                        @Suppress("DEPRECATION")
-                        vibrator?.vibrate(60)
-                    }
+                    )
                 }
             }
         }
@@ -418,117 +406,137 @@ fun ModernArCameraView(
                 }
             }
 
-            // 0. ARCore / Vulkan 60 FPS Frame Driver Companion
-            AndroidView(
-                factory = { ctx ->
-                    VulkanArSceneView(
-                        context = ctx,
-                        session = viewModel.arSession,
-                        modernArEngine = viewModel.modernArEngine,
-                        viewModel = viewModel
-                    ).also {
-                        modernArVulkanViewRef = it
-                    }
-                },
-                update = { v ->
-                    modernArVulkanViewRef = v
-                },
-                onRelease = { v ->
-                    v.destroy()
-                    if (modernArVulkanViewRef == v) {
-                        modernArVulkanViewRef = null
-                    }
-                },
-                modifier = Modifier.size(1.dp)
-            )
+            val arBackdropState = rememberGradientBlurBackdropState()
 
-            // 1. High-Performance Camera2 TextureView Surface or Simulated 3D Environment Canvas
-            if (isCameraSimulationActive) {
-                androidx.compose.foundation.Canvas(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color(0xFF0F172A))
-                ) {
-                    val w = size.width
-                    val h = size.height
-                    val lineColor = Color(0x3300E5FF)
-                    val step = 60.dp.toPx()
-                    var x = 0f
-                    while (x < w) {
-                        drawLine(lineColor, Offset(x, 0f), Offset(x, h), 1f)
-                        x += step
-                    }
-                    var y = 0f
-                    while (y < h) {
-                        drawLine(lineColor, Offset(0f, y), Offset(w, y), 1f)
-                        y += step
-                    }
-                    drawCircle(
-                        color = Color(0x1A00E5FF),
-                        radius = w * 0.45f,
-                        center = Offset(w / 2f, h * 0.55f)
-                    )
-                }
-            } else {
+            // 0–2. Live Camera + Vulkan Driver + 3D AR Overlay captured cleanly for optical backdrop progressive blur
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .gradientBlurSource(arBackdropState)
+            ) {
+                // 0. ARCore / Vulkan 60 FPS Frame Driver Companion
                 AndroidView(
                     factory = { ctx ->
-                        val textureView = TextureView(ctx).apply {
-                            isOpaque = true
+                        VulkanArSceneView(
+                            context = ctx,
+                            session = viewModel.arSession,
+                            modernArEngine = viewModel.modernArEngine,
+                            viewModel = viewModel
+                        ).also {
+                            modernArVulkanViewRef = it
                         }
-                        textureViewRef = textureView
-                        viewModel.setHighSpeedCamera2Manager(camera2Manager)
+                    },
+                    update = { v ->
+                        modernArVulkanViewRef = v
+                    },
+                    onRelease = { v ->
+                        v.destroy()
+                        if (modernArVulkanViewRef == v) {
+                            modernArVulkanViewRef = null
+                        }
+                    },
+                    modifier = Modifier.size(1.dp)
+                )
 
-                        textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-                            override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+                // 1. High-Performance Camera2 TextureView Surface or Simulated 3D Environment Canvas
+                if (isCameraSimulationActive) {
+                    androidx.compose.foundation.Canvas(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color(0xFF0F172A))
+                    ) {
+                        val w = size.width
+                        val h = size.height
+                        val lineColor = Color(0x3300E5FF)
+                        val step = 60.dp.toPx()
+                        var x = 0f
+                        while (x < w) {
+                            drawLine(lineColor, Offset(x, 0f), Offset(x, h), 1f)
+                            x += step
+                        }
+                        var y = 0f
+                        while (y < h) {
+                            drawLine(lineColor, Offset(0f, y), Offset(w, y), 1f)
+                            y += step
+                        }
+                        drawCircle(
+                            color = Color(0x1A00E5FF),
+                            radius = w * 0.45f,
+                            center = Offset(w / 2f, h * 0.55f)
+                        )
+                    }
+                } else {
+                    AndroidView(
+                        factory = { ctx ->
+                            val textureView = TextureView(ctx).apply {
+                                isOpaque = true
+                            }
+                            textureViewRef = textureView
+                            viewModel.setHighSpeedCamera2Manager(camera2Manager)
+
+                            textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                                override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+                                    val rot = getDisplayRotation(ctx)
+                                    viewModel.updateDisplayGeometry(rot, width, height)
+                                    viewModel.modernArEngine.setDisplayGeometry(rot, width, height)
+                                    startCameraAndArPipeline(textureView)
+                                }
+                                override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
+                                    val rot = getDisplayRotation(ctx)
+                                    viewModel.updateDisplayGeometry(rot, width, height)
+                                    viewModel.modernArEngine.setDisplayGeometry(rot, width, height)
+                                    camera2Manager.configureTransform(textureView, width, height)
+                                }
+                                override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                                    viewModel.pauseArAndCamera(camera2Manager)
+                                    return true
+                                }
+                                override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+                            }
+
+                            if (textureView.isAvailable) {
                                 val rot = getDisplayRotation(ctx)
-                                viewModel.updateDisplayGeometry(rot, width, height)
-                                viewModel.modernArEngine.setDisplayGeometry(rot, width, height)
+                                viewModel.updateDisplayGeometry(rot, textureView.width, textureView.height)
+                                viewModel.modernArEngine.setDisplayGeometry(rot, textureView.width, textureView.height)
                                 startCameraAndArPipeline(textureView)
                             }
-                            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
-                                val rot = getDisplayRotation(ctx)
-                                viewModel.updateDisplayGeometry(rot, width, height)
-                                viewModel.modernArEngine.setDisplayGeometry(rot, width, height)
-                                camera2Manager.configureTransform(textureView, width, height)
-                            }
-                            override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
-                                viewModel.pauseArAndCamera(camera2Manager)
-                                return true
-                            }
-                            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
-                        }
 
-                        if (textureView.isAvailable) {
-                            val rot = getDisplayRotation(ctx)
-                            viewModel.updateDisplayGeometry(rot, textureView.width, textureView.height)
-                            viewModel.modernArEngine.setDisplayGeometry(rot, textureView.width, textureView.height)
-                            startCameraAndArPipeline(textureView)
-                        }
+                            textureView
+                        },
+                        update = { tv ->
+                            textureViewRef = tv
+                        },
+                        onRelease = { _ ->
+                            viewModel.pauseArAndCamera(camera2Manager)
+                            textureViewRef = null
+                        },
+                        modifier = Modifier
+                            .fillMaxSize()
+                    )
+                }
 
-                        textureView
-                    },
-                    update = { tv ->
-                        textureViewRef = tv
-                    },
-                    onRelease = { _ ->
-                        viewModel.pauseArAndCamera(camera2Manager)
-                        textureViewRef = null
-                    },
-                    modifier = Modifier
-                        .fillMaxSize()
+                // 2. 3D Augmented Overlay Canvas (Planes, Projected Points, Lines, Measurements, Reticle)
+                ArMeasurementCanvasOverlay(
+                    viewModel = viewModel,
+                    dashPhase = dashPhase,
+                    reticlePulseScale = reticlePulseScale,
+                    snapScaleAnimated = snapScaleAnimated
                 )
             }
 
-            // 2. 3D Augmented Overlay Canvas (Planes, Projected Points, Lines, Measurements, Reticle)
-            ArMeasurementCanvasOverlay(
-                viewModel = viewModel,
-                dashPhase = dashPhase,
-                reticlePulseScale = reticlePulseScale,
-                snapScaleAnimated = snapScaleAnimated
-            )
-
-            // 3. Clean Unified Top HUD Stack (Zero Overlap)
+            // 3. Clean Unified Top HUD Stack with Progressive Gradient Blur Backdrop
             if (!isTakingPhoto) {
+                GradientBlurScrim(
+                    isTop = true,
+                    backdropState = arBackdropState,
+                    blurRadius = 26.dp,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .height(148.dp)
+                        .testTag("ar_top_gradient_blur_scrim")
+                )
+
                 ModernArTopBar(
                     viewModel = viewModel,
                     context = context,
@@ -556,10 +564,32 @@ fun ModernArCameraView(
                             capturedPointsCount = capturedPoints.size,
                             isMeasurementAvailable = isMeasurementAvailable,
                             isSnapped = isSnapped,
-                            onOpenTutorial = { showHelpDialog = true }
+                            onOpenTutorial = { showHelpDialog = true },
+                            arCoreStatus = arCoreStatus,
+                            arCoreStatusMessage = arCoreStatusMessage
                         )
 
-                        if (trackingStability.level == StabilityLevel.POOR) {
+                        if (arCoreStatus != ArCoreEngineStatus.ACTIVE) {
+                            ArCoreRequirementBanner(
+                                status = arCoreStatus,
+                                message = arCoreStatusMessage,
+                                onInstallClick = {
+                                    if (hostActivity != null) {
+                                        viewModel.requestInstallArCore(hostActivity)
+                                    } else {
+                                        ModernArEngine.openArCorePlayStorePage(context)
+                                    }
+                                },
+                                onRetryClick = {
+                                    val tv = textureViewRef
+                                    if (tv != null && tv.isAvailable) {
+                                        startCameraAndArPipeline(tv)
+                                    } else {
+                                        viewModel.checkAndInitArCore(hostActivity, forceRetry = true)
+                                    }
+                                }
+                            )
+                        } else if (trackingStability.level == StabilityLevel.POOR) {
                             ActiveTrackingStabilityWarningBanner(
                                 stability = trackingStability,
                                 onActionClick = { showStabilityDiagnosticsDialog = true }
@@ -569,8 +599,19 @@ fun ModernArCameraView(
                 )
             }
 
-            // 5. Bottom Dynamic Control Deck
+            // 5. Bottom Dynamic Control Deck with Progressive Gradient Blur Backdrop
             if (!isTakingPhoto) {
+                GradientBlurScrim(
+                    isTop = false,
+                    backdropState = arBackdropState,
+                    blurRadius = 28.dp,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(176.dp + bottomPadding)
+                        .testTag("ar_bottom_gradient_blur_scrim")
+                )
+
                 ModernArBottomDeck(
                     viewModel = viewModel,
                     subMode = subMode,
@@ -632,6 +673,100 @@ fun ModernArCameraView(
         isLensSmudged = isLensSmudged,
         simulatedAlert = simulatedAlert
     )
+}
+
+@Composable
+private fun ArCoreRequirementBanner(
+    status: ArCoreEngineStatus,
+    message: String,
+    onInstallClick: () -> Unit,
+    onRetryClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val isMissing = status == ArCoreEngineStatus.NEEDS_INSTALLATION
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.94f),
+        border = androidx.compose.foundation.BorderStroke(
+            width = 1.dp,
+            color = if (isMissing) Color(0xFFF59E0B) else MaterialTheme.colorScheme.error
+        ),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp)
+            .testTag("arcore_status_banner")
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = if (isMissing) Icons.Rounded.DownloadForOffline else Icons.Rounded.WarningAmber,
+                    contentDescription = null,
+                    tint = if (isMissing) Color(0xFFF59E0B) else MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(20.dp)
+                )
+                Text(
+                    text = if (isMissing) "需安裝 Google Play Services for AR" else "ARCore 偵測未就緒",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            Text(
+                text = if (isMissing) {
+                    "本應用需要「Google Play Services for AR (com.google.ar.core)」才能偵測平面與進行測量。"
+                } else {
+                    message.ifBlank { "無法啟動 ARCore 空間偵測，請檢查相機與 ARCore 服務狀態。" }
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (isMissing) {
+                    Button(
+                        onClick = onInstallClick,
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("install_arcore_button")
+                    ) {
+                        Icon(Icons.Rounded.Download, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("前往安裝", fontWeight = FontWeight.Bold)
+                    }
+                }
+                OutlinedButton(
+                    onClick = onRetryClick,
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("retry_arcore_button")
+                ) {
+                    Icon(Icons.Rounded.Refresh, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("重新偵測", fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+
+private tailrec fun Context.findActivity(): android.app.Activity? {
+    return when (this) {
+        is android.app.Activity -> this
+        is android.content.ContextWrapper -> baseContext.findActivity()
+        else -> null
+    }
 }
 
 private fun getDisplayRotation(context: Context): Int {

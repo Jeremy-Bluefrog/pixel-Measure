@@ -7,7 +7,6 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -15,25 +14,33 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.logic.ShareUtility
-import com.example.logic.vulkan.VulkanArSceneView
 import com.example.logic.camera.ArVideoRecorder
+import com.example.logic.vulkan.VulkanArSceneView
+import com.example.ui.theme.ExpressiveCookie8Shape
+import com.example.ui.theme.ExpressiveMotion
+import com.example.ui.theme.ExpressiveTypography
+import com.example.ui.theme.rememberExpressiveConnectedShape
+import com.example.ui.theme.rememberExpressivePressCorner
 import com.example.ui.viewmodel.MeasureViewModel
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -70,13 +77,13 @@ fun ModernArBottomDeck(
 
     val addFabContainerColor by animateColorAsState(
         targetValue = if (isMeasurementAvailable) colorPrimary else MaterialTheme.colorScheme.surfaceContainerHighest,
-        animationSpec = tween(240, easing = FastOutSlowInEasing),
+        animationSpec = ExpressiveMotion.effectsDefault(),
         label = "addFabContainerColor"
     )
 
     val addFabIconColor by animateColorAsState(
         targetValue = if (isMeasurementAvailable) colorOnPrimary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-        animationSpec = tween(240, easing = FastOutSlowInEasing),
+        animationSpec = ExpressiveMotion.effectsDefault(),
         label = "addFabIconColor"
     )
 
@@ -88,11 +95,14 @@ fun ModernArBottomDeck(
             .padding(horizontal = 16.dp, vertical = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // 1. Real-Time Measurement Completed Summary Card (1-tap copy, save & unit conversion)
-        androidx.compose.animation.AnimatedVisibility(
+        // 1. Real-Time Measurement Completed Summary Card (M3 Expressive Spring + Numeral Typography + Connected Actions)
+        AnimatedVisibility(
             visible = hasCapturedPoints && capturedPointsCount >= 2,
-            enter = fadeIn(animationSpec = tween(200)) + expandVertically(animationSpec = tween(200)),
-            exit = fadeOut(animationSpec = tween(150)) + shrinkVertically(animationSpec = tween(150))
+            enter = fadeIn(animationSpec = ExpressiveMotion.effectsDefault()) +
+                expandVertically(animationSpec = ExpressiveMotion.spatialDefault()) +
+                scaleIn(initialScale = 0.92f, animationSpec = ExpressiveMotion.spatialDefault()),
+            exit = fadeOut(animationSpec = ExpressiveMotion.effectsFast()) +
+                shrinkVertically(animationSpec = ExpressiveMotion.spatialFast())
         ) {
             Box(modifier = Modifier.padding(bottom = 8.dp)) {
                 MeasurementLiveSummaryCard(
@@ -105,10 +115,13 @@ fun ModernArBottomDeck(
         }
 
         // 2. Dynamic Live Measurement Guidance & Status Pill
-        androidx.compose.animation.AnimatedVisibility(
+        AnimatedVisibility(
             visible = isWaitingForSecondPoint,
-            enter = fadeIn(animationSpec = tween(180)) + expandVertically(animationSpec = tween(180)),
-            exit = fadeOut(animationSpec = tween(140)) + shrinkVertically(animationSpec = tween(140))
+            enter = fadeIn(animationSpec = ExpressiveMotion.effectsDefault()) +
+                expandVertically(animationSpec = ExpressiveMotion.spatialDefault()) +
+                scaleIn(initialScale = 0.90f, animationSpec = ExpressiveMotion.spatialDefault()),
+            exit = fadeOut(animationSpec = ExpressiveMotion.effectsFast()) +
+                shrinkVertically(animationSpec = ExpressiveMotion.spatialFast())
         ) {
             Box(modifier = Modifier.padding(bottom = 10.dp)) {
                 LiveDistanceBadge(
@@ -118,40 +131,59 @@ fun ModernArBottomDeck(
             }
         }
 
-        // 3. Interactive Bottom Action Deck (Plus button fixed dead-center, back button on left, shutter on right)
+        // 3. Interactive Bottom Action Deck (Plus button fixed dead-center, expressive back button on left, shutter on right)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(84.dp),
             contentAlignment = Alignment.Center
         ) {
-            // Center: Plus FAB Button (Always fixed dead-center)
+            // Center: M3 Expressive Morphing Add-Point FAB (Always fixed dead-center)
             val addFabInteractionSource = remember { MutableInteractionSource() }
             val isAddFabPressed by addFabInteractionSource.collectIsPressedAsState()
 
             val addFabCornerRadius by animateDpAsState(
-                targetValue = if (isAddFabPressed) 18.dp else 32.dp,
-                animationSpec = tween(150),
+                targetValue = when {
+                    isAddFabPressed -> 16.dp
+                    isWaitingForSecondPoint -> 20.dp
+                    else -> 32.dp
+                },
+                animationSpec = ExpressiveMotion.spatialFast(),
                 label = "addFabCornerRadius"
+            )
+            val addFabScale by animateFloatAsState(
+                targetValue = when {
+                    isAddFabPressed -> 0.89f
+                    isMeasurementAvailable -> 1.03f
+                    else -> 0.96f
+                },
+                animationSpec = ExpressiveMotion.spatialFast(),
+                label = "addFabScale"
             )
 
             Surface(
                 color = addFabContainerColor,
                 shape = RoundedCornerShape(addFabCornerRadius),
-                border = if (!isMeasurementAvailable) BorderStroke(1.5.dp, MaterialTheme.colorScheme.outlineVariant) else null,
+                border = if (!isMeasurementAvailable) {
+                    BorderStroke(1.5.dp, MaterialTheme.colorScheme.outlineVariant)
+                } else {
+                    BorderStroke(1.5.dp, colorOnPrimary.copy(alpha = 0.18f))
+                },
                 shadowElevation = 0.dp,
+                onClick = {
+                    if (isMeasurementAvailable) {
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                        viewModel.requestHitTest()
+                    } else {
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                    }
+                },
+                interactionSource = addFabInteractionSource,
                 modifier = Modifier
                     .size((64 * uiButtonScale).dp)
-                    .clickable(
-                        interactionSource = addFabInteractionSource,
-                        indication = null
-                    ) {
-                        if (isMeasurementAvailable) {
-                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                            viewModel.requestHitTest()
-                        } else {
-                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
-                        }
+                    .graphicsLayer {
+                        scaleX = addFabScale
+                        scaleY = addFabScale
                     }
                     .testTag("add_point_fab")
             ) {
@@ -159,8 +191,12 @@ fun ModernArBottomDeck(
                     AnimatedContent(
                         targetState = isWaitingForSecondPoint,
                         transitionSpec = {
-                            (fadeIn(animationSpec = tween(150)) + scaleIn(initialScale = 0.6f, animationSpec = tween(150)))
-                                .togetherWith(fadeOut(animationSpec = tween(110)) + scaleOut(targetScale = 0.6f, animationSpec = tween(110)))
+                            (fadeIn(animationSpec = ExpressiveMotion.effectsFast()) +
+                                scaleIn(initialScale = 0.55f, animationSpec = ExpressiveMotion.spatialFast()))
+                                .togetherWith(
+                                    fadeOut(animationSpec = ExpressiveMotion.effectsFast()) +
+                                        scaleOut(targetScale = 0.55f, animationSpec = ExpressiveMotion.spatialFast())
+                                )
                         },
                         label = "AddPointFabIconTransition"
                     ) { waitingForSecond ->
@@ -168,7 +204,7 @@ fun ModernArBottomDeck(
                             imageVector = if (waitingForSecond) Icons.Rounded.Check else Icons.Rounded.Add,
                             contentDescription = if (waitingForSecond) "確認第二點" else "加入點",
                             tint = addFabIconColor,
-                            modifier = Modifier.size((36 * uiButtonScale).dp)
+                            modifier = Modifier.size((34 * uiButtonScale).dp)
                         )
                     }
                 }
@@ -185,38 +221,51 @@ fun ModernArBottomDeck(
                 Box(modifier = Modifier.size(48.dp)) {
                     androidx.compose.animation.AnimatedVisibility(
                         visible = hasCapturedPoints,
-                        enter = fadeIn(animationSpec = tween(180)) + scaleIn(
-                            initialScale = 0.80f,
-                            animationSpec = tween(180, easing = FastOutSlowInEasing)
-                        ) + slideInHorizontally(
-                            initialOffsetX = { -it },
-                            animationSpec = tween(180, easing = FastOutSlowInEasing)
-                        ),
-                        exit = fadeOut(animationSpec = tween(140)) + scaleOut(
-                            targetScale = 0.80f,
-                            animationSpec = tween(140, easing = FastOutLinearInEasing)
-                        ) + slideOutHorizontally(
-                            targetOffsetX = { -it },
-                            animationSpec = tween(140, easing = FastOutLinearInEasing)
-                        )
+                        enter = fadeIn(animationSpec = ExpressiveMotion.effectsDefault()) +
+                            scaleIn(initialScale = 0.72f, animationSpec = ExpressiveMotion.spatialFast()) +
+                            slideInHorizontally(initialOffsetX = { -it }, animationSpec = ExpressiveMotion.spatialDefault()),
+                        exit = fadeOut(animationSpec = ExpressiveMotion.effectsFast()) +
+                            scaleOut(targetScale = 0.72f, animationSpec = ExpressiveMotion.spatialFast()) +
+                            slideOutHorizontally(targetOffsetX = { -it }, animationSpec = ExpressiveMotion.spatialFast())
                     ) {
-                        IconButton(
+                        val backInteraction = remember { MutableInteractionSource() }
+                        val isBackPressed by backInteraction.collectIsPressedAsState()
+                        val backCorner by rememberExpressivePressCorner(
+                            isPressed = isBackPressed,
+                            restingCorner = 24.dp,
+                            pressedCorner = 12.dp
+                        )
+                        val backScale by animateFloatAsState(
+                            targetValue = if (isBackPressed) 0.90f else 1.0f,
+                            animationSpec = ExpressiveMotion.spatialFast(),
+                            label = "backBtnScale"
+                        )
+
+                        Surface(
                             onClick = {
                                 haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
                                 viewModel.undo()
                             },
+                            interactionSource = backInteraction,
+                            shape = RoundedCornerShape(backCorner),
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.78f else 0.92f),
+                            border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
                             modifier = Modifier
                                 .size((48 * uiButtonScale).dp)
-                                .background(MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.75f else 0.90f), CircleShape)
-                                .border(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f), CircleShape)
+                                .graphicsLayer {
+                                    scaleX = backScale
+                                    scaleY = backScale
+                                }
                                 .testTag("back_step_button")
                         ) {
-                            Icon(
-                                Icons.Rounded.ArrowBack,
-                                contentDescription = "返回上一步",
-                                tint = colorOnSurface,
-                                modifier = Modifier.size((24 * uiButtonScale).dp)
-                            )
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    Icons.AutoMirrored.Rounded.ArrowBack,
+                                    contentDescription = "返回上一步",
+                                    tint = colorOnSurface,
+                                    modifier = Modifier.size((24 * uiButtonScale).dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -358,14 +407,14 @@ private fun LiveDistanceBadge(
 ) {
     val liveDistanceMeters by viewModel.liveDistanceMeters.collectAsStateWithLifecycle()
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
-        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.94f),
+        shape = CircleShape,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)),
-        shadowElevation = 0.dp
+        shadowElevation = 0.dp,
+        modifier = Modifier.animateContentSize(animationSpec = ExpressiveMotion.spatialDefault())
     ) {
         Row(
-            modifier = Modifier
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
@@ -373,6 +422,7 @@ private fun LiveDistanceBadge(
             val liveDistText = liveDistanceMeters?.let { viewModel.formatLength(it, selectedUnit) } ?: "量測中..."
             Text(
                 text = "即時長度: $liveDistText • 輕觸 ✓ 釘選終點",
+                style = ExpressiveTypography.labelNumeral,
                 color = MaterialTheme.colorScheme.primary,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold
@@ -458,15 +508,16 @@ private fun MeasurementLiveSummaryCard(
 
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.94f),
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(24.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
         shadowElevation = 0.dp,
         modifier = modifier
             .fillMaxWidth()
+            .animateContentSize(animationSpec = ExpressiveMotion.spatialDefault())
             .testTag("measurement_live_summary_card")
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -477,15 +528,15 @@ private fun MeasurementLiveSummaryCard(
             ) {
                 Surface(
                     color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = CircleShape,
-                    modifier = Modifier.size(36.dp)
+                    shape = ExpressiveCookie8Shape,
+                    modifier = Modifier.size(40.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             icon,
                             contentDescription = null,
                             tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(19.dp)
                         )
                     }
                 }
@@ -493,50 +544,86 @@ private fun MeasurementLiveSummaryCard(
                 Column {
                     Text(
                         text = primaryText,
-                        style = MaterialTheme.typography.titleMedium,
+                        style = ExpressiveTypography.titleNumeral,
+                        fontSize = 18.sp,
                         fontWeight = FontWeight.ExtraBold,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = secondaryText,
-                        style = MaterialTheme.typography.bodySmall,
+                        style = ExpressiveTypography.labelNumeral,
+                        fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 11.sp,
                         maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
 
-            // Quick Action Buttons (Copy, Save) with comfortable touch targets
+            // M3 Expressive Connected Quick Action Pair (Copy + Save/History)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                IconButton(
+                val copyInteraction = remember { MutableInteractionSource() }
+                val isCopyPressed by copyInteraction.collectIsPressedAsState()
+                val copyShape = rememberExpressiveConnectedShape(
+                    index = 0,
+                    count = 2,
+                    isActive = isCopied,
+                    isPressed = isCopyPressed,
+                    outerCorner = 20.dp,
+                    innerRestingCorner = 6.dp,
+                    innerActiveCorner = 16.dp
+                )
+                val copyBg by animateColorAsState(
+                    targetValue = if (isCopied) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+                    animationSpec = ExpressiveMotion.effectsFast(),
+                    label = "copyBg"
+                )
+
+                Surface(
                     onClick = {
                         clipboardManager.setText(AnnotatedString(primaryText))
                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
                         isCopied = true
                     },
-                    modifier = Modifier
-                        .size(40.dp)
-                        .background(
-                            if (isCopied) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface.copy(alpha = 0.65f),
-                            CircleShape
-                        )
+                    interactionSource = copyInteraction,
+                    shape = copyShape,
+                    color = copyBg,
+                    modifier = Modifier.size(42.dp)
                 ) {
-                    Icon(
-                        if (isCopied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
-                        contentDescription = "複製測量數值",
-                        tint = if (isCopied) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(18.dp)
-                    )
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            if (isCopied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+                            contentDescription = "複製測量數值",
+                            tint = if (isCopied) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
 
-                IconButton(
+                val saveInteraction = remember { MutableInteractionSource() }
+                val isSavePressed by saveInteraction.collectIsPressedAsState()
+                val saveShape = rememberExpressiveConnectedShape(
+                    index = 1,
+                    count = 2,
+                    isActive = isSaved,
+                    isPressed = isSavePressed,
+                    outerCorner = 20.dp,
+                    innerRestingCorner = 6.dp,
+                    innerActiveCorner = 16.dp
+                )
+                val saveBg by animateColorAsState(
+                    targetValue = if (isSaved) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.primary,
+                    animationSpec = ExpressiveMotion.effectsFast(),
+                    label = "saveBg"
+                )
+
+                Surface(
                     onClick = {
                         if (!isSaved) {
                             viewModel.saveMeasurementRecord {
@@ -547,19 +634,19 @@ private fun MeasurementLiveSummaryCard(
                             onShowHistory()
                         }
                     },
-                    modifier = Modifier
-                        .size(40.dp)
-                        .background(
-                            if (isSaved) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.primary,
-                            CircleShape
-                        )
+                    interactionSource = saveInteraction,
+                    shape = saveShape,
+                    color = saveBg,
+                    modifier = Modifier.size(42.dp)
                 ) {
-                    Icon(
-                        if (isSaved) Icons.Rounded.BookmarkAdded else Icons.Rounded.BookmarkAdd,
-                        contentDescription = "儲存至紀錄",
-                        tint = if (isSaved) MaterialTheme.colorScheme.onTertiaryContainer else MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(18.dp)
-                    )
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            if (isSaved) Icons.Rounded.BookmarkAdded else Icons.Rounded.BookmarkAdd,
+                            contentDescription = "儲存至紀錄",
+                            tint = if (isSaved) MaterialTheme.colorScheme.onTertiaryContainer else MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
         }
