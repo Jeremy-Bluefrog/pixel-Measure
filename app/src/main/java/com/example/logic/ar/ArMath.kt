@@ -752,6 +752,270 @@ object ArMath {
     }
 
     /**
+     * Fits a 3D circle using two antipodal diameter points [p1] and [p2].
+     */
+    fun fitCircle2Points(p1: Point3D, p2: Point3D): CircleResult? {
+        val diameter = distance(p1, p2)
+        if (diameter < 0.01 || diameter > 100.0 || diameter.isNaN() || diameter.isInfinite()) return null
+        val radius = diameter * 0.5
+        val center = Point3D(
+            x = (p1.x + p2.x) * 0.5,
+            y = (p1.y + p2.y) * 0.5,
+            z = (p1.z + p2.z) * 0.5,
+            label = "圓心",
+            isArPrecision = true
+        )
+        return CircleResult(
+            center = center,
+            radius = radius,
+            diameter = diameter,
+            circumference = 2.0 * Math.PI * radius,
+            area = Math.PI * radius * radius
+        )
+    }
+
+    /**
+     * Extracts a normalized 3D surface normal (local +Y rotated by unit quaternion) into [outNormal] (size >= 3).
+     * Optionally flips the normal so it points toward [cameraToHitDir] (i.e. dot(normal, camPos - hitPos) >= 0).
+     */
+    fun extractSurfaceNormalFromQuaternion(
+        qx: Float,
+        qy: Float,
+        qz: Float,
+        qw: Float,
+        outNormal: FloatArray,
+        towardCamX: Float = 0f,
+        towardCamY: Float = 0f,
+        towardCamZ: Float = 0f,
+        orientTowardCamera: Boolean = false
+    ) {
+        if (outNormal.size < 3) return
+        val qxd = qx.toDouble()
+        val qyd = qy.toDouble()
+        val qzd = qz.toDouble()
+        val qwd = qw.toDouble()
+
+        var nx = 2.0 * (qxd * qyd - qwd * qzd)
+        var ny = 1.0 - 2.0 * (qxd * qxd + qzd * qzd)
+        var nz = 2.0 * (qyd * qzd + qwd * qxd)
+
+        val len = sqrt(nx * nx + ny * ny + nz * nz)
+        if (len < 1e-6 || len.isNaN() || len.isInfinite()) {
+            outNormal[0] = 0f
+            outNormal[1] = 1f
+            outNormal[2] = 0f
+            return
+        }
+        nx /= len
+        ny /= len
+        nz /= len
+
+        if (orientTowardCamera) {
+            val dot = nx * towardCamX + ny * towardCamY + nz * towardCamZ
+            if (dot < 0.0) {
+                nx = -nx
+                ny = -ny
+                nz = -nz
+            }
+        }
+
+        outNormal[0] = nx.toFloat()
+        outNormal[1] = ny.toFloat()
+        outNormal[2] = nz.toFloat()
+    }
+
+    /**
+     * Builds a right-handed orthonormal basis (N, U, V) in 3D space without heap allocations.
+     * Writes 9 doubles into [outBasis]: [nx, ny, nz, ux, uy, uz, vx, vy, vz].
+     * Defaults cleanly to world horizontal plane N=(0, 1, 0), U=(1, 0, 0), V=(0, 0, -1) if input normal is degenerate.
+     */
+    fun buildOrthonormalBasis(
+        nxIn: Double,
+        nyIn: Double,
+        nzIn: Double,
+        outBasis: DoubleArray
+    ): Boolean {
+        if (outBasis.size < 9) return false
+        val len = sqrt(nxIn * nxIn + nyIn * nyIn + nzIn * nzIn)
+        val nx: Double
+        val ny: Double
+        val nz: Double
+        if (len < 1e-6 || len.isNaN() || len.isInfinite()) {
+            nx = 0.0
+            ny = 1.0
+            nz = 0.0
+        } else {
+            nx = nxIn / len
+            ny = nyIn / len
+            nz = nzIn / len
+        }
+
+        // Choose stable world reference axis: keep U horizontal when normal is vertical/tilted
+        val refX: Double
+        val refY: Double
+        val refZ: Double
+        if (abs(ny) < 0.92) {
+            refX = 0.0; refY = 1.0; refZ = 0.0
+        } else {
+            refX = 0.0; refY = 0.0; refZ = 1.0
+        }
+
+        // U = normalize(N x ref)
+        var ux = ny * refZ - nz * refY
+        var uy = nz * refX - nx * refZ
+        var uz = nx * refY - ny * refX
+        val uLen = sqrt(ux * ux + uy * uy + uz * uz)
+        if (uLen < 1e-6) {
+            outBasis[0] = 0.0; outBasis[1] = 1.0; outBasis[2] = 0.0
+            outBasis[3] = 1.0; outBasis[4] = 0.0; outBasis[5] = 0.0
+            outBasis[6] = 0.0; outBasis[7] = 0.0; outBasis[8] = -1.0
+            return true
+        }
+        ux /= uLen
+        uy /= uLen
+        uz /= uLen
+
+        // V = N x U
+        val vx = ny * uz - nz * uy
+        val vy = nz * ux - nx * uz
+        val vz = nx * uy - ny * ux
+
+        outBasis[0] = nx; outBasis[1] = ny; outBasis[2] = nz
+        outBasis[3] = ux; outBasis[4] = uy; outBasis[5] = uz
+        outBasis[6] = vx; outBasis[7] = vy; outBasis[8] = vz
+        return true
+    }
+
+    /**
+     * Computes the exact plane normal and orthonormal basis (N, U, V) from 3 non-collinear 3D points.
+     * Writes 9 doubles into [outBasis]. Returns false if the points are collinear or degenerate.
+     */
+    fun computePlaneNormal3Points(
+        p1: Point3D,
+        p2: Point3D,
+        p3: Point3D,
+        outBasis: DoubleArray
+    ): Boolean {
+        if (outBasis.size < 9) return false
+        val v1x = p2.x - p1.x
+        val v1y = p2.y - p1.y
+        val v1z = p2.z - p1.z
+        val v2x = p3.x - p1.x
+        val v2y = p3.y - p1.y
+        val v2z = p3.z - p1.z
+
+        val cx = v1y * v2z - v1z * v2y
+        val cy = v1z * v2x - v1x * v2z
+        val cz = v1x * v2y - v1y * v2x
+        val crossMag = sqrt(cx * cx + cy * cy + cz * cz)
+        val e1 = sqrt(v1x * v1x + v1y * v1y + v1z * v1z)
+        val e2 = sqrt(v2x * v2x + v2y * v2y + v2z * v2z)
+        val maxEdge = max(e1, e2)
+        if (maxEdge < 1e-4 || crossMag < 1e-4 * maxEdge) {
+            return false
+        }
+        return buildOrthonormalBasis(cx, cy, cz, outBasis)
+    }
+
+    /**
+     * Samples [segments] 3D world coordinates of a circle centered at ([cx], [cy], [cz])
+     * with radius [radiusMeters] lying on the plane defined by [basis] ([nx, ny, nz, ux, uy, uz, vx, vy, vz]).
+     * Zero heap allocations; writes into [outX], [outY], [outZ].
+     */
+    fun sampleCircle3DWorldCoords(
+        cx: Double,
+        cy: Double,
+        cz: Double,
+        radiusMeters: Double,
+        basis: DoubleArray,
+        segments: Int,
+        outX: DoubleArray,
+        outY: DoubleArray,
+        outZ: DoubleArray,
+        phaseOffsetRad: Double = 0.0
+    ): Int {
+        if (basis.size < 9 || segments < 3 || radiusMeters <= 0.0 ||
+            outX.size < segments || outY.size < segments || outZ.size < segments
+        ) {
+            return 0
+        }
+        val ux = basis[3]; val uy = basis[4]; val uz = basis[5]
+        val vx = basis[6]; val vy = basis[7]; val vz = basis[8]
+        val step = (2.0 * Math.PI) / segments
+        for (i in 0 until segments) {
+            val theta = phaseOffsetRad + i * step
+            val c = cos(theta) * radiusMeters
+            val s = sin(theta) * radiusMeters
+            outX[i] = cx + c * ux + s * vx
+            outY[i] = cy + c * uy + s * vy
+            outZ[i] = cz + c * uz + s * vz
+        }
+        return segments
+    }
+
+    /**
+     * Zero-allocation 3D perspective circle projection onto 2D screen pixel buffers [outScreenX] and [outScreenY].
+     * Uses [basis] ([nx, ny, nz, ux, uy, uz, vx, vy, vz]) so circles tilt realistically with any floor, wall, or tilted plane.
+     * Returns [segments] if all vertices projected cleanly in front of the camera, or 0 if behind/invalid.
+     */
+    fun projectCircle3DToScreen(
+        cx: Double,
+        cy: Double,
+        cz: Double,
+        radiusMeters: Double,
+        basis: DoubleArray,
+        segments: Int,
+        viewMatrix: FloatArray,
+        projectionMatrix: FloatArray,
+        screenWidth: Int,
+        screenHeight: Int,
+        outScreenX: FloatArray,
+        outScreenY: FloatArray,
+        scratchXY: FloatArray,
+        isHorizontallyMirrored: Boolean = false,
+        phaseOffsetRad: Double = 0.0
+    ): Int {
+        if (basis.size < 9 || segments < 3 || radiusMeters <= 1e-5 ||
+            viewMatrix.size < 16 || projectionMatrix.size < 16 ||
+            screenWidth <= 0 || screenHeight <= 0 ||
+            outScreenX.size < segments || outScreenY.size < segments || scratchXY.size < 2 ||
+            !isMatrixValid(viewMatrix) || !isMatrixValid(projectionMatrix)
+        ) {
+            return 0
+        }
+
+        val ux = basis[3]; val uy = basis[4]; val uz = basis[5]
+        val vx = basis[6]; val vy = basis[7]; val vz = basis[8]
+        val step = (2.0 * Math.PI) / segments
+
+        for (i in 0 until segments) {
+            val theta = phaseOffsetRad + i * step
+            val c = cos(theta) * radiusMeters
+            val s = sin(theta) * radiusMeters
+            val wx = cx + c * ux + s * vx
+            val wy = cy + c * uy + s * vy
+            val wz = cz + c * uz + s * vz
+            if (!projectCoordsToScreen(
+                    wx = wx,
+                    wy = wy,
+                    wz = wz,
+                    viewMatrix = viewMatrix,
+                    projectionMatrix = projectionMatrix,
+                    screenWidth = screenWidth,
+                    screenHeight = screenHeight,
+                    outXY = scratchXY,
+                    isHorizontallyMirrored = isHorizontallyMirrored
+                )
+            ) {
+                return 0
+            }
+            outScreenX[i] = scratchXY[0]
+            outScreenY[i] = scratchXY[1]
+        }
+        return segments
+    }
+
+    /**
      * Projects a 3D horizontal circle (parallel to the ground/floor XZ plane, normal = (0, 1, 0))
      * centered at [center3D] with radius [radiusMeters] into a list of 2D screen points (forming an ellipse in perspective).
      */

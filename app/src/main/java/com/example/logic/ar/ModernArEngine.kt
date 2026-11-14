@@ -1111,6 +1111,8 @@ class ModernArEngine(private val context: Context) {
                 }
             }
 
+            val camPose = frame.camera.pose
+
             if (planePolygonHit != null) {
                 var plane = planePolygonHit.trackable as Plane
                 while (plane.subsumedBy != null) {
@@ -1119,6 +1121,7 @@ class ModernArEngine(private val context: Context) {
                 val edgeSnap = findPlaneEdgeOrVertexSnap(plane, planePolygonHit.hitPose, snapRadiusMeters = 0.08f)
                 val finalPose = edgeSnap?.first ?: planePolygonHit.hitPose
                 val isSnapped = edgeSnap?.second ?: false
+                extractOrientedNormal(plane.centerPose, finalPose, camPose)
 
                 val anchor = if (createAnchor) {
                     try {
@@ -1133,7 +1136,11 @@ class ModernArEngine(private val context: Context) {
                     hitType = HitType.PLANE_POLYGON,
                     distance = planePolygonHit.distance,
                     planeType = plane.type,
-                    isSnappedToFeature = isSnapped
+                    isSnappedToFeature = isSnapped,
+                    normalX = scratchNormalOut[0],
+                    normalY = scratchNormalOut[1],
+                    normalZ = scratchNormalOut[2],
+                    hasSurfaceNormal = true
                 )
             }
 
@@ -1147,6 +1154,7 @@ class ModernArEngine(private val context: Context) {
                     val edgeSnap = findPlaneEdgeOrVertexSnap(plane, planeEstimatedHit.hitPose, snapRadiusMeters = 0.08f)
                     val finalPose = edgeSnap?.first ?: planeEstimatedHit.hitPose
                     val isSnapped = edgeSnap?.second ?: false
+                    extractOrientedNormal(plane.centerPose, finalPose, camPose)
 
                     val anchor = if (createAnchor) {
                         try {
@@ -1161,12 +1169,17 @@ class ModernArEngine(private val context: Context) {
                         hitType = HitType.PLANE_ESTIMATED,
                         distance = planeEstimatedHit.distance,
                         planeType = plane.type,
-                        isSnappedToFeature = isSnapped
+                        isSnappedToFeature = isSnapped,
+                        normalX = scratchNormalOut[0],
+                        normalY = scratchNormalOut[1],
+                        normalZ = scratchNormalOut[2],
+                        hasSurfaceNormal = true
                     )
                 }
 
-                // Tier 3: Depth Point (from Depth API)
+                // Tier 3: Depth Point (from Depth API / Estimated Surface Normal point)
                 if (depthHit != null) {
+                    extractOrientedNormal(depthHit.hitPose, depthHit.hitPose, camPose)
                     val anchor = if (createAnchor) {
                         try { depthHit.createAnchor() } catch (e: Exception) { null }
                     } else null
@@ -1175,7 +1188,11 @@ class ModernArEngine(private val context: Context) {
                         anchor = anchor,
                         hitType = HitType.DEPTH_POINT,
                         distance = depthHit.distance,
-                        planeType = null
+                        planeType = null,
+                        normalX = scratchNormalOut[0],
+                        normalY = scratchNormalOut[1],
+                        normalZ = scratchNormalOut[2],
+                        hasSurfaceNormal = true
                     )
                 }
 
@@ -1192,7 +1209,11 @@ class ModernArEngine(private val context: Context) {
                         hitType = HitType.INSTANT_PLACEMENT,
                         distance = instantHit.distance,
                         planeType = null,
-                        isApproximatePlacement = isApprox
+                        isApproximatePlacement = isApprox,
+                        normalX = 0f,
+                        normalY = 1f,
+                        normalZ = 0f,
+                        hasSurfaceNormal = false
                     )
                 }
 
@@ -1207,7 +1228,11 @@ class ModernArEngine(private val context: Context) {
                         hitType = HitType.FEATURE_POINT,
                         distance = featurePointHit.distance,
                         planeType = null,
-                        isSnappedToFeature = true
+                        isSnappedToFeature = true,
+                        normalX = 0f,
+                        normalY = 1f,
+                        normalZ = 0f,
+                        hasSurfaceNormal = false
                     )
                 }
             }
@@ -1348,6 +1373,8 @@ class ModernArEngine(private val context: Context) {
             val finalPose = edgeSnap?.first ?: hitPose
             val isSnapped = edgeSnap?.second ?: false
 
+            extractOrientedNormal(bestPlane.centerPose, finalPose, cameraPose)
+
             val anchor = if (createAnchor) {
                 try {
                     bestPlane.createAnchor(finalPose)
@@ -1360,10 +1387,32 @@ class ModernArEngine(private val context: Context) {
                 hitType = HitType.PLANE_ESTIMATED,
                 distance = bestT,
                 planeType = bestPlane.type,
-                isSnappedToFeature = isSnapped
+                isSnappedToFeature = isSnapped,
+                normalX = scratchNormalOut[0],
+                normalY = scratchNormalOut[1],
+                normalZ = scratchNormalOut[2],
+                hasSurfaceNormal = true
             )
         }
         return null
+    }
+
+    /**
+     * Extracts the normalized surface normal (pose local +Y) oriented toward the camera into [scratchNormalOut].
+     */
+    private fun extractOrientedNormal(orientationPose: Pose, hitPose: Pose, cameraPose: Pose) {
+        val rot = orientationPose.rotationQuaternion
+        ArMath.extractSurfaceNormalFromQuaternion(
+            qx = rot[0],
+            qy = rot[1],
+            qz = rot[2],
+            qw = rot[3],
+            outNormal = scratchNormalOut,
+            towardCamX = cameraPose.tx() - hitPose.tx(),
+            towardCamY = cameraPose.ty() - hitPose.ty(),
+            towardCamZ = cameraPose.tz() - hitPose.tz(),
+            orientTowardCamera = true
+        )
     }
 
     /**
@@ -1687,7 +1736,11 @@ data class HitTestResult(
     val distance: Float,
     val planeType: Plane.Type? = null,
     val isSnappedToFeature: Boolean = false,
-    val isApproximatePlacement: Boolean = false
+    val isApproximatePlacement: Boolean = false,
+    val normalX: Float = 0f,
+    val normalY: Float = 1f,
+    val normalZ: Float = 0f,
+    val hasSurfaceNormal: Boolean = false
 )
 
 /**

@@ -100,16 +100,19 @@ fun ModernArTopBar(
                 val subModeLabel = when (subMode) {
                     1 -> "面積"
                     2 -> "高度"
+                    4 -> "圓形"
                     5 -> "角度"
                     else -> when (autoDetectedType) {
                         "HEIGHT" -> "自動·高"
                         "AREA" -> "自動·面"
+                        "CIRCLE" -> "自動·圓"
                         else -> "自動"
                     }
                 }
                 val subModeIcon = when (subMode) {
                     1 -> Icons.Rounded.SquareFoot
                     2 -> Icons.Rounded.Height
+                    4 -> Icons.Rounded.Adjust
                     5 -> Icons.Rounded.Architecture
                     else -> Icons.Rounded.AutoMode
                 }
@@ -119,7 +122,7 @@ fun ModernArTopBar(
                         label = subModeLabel,
                         leadingIcon = subModeIcon,
                         onPrimaryClick = {
-                            val cycleOrder = listOf(0, 1, 2, 5)
+                            val cycleOrder = listOf(0, 1, 2, 4, 5)
                             val nextIdx = (cycleOrder.indexOf(subMode) + 1) % cycleOrder.size
                             viewModel.setCameraSubMode(cycleOrder[nextIdx])
                         },
@@ -144,6 +147,7 @@ fun ModernArTopBar(
                             -1 to ("直線距離 (Distance)" to Icons.Rounded.Straighten),
                             1 to ("封閉面積 (Area)" to Icons.Rounded.SquareFoot),
                             2 to ("垂直高度 (Height)" to Icons.Rounded.Height),
+                            4 to ("3D 圓形測量 (Circle)" to Icons.Rounded.Adjust),
                             5 to ("空間夾角 (Angle)" to Icons.Rounded.Architecture)
                         ).forEach { (modeId, info) ->
                             val (label, icon) = info

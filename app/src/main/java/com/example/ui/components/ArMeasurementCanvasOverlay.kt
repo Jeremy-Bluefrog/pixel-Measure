@@ -323,6 +323,10 @@ fun ArMeasurementCanvasOverlay(
     // Reusable Path & primitive caches
     val areaCachedPath = remember { Path() }
     val planeCachedPath = remember { Path() }
+    val canvasCirclePath = remember { Path() }
+    val canvasCircleBasis = remember { DoubleArray(9) }
+    val canvasCircleScratchX = remember { FloatArray(48) }
+    val canvasCircleScratchY = remember { FloatArray(48) }
     val planeScratchIn = remember { FloatArray(3) }
     val planeScratchOut = remember { FloatArray(3) }
     val tempProjHolder = remember { FloatArray(2) }
@@ -944,54 +948,89 @@ fun ArMeasurementCanvasOverlay(
         }
 
         // -------------------------------------------------------------
-        // 4. CIRCLE / DIAMETER MODE (SubMode 4)
+        // 4. CIRCLE / DIAMETER MODE (SubMode 4 — True 3D Surface-Aligned Perspective Ring)
         // -------------------------------------------------------------
-        if (isCircleMode && pointsSnapshot.isNotEmpty()) {
-            val pCenter = projectedPoints.getOrNull(0)
-            val pEdge = if (projectedPoints.size >= 2) projectedPoints[1] else reticleHolderProj.apply { x = currentReticlePos.x; y = currentReticlePos.y; isValid = true }
+        if (isCircleMode && hasValidMatrices && pointsSnapshot.isNotEmpty()) {
+            val liveTarget = liveTargetPoint
+            val p0 = pointsSnapshot[0]
+            val p1 = if (pointsSnapshot.size >= 2) pointsSnapshot[1] else null
+            val p2 = if (pointsSnapshot.size >= 3) pointsSnapshot[2] else null
 
-            if (pCenter != null && pEdge != null) {
-                val cOffset = Offset(pCenter.first, pCenter.second)
-                val eOffset = Offset(pEdge.first, pEdge.second)
-                val dx = eOffset.x - cOffset.x
-                val dy = eOffset.y - cOffset.y
-                val rPx = sqrt(dx * dx + dy * dy)
+            val circleResult = viewModel.calculateCircle()
+            val center3D = circleResult?.center ?: p0
+            val radiusMeters = circleResult?.radius ?: (if (p1 != null) ArMath.distance(p0, p1) * 0.5 else (if (liveTarget != null) ArMath.distance(p0, liveTarget) * 0.5 else 0.5))
+            val diameterMeters = radiusMeters * 2.0
 
-                if (!rPx.isNaN() && rPx > 2f) {
-                    // 半徑輔助虛線
+            // Determine plane basis for 3D circle
+            val hasBasis = when {
+                p0 != null && p1 != null && p2 != null -> ArMath.computePlaneNormal3Points(p0, p1, p2, canvasCircleBasis)
+                p0 != null && p1 != null && liveTarget != null -> ArMath.computePlaneNormal3Points(p0, p1, liveTarget, canvasCircleBasis)
+                else -> {
+                    val norm = viewModel.liveSurfaceNormal.value
+                    ArMath.buildOrthonormalBasis(norm[0].toDouble(), norm[1].toDouble(), norm[2].toDouble(), canvasCircleBasis)
+                }
+            }
+
+            if (hasBasis && radiusMeters > 0.005) {
+                val segCount = 48
+                val projectedCount = ArMath.projectCircle3DToScreen(
+                    cx = center3D.x,
+                    cy = center3D.y,
+                    cz = center3D.z,
+                    radiusMeters = radiusMeters,
+                    basis = canvasCircleBasis,
+                    segments = segCount,
+                    viewMatrix = viewMatrix,
+                    projectionMatrix = projectionMatrix,
+                    screenWidth = screenW,
+                    screenHeight = screenH,
+                    outScreenX = canvasCircleScratchX,
+                    outScreenY = canvasCircleScratchY,
+                    scratchXY = tempProjHolder,
+                    isHorizontallyMirrored = isHorizontallyMirrored
+                )
+
+                if (projectedCount >= 3) {
+                    canvasCirclePath.reset()
+                    canvasCirclePath.moveTo(canvasCircleScratchX[0], canvasCircleScratchY[0])
+                    for (i in 1 until projectedCount) {
+                        canvasCirclePath.lineTo(canvasCircleScratchX[i], canvasCircleScratchY[i])
+                    }
+                    canvasCirclePath.close()
+
+                    // Semi-transparent interior fill
+                    drawPath(
+                        path = canvasCirclePath,
+                        color = colorPrimary.copy(alpha = 0.15f)
+                    )
+
+                    // Outer laser stroke
+                    drawPath(
+                        path = canvasCirclePath,
+                        color = colorPrimary,
+                        style = Stroke(width = effectiveLineThickness.dp.toPx(), cap = StrokeCap.Round)
+                    )
+
+                    // Project center
+                    val centerProjOk = ArMath.projectCoordsToScreen(center3D.x, center3D.y, center3D.z, viewMatrix, projectionMatrix, screenW, screenH, tempProjHolder, isHorizontallyMirrored)
+                    val centerOffset = if (centerProjOk) Offset(tempProjHolder[0], tempProjHolder[1]) else screenCenter
+
+                    // Center marker dot
+                    drawCircle(Color.White, center = centerOffset, radius = 3.5.dp.toPx())
+                    drawCircle(colorPrimary, center = centerOffset, radius = 5.dp.toPx(), style = Stroke(width = 1.5.dp.toPx()))
+
+                    // Radius / Diameter chord line preview
+                    val edgeProjOk = p1 != null && ArMath.projectCoordsToScreen(p1.x, p1.y, p1.z, viewMatrix, projectionMatrix, screenW, screenH, tempProjHolder, isHorizontallyMirrored)
+                    val edgeOffset = if (edgeProjOk) Offset(tempProjHolder[0], tempProjHolder[1]) else Offset(canvasCircleScratchX[0], canvasCircleScratchY[0])
+
                     drawLine(
                         color = colorTertiary,
-                        start = cOffset,
-                        end = eOffset,
+                        start = centerOffset,
+                        end = edgeOffset,
                         strokeWidth = effectiveLineThickness.dp.toPx(),
                         pathEffect = PathEffect.dashPathEffect(DASH_14_10, currentDashPhase),
                         cap = StrokeCap.Round
                     )
-
-                    // 圓形內域半透明填色
-                    drawCircle(
-                        color = colorPrimary.copy(alpha = 0.12f),
-                        center = cOffset,
-                        radius = rPx
-                    )
-
-                    // 圓周外輪廓
-                    drawCircle(
-                        color = colorPrimary,
-                        center = cOffset,
-                        radius = rPx,
-                        style = Stroke(width = effectiveLineThickness.dp.toPx())
-                    )
-
-                    // 計算真實 3D 半徑與直徑
-                    val radiusMeters = if (pointsSnapshot.size >= 2) {
-                        ArMath.distance(pointsSnapshot[0], pointsSnapshot[1])
-                    } else if (liveDistanceMeters != null && liveDistanceMeters > 0.0) {
-                        liveDistanceMeters
-                    } else {
-                        (rPx / 400.0).coerceIn(0.05, 5.0)
-                    }
-                    val diameterMeters = radiusMeters * 2.0
 
                     val circleText = "直徑 ${viewModel.formatLength(diameterMeters, selectedUnit)} | 半徑 ${viewModel.formatLength(radiusMeters, selectedUnit)}"
 
@@ -1000,8 +1039,8 @@ fun ArMeasurementCanvasOverlay(
                         val textHeight = badgeTextPaint.textSize
                         val padH = 32f
                         val padV = 16f
-                        val midX = (cOffset.x + eOffset.x) / 2f
-                        val midY = (cOffset.y + eOffset.y) / 2f - 24.dp.toPx()
+                        val midX = centerOffset.x
+                        val midY = centerOffset.y - 28.dp.toPx()
                         val left = midX - textWidth / 2f - padH
                         val top = midY - textHeight / 2f - padV
                         val right = midX + textWidth / 2f + padH

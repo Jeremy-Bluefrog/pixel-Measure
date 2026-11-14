@@ -135,6 +135,30 @@ fun MeasurementGuidancePill(
                         "當前線段：$distStr · 點擊「＋」新增",
                         Color(0xFF10B981)
                     )
+                    4 -> {
+                        if (capturedPointsCount >= 3) {
+                            Quad(
+                                Icons.Rounded.Adjust,
+                                "3D 圓形已鎖定",
+                                "即時直徑：$distStr · 可直接儲存紀錄",
+                                Color(0xFF06B6D4)
+                            )
+                        } else if (capturedPointsCount == 2) {
+                            Quad(
+                                Icons.Rounded.Adjust,
+                                "標記圓周第 3 點完成 3D 定圓",
+                                "擬合直徑：$distStr · 點擊「＋」鎖定",
+                                Color(0xFF06B6D4)
+                            )
+                        } else {
+                            Quad(
+                                Icons.Rounded.Adjust,
+                                "延伸至圓周第 2 點",
+                                "預覽直徑：$distStr · 點擊「＋」標記",
+                                Color(0xFF06B6D4)
+                            )
+                        }
+                    }
                     else -> Quad(
                         Icons.Rounded.Straighten,
                         "向終點延伸線段",
@@ -143,9 +167,33 @@ fun MeasurementGuidancePill(
                     )
                 }
             }
+            subMode == 4 && capturedPointsCount >= 2 && isMeasurementAvailable -> {
+                val distStr = liveDistanceMeters?.let { viewModel.formatLength(it, selectedUnit) } ?: "量測中..."
+                if (capturedPointsCount >= 3) {
+                    Quad(
+                        Icons.Rounded.Adjust,
+                        "3D 圓形測量完成",
+                        "直徑：$distStr · 可點擊儲存或清除",
+                        Color(0xFF10B981)
+                    )
+                } else {
+                    Quad(
+                        Icons.Rounded.Adjust,
+                        "標記圓周第 3 點精確擬合 3D 圓",
+                        "擬合直徑：$distStr · 點擊「＋」定點",
+                        Color(0xFF06B6D4)
+                    )
+                }
+            }
             isMeasurementAvailable -> {
                 val nextSegment = (capturedPointsCount / 2) + 1
-                val role = if (capturedPointsCount == 0) "起點" else "線段 $nextSegment 起點"
+                val role = if (subMode == 4) {
+                    "標記圓周第 1 點"
+                } else if (capturedPointsCount == 0) {
+                    "起點"
+                } else {
+                    "線段 $nextSegment 起點"
+                }
                 Quad(
                     Icons.Rounded.Adjust,
                     role,

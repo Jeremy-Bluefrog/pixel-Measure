@@ -163,6 +163,8 @@ class VulkanArGraphicsPipeline(
         capturedPoints: List<Point3D>,
         liveTarget: Point3D?,
         boxCorners: List<Point3D>?,
+        circleRingVertices: FloatArray? = null,
+        circleVertexCount: Int = 0,
         onVulkanFrameRendered: (latencyMs: Float) -> Unit = {}
     ) {
         val slot = syncManager.acquireNextFrameSlot(timeoutMs = 64L)
@@ -198,6 +200,18 @@ class VulkanArGraphicsPipeline(
                     buf.put(last.x.toFloat()); buf.put(last.y.toFloat()); buf.put(last.z.toFloat()); buf.put(0.8f)
                     buf.put(liveTarget.x.toFloat()); buf.put(liveTarget.y.toFloat()); buf.put(liveTarget.z.toFloat()); buf.put(0.8f)
                     vertexCount += 2
+                }
+
+                // 3. 3D Circle perimeter segments (closed loop) when in 3D Circle mode or active 3D reticle ring
+                if (circleRingVertices != null && circleVertexCount >= 3 && circleRingVertices.size >= circleVertexCount * 3) {
+                    for (i in 0 until circleVertexCount) {
+                        if (vertexCount + 2 > maxBatchVertices) break
+                        val aIdx = i * 3
+                        val bIdx = ((i + 1) % circleVertexCount) * 3
+                        buf.put(circleRingVertices[aIdx]); buf.put(circleRingVertices[aIdx + 1]); buf.put(circleRingVertices[aIdx + 2]); buf.put(0.95f)
+                        buf.put(circleRingVertices[bIdx]); buf.put(circleRingVertices[bIdx + 1]); buf.put(circleRingVertices[bIdx + 2]); buf.put(0.95f)
+                        vertexCount += 2
+                    }
                 }
 
                 buf.flip()

@@ -397,12 +397,22 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private val vulkanViewMatrixBuffer = FloatArray(16)
     private val vulkanProjMatrixBuffer = FloatArray(16)
+    private val vulkanCircleBasis = DoubleArray(9)
+    private val vulkanCircleX = DoubleArray(48)
+    private val vulkanCircleY = DoubleArray(48)
+    private val vulkanCircleZ = DoubleArray(48)
+    private val vulkanCircleFloats = FloatArray(48 * 3)
+    private val surfaceNormalScratch = floatArrayOf(0f, 1f, 0f)
     private var lastTapTimestampMs = 0L
     private var lastDriftWarningTimestampMs = 0L
     private val screenPosBuffer = FloatArray(2)
 
     private val _liveTargetScreenPos = MutableStateFlow<androidx.compose.ui.geometry.Offset?>(null)
     val liveTargetScreenPos: StateFlow<androidx.compose.ui.geometry.Offset?> = _liveTargetScreenPos.asStateFlow()
+    private val _liveSurfaceNormal = MutableStateFlow(floatArrayOf(0f, 1f, 0f))
+    val liveSurfaceNormal: StateFlow<FloatArray> = _liveSurfaceNormal.asStateFlow()
+    private val _isSurfaceNormalLocked = MutableStateFlow(false)
+    val isSurfaceNormalLocked: StateFlow<Boolean> = _isSurfaceNormalLocked.asStateFlow()
     private var lastValidHitTimestampMs: Long = 0L
 
     // Screen dimensions
@@ -1327,12 +1337,17 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         onArFrameUpdated(frameData)
 
         if (isVulkanGraphicsEnabled.value) {
+            val snapshotPts = getCapturedPointsSnapshot()
+            val liveTarget = _liveTargetPoint.value
+            val vulkanCircleVertsCount = prepareVulkanCircleVertices(snapshotPts, liveTarget)
             vulkanGraphicsPipeline.recordAndExecuteDrawPass(
                 viewMatrix = vulkanViewMatrixBuffer,
                 projectionMatrix = vulkanProjMatrixBuffer,
-                capturedPoints = getCapturedPointsSnapshot(),
-                liveTarget = _liveTargetPoint.value,
-                boxCorners = null
+                capturedPoints = snapshotPts,
+                liveTarget = liveTarget,
+                boxCorners = null,
+                circleRingVertices = if (vulkanCircleVertsCount > 0) vulkanCircleFloats else null,
+                circleVertexCount = vulkanCircleVertsCount
             )
         }
 
@@ -1411,6 +1426,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             if (prevTarget == null || ArMath.distance(prevTarget, finalTargetPoint) > 0.0020) {
                 _liveTargetPoint.value = finalTargetPoint
             }
+            updateSmoothedSurfaceNormal(centerHit)
             if (displayWidth > 0 && displayHeight > 0) {
                 if (ArMath.projectWorldToScreenInPlace(
                         worldPoint = finalTargetPoint,
@@ -1437,7 +1453,16 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             }
 
             // 5. Calculate live real-time distance with stability & Dual-Camera Stereo Parallax scale calibration
-            if (isActivelyDrawingLine && lastConfirmedPoint != null) {
+            val circleLiveDist = if (_cameraSubMode.value == 4 && pointsSnapshot.size == 2) {
+                ArMath.fitCircle3Points(pointsSnapshot[0], pointsSnapshot[1], finalTargetPoint)?.diameter
+                    ?: ArMath.distance(pointsSnapshot[0], pointsSnapshot[1])
+            } else null
+
+            if (circleLiveDist != null) {
+                val scaled = sensorCorrectionEngine.correctDistanceWithStereoParallax(circleLiveDist)
+                _liveDistanceMeters.value = smoothLiveDistance(scaled)
+                checkMeterMilestoneHaptic(scaled)
+            } else if ((isActivelyDrawingLine || (_cameraSubMode.value == 4 && pointsSnapshot.size == 1)) && lastConfirmedPoint != null) {
                 val dist = if (_cameraSubMode.value == 2) {
                     sensorCorrectionEngine.correctVerticalHeightWithGravity(lastConfirmedPoint, finalTargetPoint)
                 } else {
@@ -1497,16 +1522,33 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
 
                 val nextIndex = pointsSnapshot.size
+                val isCircleSubMode = _cameraSubMode.value == 4
                 val lineNum = (nextIndex / 2) + 1
-                val role = if (nextIndex % 2 == 0) "起點" else "終點"
                 val charCode = ('A'.code + (nextIndex % 26)).toChar()
-                val namedP = correctedP.copy(label = "線段$lineNum $role $charCode")
+                val labelText: String
+                val toastText: String
+                val isClosing: Boolean
+                if (isCircleSubMode) {
+                    labelText = "圓周點${nextIndex + 1} $charCode"
+                    isClosing = nextIndex >= 2
+                    toastText = when (nextIndex) {
+                        0 -> "已標記圓周第 1 點 ($charCode)，請瞄準第 2 點"
+                        1 -> "已標記圓周第 2 點 ($charCode)，可繼續標記第 3 點精確擬合 3D 圓"
+                        else -> "3D 圓形測量完成（三點定圓）"
+                    }
+                } else {
+                    val role = if (nextIndex % 2 == 0) "起點" else "終點"
+                    labelText = "線段$lineNum $role $charCode"
+                    isClosing = isActivelyDrawingLine
+                    toastText = if (isActivelyDrawingLine) "線段 $lineNum 完成（兩點成一線）" else "已設定線段 $lineNum 起點 ($charCode)，請瞄準終點"
+                }
+                val namedP = correctedP.copy(label = labelText)
 
                 mainHandler.post {
                     appendMeasuredPointOnMainThread(
                         point = namedP,
-                        isClosingLine = isActivelyDrawingLine,
-                        successToast = if (isActivelyDrawingLine) "線段 $lineNum 完成（兩點成一線）" else "已設定線段 $lineNum 起點 ($charCode)，請瞄準終點",
+                        isClosingLine = isClosing,
+                        successToast = toastText,
                         overflowToast = "已達最大測量點上限 (256點)，請儲存或清除後再繼續",
                         onOverflow = { try { hitResult.anchor?.detach() } catch (_: Throwable) {} }
                     )
@@ -1517,18 +1559,34 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 val livePt = _liveTargetPoint.value
                 if (livePt != null && camera.trackingState == TrackingState.TRACKING) {
                     val pointsSnapshot = getCapturedPointsSnapshot()
+                    val isCircleSubMode = _cameraSubMode.value == 4
                     val isActivelyDrawingLine = pointsSnapshot.size % 2 == 1
                     val nextIndex = pointsSnapshot.size
                     val lineNum = (nextIndex / 2) + 1
-                    val role = if (nextIndex % 2 == 0) "起點" else "終點"
                     val charCode = ('A'.code + (nextIndex % 26)).toChar()
-                    val namedP = livePt.copy(label = "線段$lineNum $role $charCode")
+                    val labelText = if (isCircleSubMode) {
+                        "圓周點${nextIndex + 1} $charCode"
+                    } else {
+                        val role = if (nextIndex % 2 == 0) "起點" else "終點"
+                        "線段$lineNum $role $charCode"
+                    }
+                    val isClosing = if (isCircleSubMode) nextIndex >= 2 else isActivelyDrawingLine
+                    val toastText = if (isCircleSubMode) {
+                        when (nextIndex) {
+                            0 -> "已標記圓周第 1 點 ($charCode)"
+                            1 -> "已標記圓周第 2 點 ($charCode)，請瞄準第 3 點"
+                            else -> "3D 圓形測量完成"
+                        }
+                    } else {
+                        if (isActivelyDrawingLine) "線段 $lineNum 完成" else "已設定線段 $lineNum 起點 ($charCode)"
+                    }
+                    val namedP = livePt.copy(label = labelText)
 
                     mainHandler.post {
                         appendMeasuredPointOnMainThread(
                             point = namedP,
-                            isClosingLine = isActivelyDrawingLine,
-                            successToast = if (isActivelyDrawingLine) "線段 $lineNum 完成" else "已設定線段 $lineNum 起點 ($charCode)",
+                            isClosingLine = isClosing,
+                            successToast = toastText,
                             overflowToast = "已達最大測量點上限 (256點)"
                         )
                     }
@@ -1540,6 +1598,121 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             }
         }
         return centerHit
+    }
+
+    private fun updateSmoothedSurfaceNormal(centerHit: HitTestResult) {
+        if (!centerHit.hasSurfaceNormal) {
+            if (_isSurfaceNormalLocked.value) {
+                _isSurfaceNormalLocked.value = false
+            }
+            return
+        }
+        if (!_isSurfaceNormalLocked.value) {
+            _isSurfaceNormalLocked.value = true
+        }
+        val tx = centerHit.normalX
+        val ty = centerHit.normalY
+        val tz = centerHit.normalZ
+        val tLen = kotlin.math.sqrt(tx * tx + ty * ty + tz * tz)
+        if (tLen < 1e-5f || tLen.isNaN()) return
+        val ntx = tx / tLen
+        val nty = ty / tLen
+        val ntz = tz / tLen
+
+        val cx = surfaceNormalScratch[0]
+        val cy = surfaceNormalScratch[1]
+        val cz = surfaceNormalScratch[2]
+        val dot = cx * ntx + cy * nty + cz * ntz
+        if (dot > 0.9994f) return
+
+        val alpha = if (dot < 0.72f) 1.0f else 0.28f
+        var sx = cx + (ntx - cx) * alpha
+        var sy = cy + (nty - cy) * alpha
+        var sz = cz + (ntz - cz) * alpha
+        val sLen = kotlin.math.sqrt(sx * sx + sy * sy + sz * sz)
+        if (sLen > 1e-5f) {
+            sx /= sLen
+            sy /= sLen
+            sz /= sLen
+            surfaceNormalScratch[0] = sx
+            surfaceNormalScratch[1] = sy
+            surfaceNormalScratch[2] = sz
+            _liveSurfaceNormal.value = floatArrayOf(sx, sy, sz)
+        }
+    }
+
+    private fun prepareVulkanCircleVertices(
+        snapshotPts: List<Point3D>,
+        liveTarget: Point3D?
+    ): Int {
+        val segments = 48
+        if (_cameraSubMode.value == 4) {
+            if (snapshotPts.size >= 3) {
+                val c = ArMath.fitCircle3Points(snapshotPts[0], snapshotPts[1], snapshotPts[2])
+                if (c != null && ArMath.computePlaneNormal3Points(snapshotPts[0], snapshotPts[1], snapshotPts[2], vulkanCircleBasis)) {
+                    val count = ArMath.sampleCircle3DWorldCoords(
+                        c.center.x, c.center.y, c.center.z, c.radius,
+                        vulkanCircleBasis, segments, vulkanCircleX, vulkanCircleY, vulkanCircleZ
+                    )
+                    for (i in 0 until count) {
+                        val base = i * 3
+                        vulkanCircleFloats[base] = vulkanCircleX[i].toFloat()
+                        vulkanCircleFloats[base + 1] = vulkanCircleY[i].toFloat()
+                        vulkanCircleFloats[base + 2] = vulkanCircleZ[i].toFloat()
+                    }
+                    return count
+                }
+            } else if (snapshotPts.size == 2 && liveTarget != null) {
+                val c = ArMath.fitCircle3Points(snapshotPts[0], snapshotPts[1], liveTarget)
+                if (c != null && ArMath.computePlaneNormal3Points(snapshotPts[0], snapshotPts[1], liveTarget, vulkanCircleBasis)) {
+                    val count = ArMath.sampleCircle3DWorldCoords(
+                        c.center.x, c.center.y, c.center.z, c.radius,
+                        vulkanCircleBasis, segments, vulkanCircleX, vulkanCircleY, vulkanCircleZ
+                    )
+                    for (i in 0 until count) {
+                        val base = i * 3
+                        vulkanCircleFloats[base] = vulkanCircleX[i].toFloat()
+                        vulkanCircleFloats[base + 1] = vulkanCircleY[i].toFloat()
+                        vulkanCircleFloats[base + 2] = vulkanCircleZ[i].toFloat()
+                    }
+                    return count
+                }
+            } else if (snapshotPts.size == 1 && liveTarget != null) {
+                val c = ArMath.fitCircle2Points(snapshotPts[0], liveTarget)
+                if (c != null) {
+                    val norm = surfaceNormalScratch
+                    ArMath.buildOrthonormalBasis(norm[0].toDouble(), norm[1].toDouble(), norm[2].toDouble(), vulkanCircleBasis)
+                    val count = ArMath.sampleCircle3DWorldCoords(
+                        c.center.x, c.center.y, c.center.z, c.radius,
+                        vulkanCircleBasis, segments, vulkanCircleX, vulkanCircleY, vulkanCircleZ
+                    )
+                    for (i in 0 until count) {
+                        val base = i * 3
+                        vulkanCircleFloats[base] = vulkanCircleX[i].toFloat()
+                        vulkanCircleFloats[base + 1] = vulkanCircleY[i].toFloat()
+                        vulkanCircleFloats[base + 2] = vulkanCircleZ[i].toFloat()
+                    }
+                    return count
+                }
+            }
+        }
+        if (liveTarget != null) {
+            val norm = surfaceNormalScratch
+            ArMath.buildOrthonormalBasis(norm[0].toDouble(), norm[1].toDouble(), norm[2].toDouble(), vulkanCircleBasis)
+            val reticleRadius = ((_liveDistanceMeters.value ?: 1.0) * 0.045).coerceIn(0.018, 0.25)
+            val count = ArMath.sampleCircle3DWorldCoords(
+                liveTarget.x, liveTarget.y, liveTarget.z, reticleRadius,
+                vulkanCircleBasis, segments, vulkanCircleX, vulkanCircleY, vulkanCircleZ
+            )
+            for (i in 0 until count) {
+                val base = i * 3
+                vulkanCircleFloats[base] = vulkanCircleX[i].toFloat()
+                vulkanCircleFloats[base + 1] = vulkanCircleY[i].toFloat()
+                vulkanCircleFloats[base + 2] = vulkanCircleZ[i].toFloat()
+            }
+            return count
+        }
+        return 0
     }
 
     private fun appendMeasuredPointOnMainThread(
@@ -1841,6 +2014,11 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         _liveTargetScreenPos.value = null
         _isSnapped.value = false
         _isMeasurementAvailable.value = false
+        _isSurfaceNormalLocked.value = false
+        surfaceNormalScratch[0] = 0f
+        surfaceNormalScratch[1] = 1f
+        surfaceNormalScratch[2] = 0f
+        _liveSurfaceNormal.value = floatArrayOf(0f, 1f, 0f)
     }
 
     // Active CameraX camera control reference (when in CameraX mode)
@@ -2110,20 +2288,18 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     fun calculateCircle(): CircleResult? {
         val points = getCapturedPointsSnapshot()
-        return if (points.size >= 3) {
-            val res = ArMath.fitCircle3Points(points[0], points[1], points[2])
-            if (res != null) {
-                val scale = scaleCalibrationFactor.value.toDouble()
-                res.copy(
-                    radius = res.radius * scale,
-                    diameter = res.diameter * scale,
-                    circumference = res.circumference * scale,
-                    area = res.area * (scale * scale)
-                )
-            } else null
-        } else {
-            null
-        }
+        val raw = when {
+            points.size >= 3 -> ArMath.fitCircle3Points(points[0], points[1], points[2])
+            points.size == 2 -> ArMath.fitCircle2Points(points[0], points[1])
+            else -> null
+        } ?: return null
+        val scale = scaleCalibrationFactor.value.toDouble()
+        return raw.copy(
+            radius = raw.radius * scale,
+            diameter = raw.diameter * scale,
+            circumference = raw.circumference * scale,
+            area = raw.area * (scale * scale)
+        )
     }
 
     fun calculateAngle(): Double {
