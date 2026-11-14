@@ -30,6 +30,7 @@ class MainActivity : ComponentActivity() {
 
         // Initialize the measuring tool viewmodel
         viewModel = ViewModelProvider(this)[MeasureViewModel::class.java]
+        viewModel.warmUpArCoreAvailability()
         viewModel.checkAndInitArCore(this)
         
         setContent {

@@ -283,8 +283,23 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 return@withLock null
             }
             hasCheckedArCore = true
+            val installReady = if (activity != null) {
+                withContext(Dispatchers.Main) {
+                    modernArEngine.ensureInstallReadyOnMainThread(activity, explicitUserAction = false)
+                }
+            } else {
+                true
+            }
+            if (!installReady) {
+                withContext(Dispatchers.Main) {
+                    _isMeasurementAvailable.value = false
+                    updateFallbackCameraMatrices()
+                    Log.w("MeasureViewModel", "ARCore install/availability check returned not ready (status=${modernArEngine.arCoreStatus.value}); measurement gated.")
+                }
+                return@withLock null
+            }
             val created = withContext(Dispatchers.IO) {
-                modernArEngine.checkAndCreateSession(activity)
+                modernArEngine.checkAndCreateSession(activity, skipInstallPrompt = true)
             }
             withContext(Dispatchers.Main) {
                 if (created != null) {
@@ -308,6 +323,10 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             }
             created
         }
+    }
+
+    fun warmUpArCoreAvailability() {
+        modernArEngine.warmUpAvailability()
     }
 
     fun isArCoreInstalled(): Boolean = ModernArEngine.isArCorePackageInstalled(app)
@@ -1867,10 +1886,13 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
                 Log.i("MeasureViewModel", "Camera unavailable callback invoked, simulation mode active.")
             }
-            manager.onArSessionReadyToResume = {
+            manager.onArSessionReadyToResume = { captureCallback, bgHandler ->
                 if (!_isFrontCamera.value && !_isCameraSimulationActive.value) {
-                    modernArEngine.resume()
+                    modernArEngine.resume(captureCallback, bgHandler)
                 }
+            }
+            manager.onBeforeCameraSwitch = {
+                modernArEngine.pause()
             }
             manager.isArCoreResumedChecker = { modernArEngine.isSessionResumed }
             val sc = modernArEngine.sharedCamera
@@ -2404,10 +2426,11 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         } catch (_: Exception) {}
         turnOffTorch(getApplication())
         vulkanGraphicsPipeline.release()
-        modernArEngine.destroy()
+        modernArEngine.pause()
         try {
             highSpeedCamera2Manager?.closeCamera()
         } catch (_: Exception) {}
+        modernArEngine.destroy()
         highSpeedCamera2Manager = null
         pixelPerformanceMonitor.stopMonitoring()
         sensorCorrectionEngine.stopListening()

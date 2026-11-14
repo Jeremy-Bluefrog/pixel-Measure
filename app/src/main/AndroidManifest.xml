@@ -20,6 +20,9 @@
         <package android:name="com.google.ar.core" />
         <package android:name="com.android.vending" />
         <intent>
+            <action android:name="com.google.android.play.core.install.BIND_INSTALL_SERVICE" />
+        </intent>
+        <intent>
             <action android:name="android.intent.action.VIEW" />
             <category android:name="android.intent.category.BROWSABLE" />
             <data android:scheme="market" />

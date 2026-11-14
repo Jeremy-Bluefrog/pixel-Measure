@@ -4,7 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.pm.PackageManager
-import android.os.Build
+import android.hardware.camera2.CameraCaptureSession
 import android.opengl.EGL14
 import android.opengl.EGLConfig
 import android.opengl.EGLContext
@@ -12,6 +12,8 @@ import android.opengl.EGLDisplay
 import android.opengl.EGLSurface
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
+import android.os.Build
+import android.os.Handler
 import android.util.Log
 import android.util.Size
 import androidx.core.content.ContextCompat
@@ -123,6 +125,10 @@ class ModernArEngine(private val context: Context) {
         private set
 
     @Volatile
+    var hasNativeSessionResumed: Boolean = false
+        private set
+
+    @Volatile
     var isExposeHardwareBufferActive: Boolean = false
         private set
 
@@ -152,11 +158,16 @@ class ModernArEngine(private val context: Context) {
     private var lastFrameTimeNs: Long = 0L
     private var smoothedSpeedMps: Float = 0.05f
     private var smoothedConfidence: Float = 0.85f
+    private var isDepthImageAvailable: Boolean = false
 
-    private var userRequestedInstall = false
+    // Official ARCore requestInstall state: true after INSTALL_REQUESTED so onResume passes userRequestedInstall=false
+    private var installRequested = false
     private var eglHelper: HeadlessEglHelper? = null
     private val glContextLock = Any()
     private val isInitializing = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    @Volatile
+    private var viewportChanged = false
 
     /**
      * Executes an ARCore frame update while holding [arSessionLock] so lifecycle transitions
@@ -205,6 +216,54 @@ class ModernArEngine(private val context: Context) {
         }
 
         /**
+         * Verifies that Play Store's exported ARCore install service
+         * (`com.google.android.play.core.install.BIND_INSTALL_SERVICE`) actually resolves
+         * before letting ARCore SDK attempt bindService(), avoiding spurious
+         * `E/ARCore-InstallService: Play Store install service could not be bound.` errors
+         * on emulators or devices without a working Play Store InstallService.
+         */
+        fun isPlayStoreInstallServiceAvailable(context: Context): Boolean {
+            if (!isGooglePlayStoreAvailable(context)) return false
+            return try {
+                val intent = android.content.Intent("com.google.android.play.core.install.BIND_INSTALL_SERVICE").apply {
+                    setPackage("com.android.vending")
+                }
+                val pm = context.packageManager
+                val resolved = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                    pm.resolveService(intent, android.content.pm.PackageManager.ResolveInfoFlags.of(0))
+                } else {
+                    @Suppress("DEPRECATION")
+                    pm.resolveService(intent, 0)
+                }
+                val serviceInfo = resolved?.serviceInfo ?: return false
+                if (!serviceInfo.enabled || !serviceInfo.exported) return false
+                val reqPerm = serviceInfo.permission
+                reqPerm == null || ContextCompat.checkSelfPermission(context, reqPerm) == PackageManager.PERMISSION_GRANTED
+            } catch (_: Throwable) {
+                false
+            }
+        }
+
+        private fun isEmulatorEnvironment(): Boolean {
+            return Build.FINGERPRINT.startsWith("generic") ||
+                Build.FINGERPRINT.startsWith("unknown") ||
+                Build.MODEL.contains("google_sdk") ||
+                Build.MODEL.contains("Emulator") ||
+                Build.MODEL.contains("Android SDK built for") ||
+                Build.HARDWARE.contains("goldfish") ||
+                Build.HARDWARE.contains("ranchu") ||
+                Build.HARDWARE.contains("cutf") ||
+                Build.PRODUCT.contains("sdk_gphone") ||
+                Build.PRODUCT.contains("emulator") ||
+                Build.PRODUCT.contains("simulator")
+        }
+
+        fun canQueryPlayStoreForArCoreInstall(context: Context): Boolean {
+            if (isEmulatorEnvironment()) return false
+            return isPlayStoreInstallServiceAvailable(context)
+        }
+
+        /**
          * Checks whether Google Play Services for AR (ARCore) package is installed and enabled on the device.
          */
         fun isArCorePackageInstalled(context: Context): Boolean {
@@ -243,12 +302,176 @@ class ModernArEngine(private val context: Context) {
         }
     }
 
+    @Volatile
+    private var playStoreInstallServiceBindFailed = false
+
+    /**
+     * Primes ARCore availability cache early in Activity.onCreate per official Google ARCore guidelines.
+     * Never returns UNKNOWN_CHECKING and invokes callback on Main thread.
+     * Skips ARCore SDK Play Store binding when `com.google.ar.core` is missing and Play Store's
+     * install service is not resolvable/bindable on the current device/emulator.
+     */
+    fun warmUpAvailability(onResult: ((ArCoreApk.Availability) -> Unit)? = null) {
+        if (!isArCorePackageInstalled(context) &&
+            (!canQueryPlayStoreForArCoreInstall(context) || playStoreInstallServiceBindFailed)
+        ) {
+            isSupported = false
+            _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
+            _arCoreStatusMessage.value = "⚠️ 尚未安裝 Google Play Services for AR (com.google.ar.core)"
+            onResult?.invoke(ArCoreApk.Availability.SUPPORTED_NOT_INSTALLED)
+            return
+        }
+        try {
+            ArCoreApk.getInstance().checkAvailabilityAsync(context.applicationContext) { availability ->
+                when (availability) {
+                    ArCoreApk.Availability.UNKNOWN_ERROR -> {
+                        if (!isArCorePackageInstalled(context)) {
+                            playStoreInstallServiceBindFailed = true
+                            isSupported = false
+                            _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
+                            _arCoreStatusMessage.value = "⚠️ 尚未安裝 Google Play Services for AR (com.google.ar.core)"
+                        }
+                    }
+                    ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE -> {
+                        if (!isRobolectricEnvironment()) {
+                            isSupported = false
+                            _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
+                            _arCoreStatusMessage.value = "⚠️ 此裝置硬體不支援 Google ARCore"
+                        }
+                    }
+                    ArCoreApk.Availability.SUPPORTED_NOT_INSTALLED -> {
+                        isSupported = false
+                        _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
+                        _arCoreStatusMessage.value = "⚠️ 尚未安裝 Google Play Services for AR (com.google.ar.core)"
+                    }
+                    ArCoreApk.Availability.SUPPORTED_APK_TOO_OLD -> {
+                        isSupported = false
+                        _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
+                        _arCoreStatusMessage.value = "⚠️ Google Play Services for AR 版本過舊，請更新"
+                    }
+                    else -> {}
+                }
+                onResult?.invoke(availability)
+            }
+        } catch (t: Throwable) {
+            Log.w("ModernArEngine", "checkAvailabilityAsync note: ${t.message}")
+        }
+    }
+
+    private fun isRobolectricEnvironment(): Boolean {
+        return Build.FINGERPRINT.equals("robolectric", ignoreCase = true)
+    }
+
+    private fun checkAvailabilityWithTransientRetry(): ArCoreApk.Availability {
+        val arCoreInstalled = isArCorePackageInstalled(context)
+        if (!arCoreInstalled && (!canQueryPlayStoreForArCoreInstall(context) || playStoreInstallServiceBindFailed)) {
+            return ArCoreApk.Availability.SUPPORTED_NOT_INSTALLED
+        }
+        var availability = try {
+            ArCoreApk.getInstance().checkAvailability(context)
+        } catch (_: Throwable) {
+            ArCoreApk.Availability.UNKNOWN_ERROR
+        }
+        var retries = 0
+        while (availability.isTransient && retries < 5) {
+            retries++
+            try {
+                Thread.sleep(150L)
+                availability = ArCoreApk.getInstance().checkAvailability(context)
+            } catch (_: Throwable) {
+                break
+            }
+        }
+        if (!arCoreInstalled && availability == ArCoreApk.Availability.UNKNOWN_ERROR) {
+            playStoreInstallServiceBindFailed = true
+        }
+        return availability
+    }
+
+    /**
+     * Must be called on the UI / Main thread when an Activity is available!
+     * Follows Google ARCore's official checkAvailability + requestInstall(activity, userRequestedInstall) flow.
+     * Returns true if ARCore is installed and ready for Session creation, or false if installation was requested,
+     * unsupported, or declined.
+     */
+    fun ensureInstallReadyOnMainThread(activity: Activity, explicitUserAction: Boolean = false): Boolean {
+        if (explicitUserAction) {
+            installRequested = false
+            playStoreInstallServiceBindFailed = false
+        }
+
+        val arCoreInstalled = isArCorePackageInstalled(context)
+        if (!arCoreInstalled && (!canQueryPlayStoreForArCoreInstall(activity) || playStoreInstallServiceBindFailed)) {
+            isSupported = false
+            _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
+            _arCoreStatusMessage.value = "⚠️ 尚未安裝 Google Play Services for AR (com.google.ar.core)"
+            return false
+        }
+
+        val availability = checkAvailabilityWithTransientRetry()
+        if (availability == ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE && !isRobolectricEnvironment()) {
+            isSupported = false
+            _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
+            _arCoreStatusMessage.value = "⚠️ 此裝置硬體不支援 Google ARCore"
+            return false
+        }
+
+        if (!arCoreInstalled ||
+            availability == ArCoreApk.Availability.SUPPORTED_NOT_INSTALLED ||
+            availability == ArCoreApk.Availability.SUPPORTED_APK_TOO_OLD
+        ) {
+            if (!canQueryPlayStoreForArCoreInstall(activity) || playStoreInstallServiceBindFailed) {
+                isSupported = false
+                _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
+                _arCoreStatusMessage.value = if (availability == ArCoreApk.Availability.SUPPORTED_APK_TOO_OLD) {
+                    "⚠️ Google Play Services for AR 版本過舊，請更新"
+                } else {
+                    "⚠️ 尚未安裝 Google Play Services for AR (com.google.ar.core)"
+                }
+                return false
+            }
+            return try {
+                when (ArCoreApk.getInstance().requestInstall(activity, !installRequested)) {
+                    ArCoreApk.InstallStatus.INSTALLED -> true
+                    ArCoreApk.InstallStatus.INSTALL_REQUESTED -> {
+                        installRequested = true
+                        isSupported = false
+                        _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
+                        _arCoreStatusMessage.value = "⚠️ 正在導向安裝或更新 Google Play Services for AR (com.google.ar.core)..."
+                        false
+                    }
+                }
+            } catch (e: UnavailableUserDeclinedInstallationException) {
+                isSupported = false
+                _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
+                _arCoreStatusMessage.value = "⚠️ 使用者已取消安裝 Google Play Services for AR (com.google.ar.core)"
+                false
+            } catch (e: UnavailableDeviceNotCompatibleException) {
+                isSupported = false
+                _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
+                _arCoreStatusMessage.value = "⚠️ 此裝置硬體不相容 Google ARCore"
+                false
+            } catch (t: Throwable) {
+                Log.w("ModernArEngine", "requestInstall failed: ${t.message}")
+                playStoreInstallServiceBindFailed = true
+                isSupported = false
+                _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
+                _arCoreStatusMessage.value = "⚠️ 尚未安裝或需更新 Google Play Services for AR (com.google.ar.core)"
+                false
+            }
+        }
+        return true
+    }
+
     /**
      * Check device compatibility and create configured ARCore Session safely.
-     * Prevents Play Store install service binding errors when Play Store is absent,
-     * and gracefully falls back to 9-axis sensor fusion without user interruption.
+     * Note: When an Activity is provided, callers on background threads should call
+     * [ensureInstallReadyOnMainThread] on the Main thread first, or pass [skipInstallPrompt] = true.
      */
-    fun checkAndCreateSession(activity: Activity? = null): Session? {
+    fun checkAndCreateSession(
+        activity: Activity? = null,
+        skipInstallPrompt: Boolean = false
+    ): Session? {
         if (session != null) return session
         if (!isInitializing.compareAndSet(false, true)) {
             return session
@@ -260,21 +483,56 @@ class ModernArEngine(private val context: Context) {
                 return null
             }
 
-            if (!isArCorePackageInstalled(context)) {
+            val arCoreInstalled = isArCorePackageInstalled(context)
+            if (!arCoreInstalled && (!canQueryPlayStoreForArCoreInstall(context) || playStoreInstallServiceBindFailed)) {
                 isSupported = false
                 _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
                 _arCoreStatusMessage.value = "⚠️ 尚未安裝 Google Play Services for AR (com.google.ar.core)"
-                Log.i("ModernArEngine", "ARCore package com.google.ar.core is not installed on device. Skipping native Session creation.")
-                if (activity != null && !userRequestedInstall && isGooglePlayStoreAvailable(activity)) {
-                    userRequestedInstall = true
-                    try {
-                        ArCoreApk.getInstance().requestInstall(activity, true)
-                    } catch (_: Throwable) {}
-                }
+                Log.i("ModernArEngine", "ARCore package missing and Play Store InstallService unavailable; skipping ARCore Session creation.")
                 return null
             }
 
-            // First priority: Create ARCore session supporting shared camera or standard camera
+            val availability = checkAvailabilityWithTransientRetry()
+            if (availability == ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE && !isRobolectricEnvironment()) {
+                isSupported = false
+                _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
+                _arCoreStatusMessage.value = "⚠️ 此硬體不相容 Google ARCore"
+                Log.w("ModernArEngine", "ArCoreApk reported UNSUPPORTED_DEVICE_NOT_CAPABLE.")
+                return null
+            }
+
+            if (!arCoreInstalled ||
+                availability == ArCoreApk.Availability.SUPPORTED_NOT_INSTALLED ||
+                availability == ArCoreApk.Availability.SUPPORTED_APK_TOO_OLD
+            ) {
+                isSupported = false
+                _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
+                _arCoreStatusMessage.value = if (availability == ArCoreApk.Availability.SUPPORTED_APK_TOO_OLD) {
+                    "⚠️ Google Play Services for AR (com.google.ar.core) 版本過舊，請更新"
+                } else {
+                    "⚠️ 尚未安裝 Google Play Services for AR (com.google.ar.core)"
+                }
+                Log.i("ModernArEngine", "ARCore not ready (installed=$arCoreInstalled, availability=$availability). Skipping Session creation.")
+                if (activity != null && !skipInstallPrompt &&
+                    android.os.Looper.myLooper() == android.os.Looper.getMainLooper() &&
+                    !installRequested && canQueryPlayStoreForArCoreInstall(activity) && !playStoreInstallServiceBindFailed
+                ) {
+                    try {
+                        val status = ArCoreApk.getInstance().requestInstall(activity, true)
+                        if (status == ArCoreApk.InstallStatus.INSTALL_REQUESTED) {
+                            installRequested = true
+                            return null
+                        }
+                    } catch (_: Throwable) {
+                        playStoreInstallServiceBindFailed = true
+                        return null
+                    }
+                } else {
+                    return null
+                }
+            }
+
+            // First priority: Create ARCore session supporting SharedCamera
             val newSession = try {
                 Session(context, EnumSet.of(Session.Feature.SHARED_CAMERA))
             } catch (e: UnavailableException) {
@@ -284,41 +542,57 @@ class ModernArEngine(private val context: Context) {
                 Session(context)
             }
 
-            // Align ARCore CameraConfig with Camera2 target FPS (30 vs 60) & resolution (1080p vs 720p)
+            // Align ARCore CameraConfig with Camera2 target FPS (30 vs 60) & resolution (1080p vs 720p).
+            // Per official ARCore docs, StereoCameraUsage must be DO_NOT_USE when SharedCamera is enabled.
             try {
                 val desiredFpsFlag = if (preferHighFps) CameraConfig.TargetFps.TARGET_FPS_60 else CameraConfig.TargetFps.TARGET_FPS_30
+                val isSharedSession = try { newSession.sharedCamera != null } catch (_: Throwable) { false }
                 val fpsFilter = CameraConfigFilter(newSession).apply {
                     facingDirection = CameraConfig.FacingDirection.BACK
                     targetFps = EnumSet.of(desiredFpsFlag)
+                    if (isSharedSession) {
+                        stereoCameraUsage = EnumSet.of(CameraConfig.StereoCameraUsage.DO_NOT_USE)
+                    }
                 }
                 var supportedConfigs = newSession.getSupportedCameraConfigs(fpsFilter)
                 if (supportedConfigs.isEmpty()) {
                     val fallbackFilter = CameraConfigFilter(newSession).apply {
                         facingDirection = CameraConfig.FacingDirection.BACK
+                        if (isSharedSession) {
+                            stereoCameraUsage = EnumSet.of(CameraConfig.StereoCameraUsage.DO_NOT_USE)
+                        }
                     }
                     supportedConfigs = newSession.getSupportedCameraConfigs(fallbackFilter)
                 }
                 if (supportedConfigs.isNotEmpty()) {
+                    // Prefer configs using hardware depth sensor if available on Pixel Pro
+                    val sortedConfigs = if (allowDepthMode) {
+                        supportedConfigs.sortedByDescending { cfg ->
+                            if (cfg.depthSensorUsage == CameraConfig.DepthSensorUsage.REQUIRE_AND_USE) 1 else 0
+                        }
+                    } else {
+                        supportedConfigs
+                    }
                     val preferredConfig = if (preferHighDef) {
-                        supportedConfigs.firstOrNull { cfg ->
+                        sortedConfigs.firstOrNull { cfg ->
                             val ts = cfg.textureSize
                             ts.width == 1920 && ts.height == 1080
-                        } ?: supportedConfigs.firstOrNull { cfg ->
+                        } ?: sortedConfigs.firstOrNull { cfg ->
                             val ts = cfg.textureSize
                             ts.width == 1280 && ts.height == 720
                         }
                     } else {
-                        supportedConfigs.firstOrNull { cfg ->
+                        sortedConfigs.firstOrNull { cfg ->
                             val ts = cfg.textureSize
                             ts.width == 1280 && ts.height == 720
-                        } ?: supportedConfigs.firstOrNull { cfg ->
+                        } ?: sortedConfigs.firstOrNull { cfg ->
                             val ts = cfg.textureSize
                             ts.width == 1920 && ts.height == 1080
                         }
-                    } ?: supportedConfigs.firstOrNull { cfg ->
+                    } ?: sortedConfigs.firstOrNull { cfg ->
                         val ts = cfg.textureSize
                         kotlin.math.abs((ts.width.toFloat() / ts.height.coerceAtLeast(1)) - (16f / 9f)) < 0.05f
-                    } ?: supportedConfigs.first()
+                    } ?: sortedConfigs.first()
                     newSession.cameraConfig = preferredConfig
                     is60FpsActive = try { preferredConfig.fpsRange.upper >= 60 } catch (_: Throwable) { false }
                 }
@@ -333,7 +607,8 @@ class ModernArEngine(private val context: Context) {
             val configured = configureSessionWithFallback(newSession)
             isExposeHardwareBufferActive = configured.textureUpdateMode == Config.TextureUpdateMode.EXPOSE_HARDWARE_BUFFER
 
-            // Bind headless external OES GL texture cleanly for ARCore / SharedCamera pipeline
+            // Only create headless external OES GL texture when ARCore falls back to BIND_TO_TEXTURE_EXTERNAL_OES.
+            // Under EXPOSE_HARDWARE_BUFFER (Vulkan / AHardwareBuffer mode), ARCore ignores setCameraTextureName and needs no GL context.
             if (!isExposeHardwareBufferActive) {
                 synchronized(glContextLock) {
                     eglHelper?.release()
@@ -353,10 +628,16 @@ class ModernArEngine(private val context: Context) {
                         Log.w("ModernArEngine", "HeadlessEglHelper failed to allocate OES texture ID.")
                     }
                 }
+            } else {
+                synchronized(glContextLock) {
+                    eglHelper?.release()
+                    eglHelper = null
+                }
             }
 
             session = newSession
             isSessionResumed = false
+            hasNativeSessionResumed = false
             isSupported = true
             _arCoreStatus.value = ArCoreEngineStatus.ACTIVE
             _arCoreStatusMessage.value = "Google ARCore 已就緒 (水平/垂直平面與深度追蹤)"
@@ -371,7 +652,7 @@ class ModernArEngine(private val context: Context) {
         } catch (e: UnavailableArcoreNotInstalledException) {
             isSupported = false
             _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
-            _arCoreStatusMessage.value = "⚠️ 警告：尚未安裝 Google Play Services for AR"
+            _arCoreStatusMessage.value = "⚠️ 警告：尚未安裝 Google Play Services for AR (com.google.ar.core)"
             Log.w("ModernArEngine", "ArcoreNotInstalled: ${e.message}")
             return null
         } catch (e: UnavailableApkTooOldException) {
@@ -408,19 +689,21 @@ class ModernArEngine(private val context: Context) {
             false
         }
 
-        // Always use BIND_TO_TEXTURE_EXTERNAL_OES with HeadlessEglHelper so SharedCamera GPU/CPU
-        // surfaces stream reliably without needing direct Vulkan AHardwareBuffer texture sampling.
+        // Prioritize EXPOSE_HARDWARE_BUFFER on Vulkan 1.4 / API 29+ to eliminate GLES/EGL overhead,
+        // automatically falling back to BIND_TO_TEXTURE_EXTERNAL_OES if UnsupportedConfigurationException is thrown.
         data class SessionAttempt(
+            val textureMode: Config.TextureUpdateMode,
             val useDepth: Boolean,
             val lightMode: Config.LightEstimationMode,
             val instantPlacement: Config.InstantPlacementMode
         )
 
         val attempts = listOf(
-            SessionAttempt(depthSupported, Config.LightEstimationMode.ENVIRONMENTAL_HDR, Config.InstantPlacementMode.LOCAL_Y_UP),
-            SessionAttempt(depthSupported, Config.LightEstimationMode.AMBIENT_INTENSITY, Config.InstantPlacementMode.LOCAL_Y_UP),
-            SessionAttempt(false, Config.LightEstimationMode.AMBIENT_INTENSITY, Config.InstantPlacementMode.LOCAL_Y_UP),
-            SessionAttempt(false, Config.LightEstimationMode.AMBIENT_INTENSITY, Config.InstantPlacementMode.DISABLED)
+            SessionAttempt(Config.TextureUpdateMode.EXPOSE_HARDWARE_BUFFER, depthSupported, Config.LightEstimationMode.ENVIRONMENTAL_HDR, Config.InstantPlacementMode.LOCAL_Y_UP),
+            SessionAttempt(Config.TextureUpdateMode.BIND_TO_TEXTURE_EXTERNAL_OES, depthSupported, Config.LightEstimationMode.ENVIRONMENTAL_HDR, Config.InstantPlacementMode.LOCAL_Y_UP),
+            SessionAttempt(Config.TextureUpdateMode.BIND_TO_TEXTURE_EXTERNAL_OES, depthSupported, Config.LightEstimationMode.AMBIENT_INTENSITY, Config.InstantPlacementMode.LOCAL_Y_UP),
+            SessionAttempt(Config.TextureUpdateMode.BIND_TO_TEXTURE_EXTERNAL_OES, false, Config.LightEstimationMode.AMBIENT_INTENSITY, Config.InstantPlacementMode.LOCAL_Y_UP),
+            SessionAttempt(Config.TextureUpdateMode.BIND_TO_TEXTURE_EXTERNAL_OES, false, Config.LightEstimationMode.AMBIENT_INTENSITY, Config.InstantPlacementMode.DISABLED)
         )
 
         var lastError: Throwable? = null
@@ -433,13 +716,13 @@ class ModernArEngine(private val context: Context) {
                 config.lightEstimationMode = attempt.lightMode
                 config.depthMode = if (attempt.useDepth) Config.DepthMode.AUTOMATIC else Config.DepthMode.DISABLED
                 config.instantPlacementMode = attempt.instantPlacement
-                config.textureUpdateMode = Config.TextureUpdateMode.BIND_TO_TEXTURE_EXTERNAL_OES
+                config.textureUpdateMode = attempt.textureMode
                 newSession.configure(config)
                 isDepthModeActive = (config.depthMode == Config.DepthMode.AUTOMATIC)
                 return config
             } catch (t: Throwable) {
                 lastError = t
-                Log.w("ModernArEngine", "ARCore configure attempt failed (depth=${attempt.useDepth}, light=${attempt.lightMode}, ip=${attempt.instantPlacement}): ${t.message}")
+                Log.w("ModernArEngine", "ARCore configure attempt failed (tex=${attempt.textureMode}, depth=${attempt.useDepth}, light=${attempt.lightMode}, ip=${attempt.instantPlacement}): ${t.message}")
             }
         }
         throw lastError ?: IllegalStateException("Unable to configure ARCore session")
@@ -473,46 +756,66 @@ class ModernArEngine(private val context: Context) {
 
     /**
      * User-requested explicit installation of Google Play Services for AR.
+     * Must be invoked on the Main/UI thread.
      */
     fun requestInstallArCore(activity: Activity): Boolean {
-        if (!isGooglePlayStoreAvailable(activity)) {
-            _arCoreStatusMessage.value = "裝置未安裝 Google Play 商店，無法自動安裝 ARCore"
-            Log.i("ModernArEngine", "Cannot request install: Play Store not available on device.")
-            return openArCorePlayStorePage(activity)
+        if (!canQueryPlayStoreForArCoreInstall(activity)) {
+            _arCoreStatusMessage.value = if (isGooglePlayStoreAvailable(activity)) {
+                "⚠️ Play 商店安裝服務無法綁定，已嘗試開啟商店頁面"
+            } else {
+                "裝置未安裝 Google Play 商店，無法自動安裝 ARCore"
+            }
+            Log.i("ModernArEngine", "Play Store InstallService unavailable on this device/emulator.")
+            return if (isGooglePlayStoreAvailable(activity)) openArCorePlayStorePage(activity) else false
         }
         return try {
+            installRequested = false
+            playStoreInstallServiceBindFailed = false
             val status = ArCoreApk.getInstance().requestInstall(activity, true)
-            if (status == ArCoreApk.InstallStatus.INSTALLED) {
-                checkAndCreateSession(activity)
-                true
-            } else {
-                false
+            when (status) {
+                ArCoreApk.InstallStatus.INSTALLED -> true
+                ArCoreApk.InstallStatus.INSTALL_REQUESTED -> {
+                    installRequested = true
+                    false
+                }
             }
+        } catch (e: UnavailableUserDeclinedInstallationException) {
+            _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
+            _arCoreStatusMessage.value = "⚠️ 使用者已取消安裝 ARCore"
+            false
         } catch (e: Throwable) {
             Log.w("ModernArEngine", "Error requesting ARCore install: ${e.message}")
+            playStoreInstallServiceBindFailed = true
             openArCorePlayStorePage(activity)
         }
     }
 
-    fun makeGlContextCurrent(): Boolean = synchronized(glContextLock) {
-        val helper = eglHelper ?: return false
-        return try {
-            helper.makeCurrent()
-        } catch (t: Throwable) {
-            Log.w("ModernArEngine", "makeGlContextCurrent error: ${t.message}")
-            false
+    fun makeGlContextCurrent(): Boolean {
+        if (isExposeHardwareBufferActive) return false
+        synchronized(glContextLock) {
+            val helper = eglHelper ?: return false
+            return try {
+                helper.makeCurrent()
+            } catch (t: Throwable) {
+                Log.w("ModernArEngine", "makeGlContextCurrent error: ${t.message}")
+                false
+            }
         }
     }
 
-    fun detachGlContext() = synchronized(glContextLock) {
-        val helper = eglHelper ?: return
-        try {
-            helper.detachCurrent()
-        } catch (_: Throwable) {}
+    fun detachGlContext() {
+        if (isExposeHardwareBufferActive) return
+        synchronized(glContextLock) {
+            val helper = eglHelper ?: return
+            try {
+                helper.detachCurrent()
+            } catch (_: Throwable) {}
+        }
     }
 
     fun rebindCameraTexture(): Boolean = synchronized(arSessionLock) {
-        val curSession = session ?: return false
+        if (isExposeHardwareBufferActive) return@synchronized true
+        val curSession = session ?: return@synchronized false
         synchronized(glContextLock) {
             return try {
                 eglHelper?.release()
@@ -549,9 +852,12 @@ class ModernArEngine(private val context: Context) {
             val currentSession = session ?: return false
             return try {
                 val config = currentSession.config
-                config.flashMode = if (enabled) Config.FlashMode.TORCH else Config.FlashMode.OFF
-                currentSession.configure(config)
-                Log.i("ModernArEngine", "ARCore FlashMode configured: ${config.flashMode}")
+                val desiredFlash = if (enabled) Config.FlashMode.TORCH else Config.FlashMode.OFF
+                if (config.flashMode != desiredFlash) {
+                    config.flashMode = desiredFlash
+                    currentSession.configure(config)
+                    Log.i("ModernArEngine", "ARCore FlashMode configured: ${config.flashMode}")
+                }
                 true
             } catch (e: Throwable) {
                 Log.w("ModernArEngine", "Failed to set ARCore flashMode: ${e.message}")
@@ -563,19 +869,24 @@ class ModernArEngine(private val context: Context) {
     fun pause() {
         synchronized(arSessionLock) {
             isSessionResumed = false
-            if (isTorchActive) {
-                setTorchMode(false)
-            }
+            isTorchActive = false
+            if (!hasNativeSessionResumed) return
+            hasNativeSessionResumed = false
             val curSession = session ?: return
             try {
-                synchronized(glContextLock) {
-                    makeGlContextCurrent()
-                    try {
-                        curSession.pause()
-                    } finally {
-                        detachGlContext()
+                if (isExposeHardwareBufferActive) {
+                    curSession.pause()
+                } else {
+                    synchronized(glContextLock) {
+                        makeGlContextCurrent()
+                        try {
+                            curSession.pause()
+                        } finally {
+                            detachGlContext()
+                        }
                     }
                 }
+                Log.i("ModernArEngine", "ARCore session paused.")
             } catch (e: Throwable) {
                 Log.w("ModernArEngine", "Failed to pause ARCore session: ${e.message}")
             }
@@ -584,42 +895,66 @@ class ModernArEngine(private val context: Context) {
 
     fun markSessionPaused() {
         isSessionResumed = false
+        hasNativeSessionResumed = false
     }
 
     fun reportRuntimeError(message: String) {
         _arCoreStatusMessage.value = message
     }
 
-    fun resume() {
+    fun resume(
+        sharedCaptureCallback: CameraCaptureSession.CaptureCallback? = null,
+        sharedCaptureHandler: Handler? = null
+    ) {
         synchronized(arSessionLock) {
             val curSession = session ?: return
-            if (isSessionResumed) return
+            if (isSessionResumed && hasNativeSessionResumed) return
             try {
-                synchronized(glContextLock) {
-                    if (eglHelper == null) {
-                        rebindCameraTexture()
+                if (isExposeHardwareBufferActive) {
+                    if (viewportWidth > 0 && viewportHeight > 0) {
+                        curSession.setDisplayGeometry(lastDisplayRotation, viewportWidth, viewportHeight)
+                        viewportChanged = false
                     }
-                    makeGlContextCurrent()
-                    try {
-                        if (viewportWidth > 0 && viewportHeight > 0) {
-                            curSession.setDisplayGeometry(lastDisplayRotation, viewportWidth, viewportHeight)
+                    curSession.resume()
+                } else {
+                    synchronized(glContextLock) {
+                        if (eglHelper == null) {
+                            rebindCameraTexture()
                         }
-                        curSession.resume()
-                    } finally {
-                        detachGlContext()
+                        makeGlContextCurrent()
+                        try {
+                            if (viewportWidth > 0 && viewportHeight > 0) {
+                                curSession.setDisplayGeometry(lastDisplayRotation, viewportWidth, viewportHeight)
+                                viewportChanged = false
+                            }
+                            curSession.resume()
+                        } finally {
+                            detachGlContext()
+                        }
                     }
                 }
-                // Publish resumed state ONLY after EGL context has been detached so VulkanRenderThread can acquire it
+                hasNativeSessionResumed = true
+                // Official SharedCamera lifecycle: supply capture callback immediately after session.resume()
+                if (sharedCaptureCallback != null) {
+                    try {
+                        curSession.sharedCamera?.setCaptureCallback(sharedCaptureCallback, sharedCaptureHandler)
+                    } catch (cbEx: Throwable) {
+                        Log.w("ModernArEngine", "SharedCamera setCaptureCallback note: ${cbEx.message}")
+                    }
+                }
+                // Publish resumed state ONLY after resume + capture callback setup completes
                 isSessionResumed = true
                 _arCoreStatus.value = ArCoreEngineStatus.ACTIVE
                 _arCoreStatusMessage.value = "Google ARCore 已就緒 (水平/垂直平面與深度追蹤)"
-                Log.i("ModernArEngine", "ARCore session resumed successfully.")
+                Log.i("ModernArEngine", "ARCore session resumed successfully (ahb=$isExposeHardwareBufferActive).")
             } catch (e: CameraNotAvailableException) {
                 isSessionResumed = false
+                hasNativeSessionResumed = false
                 _arCoreStatusMessage.value = "⚠️ 相機暫時不可用，等待重新連線..."
                 Log.w("ModernArEngine", "Camera not available for ARCore: ${e.message}")
             } catch (e: Exception) {
                 isSessionResumed = false
+                hasNativeSessionResumed = false
                 _arCoreStatusMessage.value = "⚠️ ARCore 啟動異常：${e.localizedMessage ?: e.javaClass.simpleName}"
                 Log.e("ModernArEngine", "Failed to resume ARCore session", e)
             }
@@ -634,24 +969,38 @@ class ModernArEngine(private val context: Context) {
 
     fun setDisplayGeometry(rotation: Int, width: Int, height: Int) {
         if (width <= 0 || height <= 0) return
-        lastDisplayRotation = rotation
-        viewportWidth = width
-        viewportHeight = height
-        synchronized(arSessionLock) {
-            try {
-                session?.setDisplayGeometry(rotation, width, height)
-            } catch (t: Throwable) {
-                Log.w("ModernArEngine", "setDisplayGeometry note: ${t.message}")
-            }
+        if (lastDisplayRotation != rotation || viewportWidth != width || viewportHeight != height) {
+            lastDisplayRotation = rotation
+            viewportWidth = width
+            viewportHeight = height
+            viewportChanged = true
+        }
+    }
+
+    /**
+     * Official DisplayRotationHelper pattern: apply pending display geometry on the render thread
+     * immediately before calling Session.update(). Must be called under [arSessionLock].
+     */
+    fun updateDisplayGeometryIfNeeded(activeSession: Session) {
+        if (!viewportChanged || viewportWidth <= 0 || viewportHeight <= 0) return
+        try {
+            activeSession.setDisplayGeometry(lastDisplayRotation, viewportWidth, viewportHeight)
+            viewportChanged = false
+        } catch (t: Throwable) {
+            Log.w("ModernArEngine", "updateDisplayGeometryIfNeeded note: ${t.message}")
         }
     }
 
     fun destroy() {
         synchronized(arSessionLock) {
             isSessionResumed = false
-            if (isTorchActive) {
-                setTorchMode(false)
+            if (hasNativeSessionResumed) {
+                hasNativeSessionResumed = false
+                try {
+                    session?.pause()
+                } catch (_: Throwable) {}
             }
+            isTorchActive = false
             try {
                 session?.close()
             } catch (e: Exception) {
@@ -661,7 +1010,7 @@ class ModernArEngine(private val context: Context) {
             selectedCameraId = null
             selectedCameraImageSize = null
             selectedCameraFpsRange = null
-            isTorchActive = false
+            isExposeHardwareBufferActive = false
             synchronized(glContextLock) {
                 eglHelper?.release()
                 eglHelper = null
@@ -706,10 +1055,12 @@ class ModernArEngine(private val context: Context) {
                 val hit = hits[i]
                 val dist = hit.distance
                 if (dist < 0.05f || dist > 25.0f) continue
-                hasValidHit = true
                 val trackable = hit.trackable
                 when {
-                    trackable is Plane && trackable.trackingState == TrackingState.TRACKING -> {
+                    trackable is Plane &&
+                        trackable.trackingState == TrackingState.TRACKING &&
+                        trackable.subsumedBy == null -> {
+                        hasValidHit = true
                         if (planePolygonHit == null && trackable.isPoseInPolygon(hit.hitPose)) {
                             planePolygonHit = hit
                             break
@@ -718,16 +1069,21 @@ class ModernArEngine(private val context: Context) {
                         }
                     }
                     trackable is DepthPoint && trackable.trackingState == TrackingState.TRACKING -> {
+                        hasValidHit = true
                         if (depthHit == null) depthHit = hit
                     }
-                    trackable is com.google.ar.core.Point -> {
+                    trackable is com.google.ar.core.Point && trackable.trackingState == TrackingState.TRACKING -> {
+                        hasValidHit = true
                         if (depthHit == null && trackable.orientationMode == com.google.ar.core.Point.OrientationMode.ESTIMATED_SURFACE_NORMAL) {
                             depthHit = hit
                         } else if (featurePointHit == null) {
                             featurePointHit = hit
                         }
                     }
-                    trackable is InstantPlacementPoint -> {
+                    trackable is InstantPlacementPoint &&
+                        trackable.trackingState == TrackingState.TRACKING &&
+                        trackable.trackingMethod != InstantPlacementPoint.TrackingMethod.NOT_TRACKING -> {
+                        hasValidHit = true
                         if (instantHit == null) instantHit = hit
                     }
                 }
@@ -741,7 +1097,11 @@ class ModernArEngine(private val context: Context) {
                         val hit = nHits[j]
                         if (hit.distance in 0.05f..25.0f) {
                             val trackable = hit.trackable
-                            if (trackable is Plane && trackable.trackingState == TrackingState.TRACKING && trackable.isPoseInPolygon(hit.hitPose)) {
+                            if (trackable is Plane &&
+                                trackable.trackingState == TrackingState.TRACKING &&
+                                trackable.subsumedBy == null &&
+                                trackable.isPoseInPolygon(hit.hitPose)
+                            ) {
                                 planePolygonHit = hit
                                 break
                             }
@@ -752,7 +1112,10 @@ class ModernArEngine(private val context: Context) {
             }
 
             if (planePolygonHit != null) {
-                val plane = planePolygonHit.trackable as Plane
+                var plane = planePolygonHit.trackable as Plane
+                while (plane.subsumedBy != null) {
+                    plane = plane.subsumedBy!!
+                }
                 val edgeSnap = findPlaneEdgeOrVertexSnap(plane, planePolygonHit.hitPose, snapRadiusMeters = 0.08f)
                 val finalPose = edgeSnap?.first ?: planePolygonHit.hitPose
                 val isSnapped = edgeSnap?.second ?: false
@@ -777,7 +1140,10 @@ class ModernArEngine(private val context: Context) {
             if (hasValidHit) {
                 // Tier 2: Plane estimated (outside current polygon)
                 if (planeEstimatedHit != null) {
-                    val plane = planeEstimatedHit.trackable as Plane
+                    var plane = planeEstimatedHit.trackable as Plane
+                    while (plane.subsumedBy != null) {
+                        plane = plane.subsumedBy!!
+                    }
                     val edgeSnap = findPlaneEdgeOrVertexSnap(plane, planeEstimatedHit.hitPose, snapRadiusMeters = 0.08f)
                     val finalPose = edgeSnap?.first ?: planeEstimatedHit.hitPose
                     val isSnapped = edgeSnap?.second ?: false
@@ -815,6 +1181,8 @@ class ModernArEngine(private val context: Context) {
 
                 // Tier 4: Instant Placement Point
                 if (instantHit != null) {
+                    val ipPoint = instantHit.trackable as? InstantPlacementPoint
+                    val isApprox = ipPoint?.trackingMethod == InstantPlacementPoint.TrackingMethod.SCREENSPACE_WITH_APPROXIMATE_DISTANCE
                     val anchor = if (createAnchor) {
                         try { instantHit.createAnchor() } catch (e: Exception) { null }
                     } else null
@@ -823,7 +1191,8 @@ class ModernArEngine(private val context: Context) {
                         anchor = anchor,
                         hitType = HitType.INSTANT_PLACEMENT,
                         distance = instantHit.distance,
-                        planeType = null
+                        planeType = null,
+                        isApproximatePlacement = isApprox
                     )
                 }
 
@@ -857,8 +1226,16 @@ class ModernArEngine(private val context: Context) {
                 } catch (_: Throwable) {
                     emptyList()
                 }
-                val firstInstant = instantHits.firstOrNull { it.distance in 0.10f..15.0f }
+                val firstInstant = instantHits.firstOrNull { hit ->
+                    val ip = hit.trackable as? InstantPlacementPoint
+                    hit.distance in 0.10f..15.0f &&
+                        ip != null &&
+                        ip.trackingState == TrackingState.TRACKING &&
+                        ip.trackingMethod != InstantPlacementPoint.TrackingMethod.NOT_TRACKING
+                }
                 if (firstInstant != null) {
+                    val ipPoint = firstInstant.trackable as? InstantPlacementPoint
+                    val isApprox = ipPoint?.trackingMethod == InstantPlacementPoint.TrackingMethod.SCREENSPACE_WITH_APPROXIMATE_DISTANCE
                     val anchor = if (createAnchor) {
                         try { firstInstant.createAnchor() } catch (_: Exception) { null }
                     } else null
@@ -867,7 +1244,8 @@ class ModernArEngine(private val context: Context) {
                         anchor = anchor,
                         hitType = HitType.INSTANT_PLACEMENT,
                         distance = firstInstant.distance,
-                        planeType = null
+                        planeType = null,
+                        isApproximatePlacement = isApprox
                     )
                 }
             }
@@ -1148,24 +1526,39 @@ class ModernArEngine(private val context: Context) {
             1.0f
         }
 
-        // Fast surface label inference from center hit test result
-        val surfaceLabel = when (centerHitResult?.planeType) {
-            Plane.Type.HORIZONTAL_UPWARD_FACING -> "水平地面/桌面"
-            Plane.Type.VERTICAL -> "垂直牆面"
-            Plane.Type.HORIZONTAL_DOWNWARD_FACING -> "天花板表面"
-            else -> if (isDepthModeActive) "深度表面" else "空間特徵點"
+        // Probe Depth API readiness every 15 frames and always close native Image immediately
+        if (isDepthModeActive && frameCounter % 15 == 0) {
+            isDepthImageAvailable = try {
+                frame.acquireDepthImage16Bits().use { depthImg ->
+                    depthImg.width > 0 && depthImg.height > 0
+                }
+            } catch (_: NotYetAvailableException) {
+                false
+            } catch (_: Throwable) {
+                false
+            }
         }
 
-        // 1. Feature points count from PointCloud (throttled every 10 frames to avoid native allocation overhead)
+        // Fast surface label inference from center hit test result
+        val surfaceLabel = when {
+            centerHitResult?.planeType == Plane.Type.HORIZONTAL_UPWARD_FACING -> "水平地面/桌面"
+            centerHitResult?.planeType == Plane.Type.VERTICAL -> "垂直牆面"
+            centerHitResult?.planeType == Plane.Type.HORIZONTAL_DOWNWARD_FACING -> "天花板表面"
+            centerHitResult?.hitType == HitType.DEPTH_POINT -> "高精度深度表面"
+            centerHitResult?.hitType == HitType.INSTANT_PLACEMENT && centerHitResult.isApproximatePlacement ->
+                "即時估測表面 (請緩慢移動對準)"
+            centerHitResult?.hitType == HitType.INSTANT_PLACEMENT -> "空間定位表面"
+            else -> if (isDepthModeActive && isDepthImageAvailable) "深度表面" else "空間特徵點"
+        }
+
+        // 1. Feature points count from PointCloud (throttled every 10 frames, deterministically closed)
         if (frameCounter % 10 == 0 || cachedFeaturePointsCount == 0) {
-            val ptCloud = try { frame.acquirePointCloud() } catch (e: Throwable) { null }
             cachedFeaturePointsCount = try {
-                val buf = ptCloud?.points
-                if (buf != null) buf.remaining() / 4 else 0
-            } catch (e: Throwable) {
+                frame.acquirePointCloud().use { ptCloud ->
+                    ptCloud.points.remaining() / 4
+                }
+            } catch (_: Throwable) {
                 0
-            } finally {
-                try { ptCloud?.release() } catch (e: Throwable) {}
             }
         }
         val featurePointsCount = cachedFeaturePointsCount
@@ -1271,7 +1664,7 @@ class ModernArEngine(private val context: Context) {
             cameraPoseZ = pose.tz(),
             cameraPitch = pitchDeg,
             cameraYaw = yawDeg,
-            isDepthAvailable = isDepthModeActive,
+            isDepthAvailable = isDepthModeActive && isDepthImageAvailable,
             lightIntensity = lightVal,
             surfaceTypeAtCenter = surfaceLabel,
             stability = stabilityMetrics
@@ -1293,7 +1686,8 @@ data class HitTestResult(
     val hitType: HitType,
     val distance: Float,
     val planeType: Plane.Type? = null,
-    val isSnappedToFeature: Boolean = false
+    val isSnappedToFeature: Boolean = false,
+    val isApproximatePlacement: Boolean = false
 )
 
 /**

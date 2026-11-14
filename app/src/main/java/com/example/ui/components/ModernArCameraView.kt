@@ -140,13 +140,29 @@ fun ModernArCameraView(
                     viewModel.updateDisplayGeometry(rot, tv.width, tv.height)
                     viewModel.modernArEngine.setDisplayGeometry(rot, tv.width, tv.height)
                 }
-                viewModel.modernArEngine.sharedCamera?.let { sc ->
+                val sc = viewModel.modernArEngine.sharedCamera
+                if (sc != null) {
                     camera2Manager.sharedCamera = sc
                     camera2Manager.preferredCameraId = viewModel.modernArEngine.selectedCameraId
                     camera2Manager.preferredAspectRatio = viewModel.modernArEngine.selectedCameraImageSize?.let {
                         if (it.height > 0) it.width.toFloat() / it.height.toFloat() else null
                     }
                     camera2Manager.preferredFpsRange = viewModel.modernArEngine.selectedCameraFpsRange
+                    if (camera2Manager.isCameraOpenWithoutSharedCamera() && !camera2Manager.isFrontFacing) {
+                        camera2Manager.reconnectWithSharedCamera(
+                            sharedCam = sc,
+                            cameraId = viewModel.modernArEngine.selectedCameraId,
+                            imageSize = viewModel.modernArEngine.selectedCameraImageSize,
+                            fpsRange = viewModel.modernArEngine.selectedCameraFpsRange,
+                            onBeforeCloseCamera = { viewModel.modernArEngine.pause() }
+                        ) { isHighSpeed, size ->
+                            android.util.Log.i("CameraView", "Reconnected SharedCamera session. HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
+                            tv.post {
+                                camera2Manager.configureTransform(tv, tv.width, tv.height)
+                            }
+                        }
+                        return@launch
+                    }
                 }
                 camera2Manager.openCameraAndStartSession(tv) { isHighSpeed, size ->
                     android.util.Log.i("CameraView", "Session ready. HighSpeed=$isHighSpeed, Size=${size.width}x${size.height}")
@@ -236,8 +252,9 @@ fun ModernArCameraView(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            viewModel.pauseArAndCamera(camera2Manager)
             modernArVulkanViewRef?.destroy()
+            modernArVulkanViewRef = null
+            viewModel.pauseArAndCamera(camera2Manager)
             viewModel.onPause()
             viewModel.setHighSpeedCamera2Manager(null)
             viewModel.releaseVulkanPipelineBuffers()
@@ -245,6 +262,30 @@ fun ModernArCameraView(
             if (videoRecorder.isRecording.value) {
                 videoRecorder.stopRecording { _, _, _ -> }
             }
+        }
+    }
+
+    // DisplayListener ensures 180-degree rotations (where width/height remain equal) still update ARCore & Camera2 transform
+    DisposableEffect(context, camera2Manager) {
+        val dm = context.getSystemService(Context.DISPLAY_SERVICE) as? android.hardware.display.DisplayManager
+        val displayListener = object : android.hardware.display.DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) {}
+            override fun onDisplayRemoved(displayId: Int) {}
+            override fun onDisplayChanged(displayId: Int) {
+                val tv = textureViewRef ?: return
+                if (tv.width > 0 && tv.height > 0) {
+                    val rot = getDisplayRotation(context)
+                    viewModel.updateDisplayGeometry(rot, tv.width, tv.height)
+                    viewModel.modernArEngine.setDisplayGeometry(rot, tv.width, tv.height)
+                    tv.post {
+                        camera2Manager.configureTransform(tv, tv.width, tv.height)
+                    }
+                }
+            }
+        }
+        dm?.registerDisplayListener(displayListener, null)
+        onDispose {
+            dm?.unregisterDisplayListener(displayListener)
         }
     }
 
@@ -458,6 +499,7 @@ fun ModernArCameraView(
                                     camera2Manager.configureTransform(textureView, width, height)
                                 }
                                 override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                                    modernArVulkanViewRef?.onPause()
                                     viewModel.pauseArAndCamera(camera2Manager)
                                     return true
                                 }
@@ -477,6 +519,7 @@ fun ModernArCameraView(
                             textureViewRef = tv
                         },
                         onRelease = { _ ->
+                            modernArVulkanViewRef?.onPause()
                             viewModel.pauseArAndCamera(camera2Manager)
                             textureViewRef = null
                         },

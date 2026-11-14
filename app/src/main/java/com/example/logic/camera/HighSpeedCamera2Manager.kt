@@ -46,11 +46,14 @@ class HighSpeedCamera2Manager(private val context: Context) {
     var preferredCameraId: String? = null
     var preferredAspectRatio: Float? = null
     var preferredFpsRange: Range<Int>? = null
-    var onArSessionReadyToResume: (() -> Unit)? = null
+    var onArSessionReadyToResume: ((CameraCaptureSession.CaptureCallback, Handler?) -> Unit)? = null
+    var onBeforeCameraSwitch: (() -> Unit)? = null
     var isArCoreResumedChecker: (() -> Boolean)? = null
 
     private var activeTextureView: WeakReference<TextureView>? = null
     private val arResumeTriggeredForSession = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile
+    private var isSharedCameraBoundToSession = false
 
     private var currentTorchState = false
     private var previewRequestBuilder: CaptureRequest.Builder? = null
@@ -98,6 +101,12 @@ class HighSpeedCamera2Manager(private val context: Context) {
             (isArCoreResumedChecker?.invoke() == true)
     }
 
+    fun isCameraOpenWithoutSharedCamera(): Boolean {
+        return (cameraDevice != null || captureSession != null || isOpening) &&
+            !isClosed &&
+            !isSharedCameraBoundToSession
+    }
+
     fun setHorizontallyMirrored(mirrored: Boolean, textureView: TextureView?) {
         isHorizontallyMirrored = mirrored
         textureView?.let { tv ->
@@ -124,7 +133,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
         } else {
             CameraCharacteristics.LENS_FACING_BACK
         }
-        onBeforeCloseCamera?.invoke()
+        (onBeforeCloseCamera ?: onBeforeCameraSwitch)?.invoke()
         closeCamera()
         val expectedGen = cameraGeneration.get()
 
@@ -612,6 +621,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
 
             val surfaceList = ArrayList<Surface>()
             surfaceList.add(surface)
+            isSharedCameraBoundToSession = false
             if (currentSharedCamera != null) {
                 try {
                     currentSharedCamera.setAppSurfaces(activeCameraId ?: camera.id, listOf(surface))
@@ -620,6 +630,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
                     for (arSurface in arSurfaces) {
                         requestBuilder.addTarget(arSurface)
                     }
+                    isSharedCameraBoundToSession = true
                     Log.i(TAG, "Configured SharedCamera (cam=${activeCameraId}, step=$fallbackStep) with ${arSurfaces.size} ARCore surfaces.")
                 } catch (t: Throwable) {
                     Log.w(TAG, "Error binding SharedCamera surfaces: ${t.message}")
@@ -638,18 +649,17 @@ class HighSpeedCamera2Manager(private val context: Context) {
                     isHighSpeedSessionActive = targetFpsRange.upper >= 60
 
                     try {
-                        session.setRepeatingRequest(
-                            requestBuilder.build(),
-                            captureCallback,
-                            backgroundHandler
-                        )
+                        // Official SharedCameraActivity protocol: start repeating request while ARCore is still paused
+                        // so CameraCaptureSession transitions to onActive(), where session.resume() + setCaptureCallback() run.
+                        if (!isSharedCameraArActive()) {
+                            session.setRepeatingRequest(
+                                requestBuilder.build(),
+                                captureCallback,
+                                backgroundHandler
+                            )
+                        }
                         if (currentSharedCamera != null) {
-                            try {
-                                currentSharedCamera.setCaptureCallback(captureCallback, backgroundHandler)
-                            } catch (cbEx: Throwable) {
-                                Log.w(TAG, "SharedCamera setCaptureCallback note: ${cbEx.message}")
-                            }
-                            Log.i(TAG, "CameraCaptureSession configured with SharedCamera! FPS=$targetFpsRange, Size=${size.width}x${size.height}")
+                            Log.i(TAG, "CameraCaptureSession configured for SharedCamera! FPS=$targetFpsRange, Size=${size.width}x${size.height}")
                         } else {
                             Log.i(TAG, "CameraCaptureSession started! FPS=$targetFpsRange, Size=${size.width}x${size.height}")
                         }
@@ -662,9 +672,14 @@ class HighSpeedCamera2Manager(private val context: Context) {
 
                 override fun onActive(session: CameraCaptureSession) {
                     super.onActive(session)
-                    if (!isClosed && cameraGeneration.get() == sessionGen && currentSharedCamera != null && arResumeTriggeredForSession.compareAndSet(false, true)) {
-                        Log.i(TAG, "CaptureSession onActive -> notifying ARCore ready to resume")
-                        onArSessionReadyToResume?.invoke()
+                    if (!isClosed &&
+                        cameraGeneration.get() == sessionGen &&
+                        currentSharedCamera != null &&
+                        isSharedCameraBoundToSession &&
+                        arResumeTriggeredForSession.compareAndSet(false, true)
+                    ) {
+                        Log.i(TAG, "CaptureSession onActive -> resuming ARCore Session and binding capture callback")
+                        onArSessionReadyToResume?.invoke(captureCallback, backgroundHandler)
                     }
                 }
 
@@ -742,6 +757,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
             imageSize.width.toFloat() / imageSize.height.toFloat()
         } else null
         if (sharedCamera == sharedCam &&
+            isSharedCameraBoundToSession &&
             preferredCameraId == cameraId &&
             preferredFpsRange == fpsRange &&
             (captureSession != null || isOpening) &&
@@ -879,6 +895,8 @@ class HighSpeedCamera2Manager(private val context: Context) {
         cameraGeneration.incrementAndGet()
         isClosed = true
         isOpening = false
+        isSharedCameraBoundToSession = false
+        arResumeTriggeredForSession.set(false)
         isSwitchingCamera.set(false)
         openRetryCount = 0
         mainHandler.removeCallbacksAndMessages(null)

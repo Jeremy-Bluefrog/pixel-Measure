@@ -263,12 +263,25 @@ class VulkanArSceneView(
             if (!arEngine.isSessionResumed) return
 
             arEngine.withLockedSessionUpdate(fallbackSession = session) { activeSession ->
-                if (arEngine.makeGlContextCurrent()) {
+                arEngine.updateDisplayGeometryIfNeeded(activeSession)
+                if (arEngine.isExposeHardwareBufferActive) {
+                    val frame = activeSession.update()
+                    logThrottleCounter = 0
+                    val frameTimestamp = frame.timestamp
+                    if (frameTimestamp == 0L) return@withLockedSessionUpdate
+                    if (frameTimestamp == lastArFrameTimestampNs) {
+                        val hasPendingTap = viewModel?.hasPendingTapRequest() == true
+                        if (!hasPendingTap) return@withLockedSessionUpdate
+                    }
+                    lastArFrameTimestampNs = frameTimestamp
+                    viewModel?.processVulkanFrame(frame, arEngine)
+                } else if (arEngine.makeGlContextCurrent()) {
                     try {
                         val frame = activeSession.update()
                         logThrottleCounter = 0
                         val frameTimestamp = frame.timestamp
-                        if (frameTimestamp != 0L && frameTimestamp == lastArFrameTimestampNs) {
+                        if (frameTimestamp == 0L) return@withLockedSessionUpdate
+                        if (frameTimestamp == lastArFrameTimestampNs) {
                             // Skip duplicate camera frame on higher-refresh VSync ticks unless tap is pending
                             val hasPendingTap = viewModel?.hasPendingTapRequest() == true
                             if (!hasPendingTap) return@withLockedSessionUpdate
