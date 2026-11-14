@@ -54,6 +54,7 @@ import com.example.ui.theme.getGroupedPosition
 import com.example.ui.theme.groupedItemShape
 import com.example.ui.theme.rememberExpressiveConnectedShape
 import com.example.ui.viewmodel.MeasureViewModel
+import kotlinx.coroutines.flow.collectLatest
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
@@ -91,7 +92,7 @@ fun MainScreen(viewModel: MeasureViewModel) {
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(viewModel) {
-        viewModel.toastMessage.collect { msg ->
+        viewModel.toastMessage.collectLatest { msg ->
             snackbarHostState.currentSnackbarData?.dismiss()
             snackbarHostState.showSnackbar(
                 message = msg,
@@ -697,7 +698,7 @@ fun HistorySheetContent(
                     label = "catPillFg_$code"
                 )
                 val pillScale by animateFloatAsState(
-                    targetValue = if (isPressed) 0.94f else 1f,
+                    targetValue = 1f,
                     animationSpec = ExpressiveMotion.spatialFast(),
                     label = "catPillScale_$code"
                 )

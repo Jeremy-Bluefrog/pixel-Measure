@@ -20,6 +20,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 import java.io.FileOutputStream
+import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * High-performance, robust AR Measurement Video Recorder.
@@ -44,6 +47,12 @@ class ArVideoRecorder(private val context: Context) {
     private val _recordingSeconds = MutableStateFlow(0)
     val recordingSeconds: StateFlow<Int> = _recordingSeconds.asStateFlow()
 
+    private val recordingLock = Any()
+    private val isFrameEncodingInFlight = AtomicBoolean(false)
+    private val frameCounter = AtomicInteger(0)
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val frameIoDispatcher = Dispatchers.IO.limitedParallelism(1)
+
     private var recordScope: CoroutineScope? = null
     private var timerJob: Job? = null
     private var frameJob: Job? = null
@@ -51,6 +60,7 @@ class ArVideoRecorder(private val context: Context) {
     private var targetView: View? = null
     private var recordingStartTime = 0L
     private val capturedFrameFiles = mutableListOf<File>()
+    @Volatile
     private var firstThumbnailPath: String? = null
     private var cameraBitmapSupplier: (() -> Bitmap?)? = null
 
@@ -62,42 +72,47 @@ class ArVideoRecorder(private val context: Context) {
         cameraBitmapProvider: (() -> Bitmap?)? = null,
         onStarted: (() -> Unit)? = null
     ) {
-        if (_isRecording.value) return
+        synchronized(recordingLock) {
+            if (_isRecording.value) return
 
-        targetView = view
-        cameraBitmapSupplier = cameraBitmapProvider
-        _isRecording.value = true
-        _recordingSeconds.value = 0
-        recordingStartTime = System.currentTimeMillis()
+            targetView = view
+            cameraBitmapSupplier = cameraBitmapProvider
+            _isRecording.value = true
+            _recordingSeconds.value = 0
+            recordingStartTime = System.currentTimeMillis()
+            frameCounter.set(0)
+            isFrameEncodingInFlight.set(false)
 
-        cleanTempFrameDir()
-        synchronized(capturedFrameFiles) {
-            capturedFrameFiles.clear()
-        }
-        firstThumbnailPath = null
+            cleanTempFrameDir()
+            synchronized(capturedFrameFiles) {
+                capturedFrameFiles.clear()
+            }
+            firstThumbnailPath = null
 
-        val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-        recordScope = scope
+            val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
+            recordScope = scope
 
-        // 1. Timer job (updates every 1 second)
-        timerJob = scope.launch {
-            onStarted?.invoke()
-            while (isActive && _isRecording.value) {
-                delay(1000)
-                val currentSec = _recordingSeconds.value + 1
-                _recordingSeconds.value = currentSec
-                if (currentSec >= MAX_RECORDING_SECONDS) {
-                    stopRecording { _, _, _ -> }
-                    break
+            // 1. Timer job (updates every 1 second)
+            timerJob = scope.launch {
+                onStarted?.invoke()
+                while (isActive && _isRecording.value) {
+                    delay(1000)
+                    if (!_isRecording.value) break
+                    val currentSec = _recordingSeconds.value + 1
+                    _recordingSeconds.value = currentSec
+                    if (currentSec >= MAX_RECORDING_SECONDS) {
+                        stopRecording { _, _, _ -> }
+                        break
+                    }
                 }
             }
-        }
 
-        // 2. Safe continuous frame sampling on Main thread
-        frameJob = scope.launch(Dispatchers.Main) {
-            while (isActive && _isRecording.value) {
-                captureFrameInternal(view)
-                delay(FRAME_DELAY_MS)
+            // 2. Safe continuous frame sampling on Main thread with IO-offloaded JPEG compression
+            frameJob = scope.launch(Dispatchers.Main.immediate) {
+                while (isActive && _isRecording.value) {
+                    captureFrameInternal(view, scope)
+                    delay(FRAME_DELAY_MS)
+                }
             }
         }
     }
@@ -117,9 +132,14 @@ class ArVideoRecorder(private val context: Context) {
         } catch (_: Throwable) {}
     }
 
-    private fun captureFrameInternal(view: View) {
+    private fun captureFrameInternal(view: View, scope: CoroutineScope) {
+        if (!isFrameEncodingInFlight.compareAndSet(false, true)) return
+        var bitmap: Bitmap? = null
         try {
-            if (view.width <= 0 || view.height <= 0) return
+            if (view.width <= 0 || view.height <= 0) {
+                isFrameEncodingInFlight.set(false)
+                return
+            }
 
             // Standard 16-aligned resolution for maximum encoder compatibility (e.g. 480x848 or 480x864)
             val baseW = 480
@@ -128,7 +148,7 @@ class ArVideoRecorder(private val context: Context) {
             val scaledW = (baseW / 16) * 16
             val scaledH = ((rawH / 16) * 16).coerceIn(480, 1280)
 
-            val bitmap = Bitmap.createBitmap(scaledW, scaledH, Bitmap.Config.ARGB_8888)
+            bitmap = Bitmap.createBitmap(scaledW, scaledH, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(bitmap)
 
             // Direct hardware camera frame sampling if available
@@ -141,7 +161,7 @@ class ArVideoRecorder(private val context: Context) {
                 canvas.drawColor(android.graphics.Color.rgb(18, 24, 38))
             }
 
-            // Draw AR overlay view hierarchy safely
+            // Draw AR overlay view hierarchy safely on Main thread
             val scaleX = scaledW.toFloat() / view.width.toFloat()
             val scaleY = scaledH.toFloat() / view.height.toFloat()
             canvas.save()
@@ -151,23 +171,36 @@ class ArVideoRecorder(private val context: Context) {
             } catch (_: Throwable) {}
             canvas.restore()
 
-            // Save to disk to prevent OOM
-            val frameIndex = capturedFrameFiles.size
-            val frameFile = File(getTempFrameDir(), "frame_${String.format("%04d", frameIndex)}.jpg")
-            FileOutputStream(frameFile).use { out ->
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
-            }
+            val frameIndex = frameCounter.getAndIncrement()
+            val capturedBitmap = bitmap
+            bitmap = null // Ownership transferred to IO coroutine
 
-            synchronized(capturedFrameFiles) {
-                capturedFrameFiles.add(frameFile)
+            scope.launch(frameIoDispatcher) {
+                try {
+                    val frameFile = File(getTempFrameDir(), String.format(Locale.US, "frame_%04d.jpg", frameIndex))
+                    FileOutputStream(frameFile).use { out ->
+                        capturedBitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                    }
+                    synchronized(capturedFrameFiles) {
+                        capturedFrameFiles.add(frameFile)
+                    }
+                    if (firstThumbnailPath == null) {
+                        firstThumbnailPath = saveThumbnail(capturedBitmap)
+                    }
+                } catch (e: Throwable) {
+                    Log.w(TAG, "Frame IO compress error: ${e.message}")
+                } finally {
+                    try {
+                        if (!capturedBitmap.isRecycled) capturedBitmap.recycle()
+                    } catch (_: Throwable) {}
+                    isFrameEncodingInFlight.set(false)
+                }
             }
-
-            if (firstThumbnailPath == null) {
-                firstThumbnailPath = saveThumbnail(bitmap)
-            }
-
-            bitmap.recycle()
         } catch (e: Throwable) {
+            try {
+                if (bitmap != null && !bitmap.isRecycled) bitmap.recycle()
+            } catch (_: Throwable) {}
+            isFrameEncodingInFlight.set(false)
             Log.w(TAG, "Frame capture error: ${e.message}")
         }
     }
@@ -192,26 +225,32 @@ class ArVideoRecorder(private val context: Context) {
     fun stopRecording(
         onComplete: (videoPath: String?, thumbnailPath: String?, durationSeconds: Int) -> Unit
     ) {
-        if (!_isRecording.value) {
-            onComplete(null, null, 0)
-            return
+        val scopeToRun: CoroutineScope
+        val duration: Int
+        synchronized(recordingLock) {
+            if (!_isRecording.value) {
+                onComplete(null, null, 0)
+                return
+            }
+
+            _isRecording.value = false
+            duration = _recordingSeconds.value.coerceAtLeast(1)
+
+            timerJob?.cancel()
+            frameJob?.cancel()
+            timerJob = null
+            frameJob = null
+            scopeToRun = recordScope ?: CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
         }
 
-        _isRecording.value = false
-        val duration = _recordingSeconds.value.coerceAtLeast(1)
+        scopeToRun.launch(Dispatchers.IO) {
+            // Wait briefly for any in-flight frame JPEG compression on frameIoDispatcher to finish
+            withContext(frameIoDispatcher) {}
 
-        timerJob?.cancel()
-        frameJob?.cancel()
-        timerJob = null
-        frameJob = null
+            val frameFilesCopy = synchronized(capturedFrameFiles) {
+                capturedFrameFiles.toList()
+            }
 
-        val frameFilesCopy = synchronized(capturedFrameFiles) {
-            capturedFrameFiles.toList()
-        }
-
-        val scope = recordScope ?: CoroutineScope(Dispatchers.Main + SupervisorJob())
-
-        scope.launch(Dispatchers.IO) {
             val videoFile = generateMp4VideoFile(frameFilesCopy, duration)
             var savedUri: Uri? = null
 
@@ -227,8 +266,12 @@ class ArVideoRecorder(private val context: Context) {
 
             withContext(Dispatchers.Main) {
                 onComplete(finalVideoPath, thumbPath, duration)
-                recordScope?.cancel()
-                recordScope = null
+                synchronized(recordingLock) {
+                    if (recordScope === scopeToRun) {
+                        recordScope?.cancel()
+                        recordScope = null
+                    }
+                }
             }
         }
     }

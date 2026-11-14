@@ -182,7 +182,7 @@ fun ModernArTopBar(
                     pressedCorner = 10.dp
                 )
                 val unitScale by animateFloatAsState(
-                    targetValue = if (isUnitPressed) 0.93f else 1.0f,
+                    targetValue = 1.0f,
                     animationSpec = ExpressiveMotion.spatialFast(),
                     label = "unitPillScale"
                 )
@@ -290,7 +290,7 @@ fun ModernArTopBar(
                     label = "torchConnectedTint"
                 )
                 val torchScale by animateFloatAsState(
-                    targetValue = if (isTorchPressed) 0.92f else 1f,
+                    targetValue = 1f,
                     animationSpec = ExpressiveMotion.spatialFast(),
                     label = "torchConnectedScale"
                 )
@@ -468,7 +468,7 @@ fun ModernArTopBar(
                     innerActiveCorner = 16.dp
                 )
                 val historyScale by animateFloatAsState(
-                    targetValue = if (isHistoryPressed) 0.92f else 1f,
+                    targetValue = 1f,
                     animationSpec = ExpressiveMotion.spatialFast(),
                     label = "historyConnectedScale"
                 )
@@ -513,7 +513,7 @@ fun ModernArTopBar(
                     pressedOuterCorner = 12.dp
                 )
                 val settingsScale by animateFloatAsState(
-                    targetValue = if (isSettingsPressed) 0.92f else 1f,
+                    targetValue = 1f,
                     animationSpec = ExpressiveMotion.spatialFast(),
                     label = "settingsConnectedScale"
                 )
@@ -569,14 +569,14 @@ fun ModernArTopBar(
                     val secs = recordingSeconds % 60
                     Text(
                         text = String.format(java.util.Locale.US, "REC %02d:%02d", mins, secs),
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace
                     )
                     Text(
                         text = "· 點擊快門停止",
-                        color = Color.White.copy(alpha = 0.85f),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium
                     )

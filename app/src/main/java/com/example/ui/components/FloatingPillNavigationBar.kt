@@ -100,11 +100,7 @@ fun FloatingPillNavigationBar(
                 )
 
                 val pillScale by animateFloatAsState(
-                    targetValue = when {
-                        isPressed -> 0.93f
-                        isSelected -> 1.03f
-                        else -> 1.0f
-                    },
+                    targetValue = if (isSelected) 1.03f else 1.0f,
                     animationSpec = ExpressiveMotion.spatialFast(),
                     label = "pillScale"
                 )

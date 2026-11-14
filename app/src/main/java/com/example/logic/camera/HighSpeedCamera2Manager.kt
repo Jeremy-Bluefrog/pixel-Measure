@@ -31,11 +31,16 @@ import java.lang.ref.WeakReference
 class HighSpeedCamera2Manager(private val context: Context) {
 
     private val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+    @Volatile
     private var cameraDevice: CameraDevice? = null
+    @Volatile
     private var captureSession: CameraCaptureSession? = null
 
     private var backgroundThread: HandlerThread? = null
+    @Volatile
     private var backgroundHandler: Handler? = null
+    private val mainHandler = Handler(android.os.Looper.getMainLooper())
+    private val cameraGeneration = java.util.concurrent.atomic.AtomicLong(0L)
 
     var sharedCamera: SharedCamera? = null
     var preferredCameraId: String? = null
@@ -65,6 +70,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
     var thermalMaxFps: Int = 60
     private var activeCharacteristics: CameraCharacteristics? = null
 
+    @Volatile
     private var isClosed = false
     private var openRetryCount = 0
     private var activeCameraId: String? = null
@@ -75,6 +81,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
         private set
 
     var onCameraUnavailable: (() -> Unit)? = null
+    var onCameraAvailable: (() -> Unit)? = null
 
     var preferredFacing: Int = CameraCharacteristics.LENS_FACING_BACK
         private set
@@ -119,11 +126,15 @@ class HighSpeedCamera2Manager(private val context: Context) {
         }
         onBeforeCloseCamera?.invoke()
         closeCamera()
+        val expectedGen = cameraGeneration.get()
 
         // Allow HAL hardware pipe 120ms to completely tear down previous camera instance
-        val mainHandler = Handler(android.os.Looper.getMainLooper())
         mainHandler.postDelayed({
             try {
+                if (cameraGeneration.get() != expectedGen) {
+                    isSwitchingCamera.set(false)
+                    return@postDelayed
+                }
                 if (textureView.isAvailable) {
                     openCameraAndStartSession(textureView) { success, size ->
                         isSwitchingCamera.set(false)
@@ -131,9 +142,11 @@ class HighSpeedCamera2Manager(private val context: Context) {
                     }
                 } else {
                     isSwitchingCamera.set(false)
+                    onSessionConfigured?.invoke(false, Size(0, 0))
                 }
             } catch (e: Throwable) {
                 isSwitchingCamera.set(false)
+                onSessionConfigured?.invoke(false, Size(0, 0))
             }
         }, 120L)
     }
@@ -158,7 +171,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
     }
 
     fun startBackgroundThread() {
-        if (backgroundThread == null) {
+        if (backgroundThread == null || backgroundThread?.isAlive != true) {
             backgroundThread = HandlerThread(
                 "HighSpeedCameraBackground",
                 android.os.Process.THREAD_PRIORITY_MORE_FAVORABLE
@@ -169,9 +182,12 @@ class HighSpeedCamera2Manager(private val context: Context) {
 
     fun stopBackgroundThread() {
         try {
+            val thread = backgroundThread
             backgroundHandler?.removeCallbacksAndMessages(null)
-            backgroundThread?.quitSafely()
-            backgroundThread?.join(300)
+            thread?.quitSafely()
+            if (thread != null && Thread.currentThread() !== thread) {
+                thread.join(300)
+            }
             backgroundThread = null
             backgroundHandler = null
         } catch (e: Exception) {
@@ -353,6 +369,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
 
         isClosed = false
         isOpening = true
+        val sessionGen = cameraGeneration.incrementAndGet()
         startBackgroundThread()
 
         try {
@@ -360,8 +377,11 @@ class HighSpeedCamera2Manager(private val context: Context) {
             if (cameraIdList.isEmpty()) {
                 Log.e(TAG, "No camera available on device, entering simulation fallback mode.")
                 isOpening = false
-                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                    onCameraUnavailable?.invoke()
+                onSessionConfigured?.invoke(false, Size(0, 0))
+                mainHandler.post {
+                    if (!isClosed && cameraGeneration.get() == sessionGen) {
+                        onCameraUnavailable?.invoke()
+                    }
                 }
                 return
             }
@@ -369,11 +389,12 @@ class HighSpeedCamera2Manager(private val context: Context) {
             // Select camera according to preferred facing (Back vs Front) and ARCore CameraConfig ID
             val targetFacing = preferredFacing
             val activeSharedCamera = if (targetFacing == CameraCharacteristics.LENS_FACING_BACK) sharedCamera else null
+            val prefId = preferredCameraId
             val cameraId = if (targetFacing == CameraCharacteristics.LENS_FACING_BACK &&
-                preferredCameraId != null &&
-                cameraIdList.contains(preferredCameraId)
+                prefId != null &&
+                cameraIdList.contains(prefId)
             ) {
-                preferredCameraId!!
+                prefId
             } else {
                 cameraIdList.firstOrNull { id ->
                     try {
@@ -402,6 +423,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
             if (texture == null) {
                 Log.w(TAG, "TextureView surfaceTexture is null, waiting for surface availability.")
                 isOpening = false
+                onSessionConfigured?.invoke(false, optimalSize)
                 return
             }
 
@@ -422,13 +444,14 @@ class HighSpeedCamera2Manager(private val context: Context) {
             val stateCallback = object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
                     isOpening = false
-                    if (isClosed) {
+                    if (isClosed || cameraGeneration.get() != sessionGen) {
                         try { camera.close() } catch (_: Exception) {}
                         return
                     }
                     cameraDevice = camera
                     openRetryCount = 0
-                    configureSession(camera, surface, optimalSize, characteristics, activeSharedCamera, onSessionConfigured)
+                    mainHandler.post { onCameraAvailable?.invoke() }
+                    configureSession(camera, surface, optimalSize, characteristics, activeSharedCamera, sessionGen, onSessionConfigured)
                 }
 
                 override fun onDisconnected(camera: CameraDevice) {
@@ -437,6 +460,15 @@ class HighSpeedCamera2Manager(private val context: Context) {
                     try { camera.close() } catch (_: Exception) {}
                     if (cameraDevice == camera) {
                         cameraDevice = null
+                    }
+                    if (!isClosed && cameraGeneration.get() == sessionGen && openRetryCount < 3) {
+                        openRetryCount++
+                        val backoffMs = 250L * openRetryCount
+                        mainHandler.postDelayed({
+                            if (!isClosed && cameraGeneration.get() == sessionGen && textureView.isAvailable) {
+                                openCameraAndStartSession(textureView, onSessionConfigured)
+                            }
+                        }, backoffMs)
                     }
                 }
 
@@ -448,14 +480,21 @@ class HighSpeedCamera2Manager(private val context: Context) {
                         cameraDevice = null
                     }
 
-                    if (!isClosed && openRetryCount < 2) {
+                    if (!isClosed && cameraGeneration.get() == sessionGen && openRetryCount < 3) {
                         openRetryCount++
                         val backoffMs = 250L * openRetryCount
-                        backgroundHandler?.postDelayed({
-                            if (!isClosed && textureView.isAvailable) {
+                        mainHandler.postDelayed({
+                            if (!isClosed && cameraGeneration.get() == sessionGen && textureView.isAvailable) {
                                 openCameraAndStartSession(textureView, onSessionConfigured)
+                            } else {
+                                onSessionConfigured?.invoke(false, optimalSize)
                             }
                         }, backoffMs)
+                    } else {
+                        onSessionConfigured?.invoke(false, optimalSize)
+                        if (!isClosed && cameraGeneration.get() == sessionGen) {
+                            mainHandler.post { onCameraUnavailable?.invoke() }
+                        }
                     }
                 }
             }
@@ -463,11 +502,39 @@ class HighSpeedCamera2Manager(private val context: Context) {
             val wrappedCallback = activeSharedCamera?.createARDeviceStateCallback(stateCallback, backgroundHandler) ?: stateCallback
             cameraManager.openCamera(cameraId, wrappedCallback, backgroundHandler)
 
+        } catch (cae: CameraAccessException) {
+            isOpening = false
+            val isTransient = cae.reason == CameraAccessException.CAMERA_IN_USE ||
+                cae.reason == CameraAccessException.MAX_CAMERAS_IN_USE ||
+                cae.reason == CameraAccessException.CAMERA_DISCONNECTED
+            if (isTransient && !isClosed && cameraGeneration.get() == sessionGen && openRetryCount < 3) {
+                openRetryCount++
+                val backoffMs = 250L * openRetryCount
+                Log.w(TAG, "Transient CameraAccessException (reason=${cae.reason}), retrying in ${backoffMs}ms...")
+                mainHandler.postDelayed({
+                    if (!isClosed && cameraGeneration.get() == sessionGen && textureView.isAvailable) {
+                        openCameraAndStartSession(textureView, onSessionConfigured)
+                    } else {
+                        onSessionConfigured?.invoke(false, previewSize ?: Size(0, 0))
+                    }
+                }, backoffMs)
+            } else {
+                Log.e(TAG, "Failed to open camera (reason=${cae.reason}): ${cae.message}", cae)
+                onSessionConfigured?.invoke(false, previewSize ?: Size(0, 0))
+                mainHandler.post {
+                    if (!isClosed && cameraGeneration.get() == sessionGen) {
+                        onCameraUnavailable?.invoke()
+                    }
+                }
+            }
         } catch (e: Throwable) {
             isOpening = false
             Log.e(TAG, "Failed to open camera: ${e.message}", e)
-            android.os.Handler(android.os.Looper.getMainLooper()).post {
-                onCameraUnavailable?.invoke()
+            onSessionConfigured?.invoke(false, previewSize ?: Size(0, 0))
+            mainHandler.post {
+                if (!isClosed && cameraGeneration.get() == sessionGen) {
+                    onCameraUnavailable?.invoke()
+                }
             }
         }
     }
@@ -481,14 +548,17 @@ class HighSpeedCamera2Manager(private val context: Context) {
         size: Size,
         characteristics: CameraCharacteristics,
         currentSharedCamera: SharedCamera?,
+        sessionGen: Long,
         onSessionConfigured: ((Boolean, Size) -> Unit)?,
         fallbackStep: Int = 0
     ) {
         if (!surface.isValid) {
             Log.w(TAG, "Surface is invalid, aborting configureSession.")
+            onSessionConfigured?.invoke(false, size)
             return
         }
-        if (isClosed || cameraDevice == null) {
+        if (isClosed || cameraDevice == null || cameraGeneration.get() != sessionGen) {
+            onSessionConfigured?.invoke(false, size)
             return
         }
         try {
@@ -560,7 +630,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
 
             val stateCallback = object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
-                    if (isClosed) {
+                    if (isClosed || cameraGeneration.get() != sessionGen) {
                         try { session.close() } catch (_: Exception) {}
                         return
                     }
@@ -592,7 +662,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
 
                 override fun onActive(session: CameraCaptureSession) {
                     super.onActive(session)
-                    if (!isClosed && currentSharedCamera != null && arResumeTriggeredForSession.compareAndSet(false, true)) {
+                    if (!isClosed && cameraGeneration.get() == sessionGen && currentSharedCamera != null && arResumeTriggeredForSession.compareAndSet(false, true)) {
                         Log.i(TAG, "CaptureSession onActive -> notifying ARCore ready to resume")
                         onArSessionReadyToResume?.invoke()
                     }
@@ -604,7 +674,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
                     if (captureSession == session) {
                         captureSession = null
                     }
-                    if (!isClosed && fallbackStep == 0 && cameraDevice == camera && surface.isValid) {
+                    if (!isClosed && cameraGeneration.get() == sessionGen && fallbackStep == 0 && cameraDevice == camera && surface.isValid) {
                         Log.w(TAG, "Retrying CameraCaptureSession with safe 30fps preview fallback...")
                         backgroundHandler?.post {
                             configureSession(
@@ -613,6 +683,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
                                 size = size,
                                 characteristics = characteristics,
                                 currentSharedCamera = currentSharedCamera,
+                                sessionGen = sessionGen,
                                 onSessionConfigured = onSessionConfigured,
                                 fallbackStep = 1
                             )
@@ -640,7 +711,10 @@ class HighSpeedCamera2Manager(private val context: Context) {
                 }
             }
             val executor = java.util.concurrent.Executor { command ->
-                backgroundHandler?.post(command) ?: command.run()
+                val handler = backgroundHandler
+                if (!isClosed && handler != null && cameraGeneration.get() == sessionGen) {
+                    handler.post(command)
+                }
             }
             val sessionConfig = SessionConfiguration(
                 SessionConfiguration.SESSION_REGULAR,
@@ -652,6 +726,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
 
         } catch (e: Throwable) {
             Log.e(TAG, "configureSession failed: ${e.message}", e)
+            onSessionConfigured?.invoke(false, size)
         }
     }
 
@@ -683,9 +758,9 @@ class HighSpeedCamera2Manager(private val context: Context) {
         if (tv.isAvailable && preferredFacing == CameraCharacteristics.LENS_FACING_BACK) {
             onBeforeCloseCamera?.invoke()
             closeCamera()
-            val mainHandler = Handler(android.os.Looper.getMainLooper())
+            val expectedGen = cameraGeneration.get()
             mainHandler.postDelayed({
-                if (tv.isAvailable) {
+                if (cameraGeneration.get() == expectedGen && tv.isAvailable) {
                     openCameraAndStartSession(tv, onConfigured)
                 }
             }, 120L)
@@ -801,9 +876,12 @@ class HighSpeedCamera2Manager(private val context: Context) {
     }
 
     fun closeCamera() {
+        cameraGeneration.incrementAndGet()
         isClosed = true
         isOpening = false
+        isSwitchingCamera.set(false)
         openRetryCount = 0
+        mainHandler.removeCallbacksAndMessages(null)
         try {
             backgroundHandler?.removeCallbacksAndMessages(null)
             captureSession?.close()

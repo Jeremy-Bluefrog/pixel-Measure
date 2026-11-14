@@ -286,7 +286,7 @@ fun WelcomeScreen(
                         innerActiveCorner = 18.dp
                     )
                     val rulerScale by animateFloatAsState(
-                        targetValue = if (isRulerPressed) 0.96f else 1f,
+                        targetValue = 1f,
                         animationSpec = ExpressiveMotion.spatialFast(),
                         label = "welcomeRulerScale"
                     )
@@ -303,7 +303,7 @@ fun WelcomeScreen(
                         innerActiveCorner = 18.dp
                     )
                     val startScale by animateFloatAsState(
-                        targetValue = if (isStartPressed) 0.96f else 1f,
+                        targetValue = 1f,
                         animationSpec = ExpressiveMotion.spatialFast(),
                         label = "welcomeStartScale"
                     )

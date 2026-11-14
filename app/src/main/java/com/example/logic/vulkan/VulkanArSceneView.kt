@@ -146,13 +146,20 @@ class VulkanArSceneView(
         stopRenderLoop()
     }
 
+    private val isFrameScheduled = java.util.concurrent.atomic.AtomicBoolean(false)
+
     private val frameProcessRunnable = Runnable {
-        processVulkanFrame()
+        try {
+            processVulkanFrame()
+        } finally {
+            isFrameScheduled.set(false)
+        }
     }
 
     private fun startRenderLoop() {
         if (isRendering) return
         isRendering = true
+        isFrameScheduled.set(false)
         lastDispatchedDoFrameNs = 0L
         _renderState.set(VulkanRenderState.ACTIVE_RENDER_LOOP)
 
@@ -166,17 +173,21 @@ class VulkanArSceneView(
 
     private fun stopRenderLoop() {
         isRendering = false
+        isFrameScheduled.set(false)
         _renderState.set(VulkanRenderState.SAFE_SUSPENDED)
         Choreographer.getInstance().removeFrameCallback(this)
+
+        val handler = renderHandler
+        val thread = renderThread
+        handler?.removeCallbacks(frameProcessRunnable)
+        handler?.post {
+            modernArEngine?.detachGlContext()
+        }
 
         // Enforce synchronous GPU idle wait before destroying window context
         frameSyncManager.waitAllFencesIdle(timeoutMs = 150L)
 
-        renderHandler?.post {
-            modernArEngine?.detachGlContext()
-        }
-        val thread = renderThread
-        renderThread?.quitSafely()
+        thread?.quitSafely()
         try {
             thread?.join(250)
         } catch (_: InterruptedException) {}
@@ -189,6 +200,7 @@ class VulkanArSceneView(
     private fun handleWatchdogTimeoutRecovery() {
         Log.w(TAG, "Watchdog triggered pipeline rebuild.")
         _renderState.set(VulkanRenderState.REBUILDING_PIPELINE)
+        isFrameScheduled.set(false)
         renderHandler?.post {
             frameSyncManager.reset()
             modernArEngine?.detachGlContext()
@@ -217,9 +229,15 @@ class VulkanArSceneView(
         if (!isRendering || !_renderState.get().canRender) return
 
         // Throttle 90Hz/120Hz Pixel Smooth Display Choreographer callbacks to target AR cadence (30/60Hz)
-        if (lastDispatchedDoFrameNs == 0L || (frameTimeNanos - lastDispatchedDoFrameNs) >= minFrameIntervalNs) {
+        // and coalesce pending runnables so slow frames never cause queue buildup or fence timeouts.
+        if ((lastDispatchedDoFrameNs == 0L || (frameTimeNanos - lastDispatchedDoFrameNs) >= minFrameIntervalNs) &&
+            isFrameScheduled.compareAndSet(false, true)
+        ) {
             lastDispatchedDoFrameNs = frameTimeNanos
-            renderHandler?.post(frameProcessRunnable)
+            val posted = renderHandler?.post(frameProcessRunnable) ?: false
+            if (!posted) {
+                isFrameScheduled.set(false)
+            }
         }
 
         if (isRendering && _renderState.get().canRender) {
@@ -243,29 +261,28 @@ class VulkanArSceneView(
         try {
             val arEngine = modernArEngine ?: return
             if (!arEngine.isSessionResumed) return
-            val arSession = arEngine.session ?: session ?: return
 
-            if (arEngine.makeGlContextCurrent()) {
-                try {
-                    val frame = arSession.update()
-                    logThrottleCounter = 0
-                    val frameTimestamp = frame.timestamp
-                    if (frameTimestamp != 0L && frameTimestamp == lastArFrameTimestampNs) {
-                        // Skip duplicate camera frame on higher-refresh VSync ticks unless tap is pending
-                        val hasPendingTap = viewModel?.hasPendingTapRequest() == true
-                        if (!hasPendingTap) return
+            arEngine.withLockedSessionUpdate(fallbackSession = session) { activeSession ->
+                if (arEngine.makeGlContextCurrent()) {
+                    try {
+                        val frame = activeSession.update()
+                        logThrottleCounter = 0
+                        val frameTimestamp = frame.timestamp
+                        if (frameTimestamp != 0L && frameTimestamp == lastArFrameTimestampNs) {
+                            // Skip duplicate camera frame on higher-refresh VSync ticks unless tap is pending
+                            val hasPendingTap = viewModel?.hasPendingTapRequest() == true
+                            if (!hasPendingTap) return@withLockedSessionUpdate
+                        }
+                        lastArFrameTimestampNs = frameTimestamp
+                        viewModel?.processVulkanFrame(frame, arEngine)
+                    } finally {
+                        arEngine.detachGlContext()
                     }
-                    lastArFrameTimestampNs = frameTimestamp
-                    viewModel?.let { vm ->
-                        vm.processVulkanFrame(frame, arEngine)
+                } else {
+                    if (logThrottleCounter++ % 60 == 0) {
+                        Log.w(TAG, "GL context unavailable on render thread, attempting texture rebind")
+                        arEngine.rebindCameraTexture()
                     }
-                } finally {
-                    arEngine.detachGlContext()
-                }
-            } else {
-                if (logThrottleCounter++ % 60 == 0) {
-                    Log.w(TAG, "GL context unavailable on render thread, attempting texture rebind")
-                    arEngine.rebindCameraTexture()
                 }
             }
         } catch (e: com.google.ar.core.exceptions.MissingGlContextException) {
@@ -312,8 +329,9 @@ class VulkanArSceneView(
             return
         }
 
+        var bitmap: Bitmap? = null
         try {
-            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             val h = Handler(context.mainLooper)
 
             PixelCopy.request(
@@ -323,6 +341,7 @@ class VulkanArSceneView(
                     if (copyResult == PixelCopy.SUCCESS) {
                         safeCallback(bitmap)
                     } else {
+                        try { bitmap.recycle() } catch (_: Throwable) {}
                         Log.w(TAG, "PixelCopy returned status: $copyResult")
                         safeCallback(null)
                     }
@@ -330,6 +349,7 @@ class VulkanArSceneView(
                 h
             )
         } catch (e: Exception) {
+            try { bitmap?.recycle() } catch (_: Throwable) {}
             Log.e(TAG, "Snapshot capture error: ${e.message}")
             safeCallback(null)
         }

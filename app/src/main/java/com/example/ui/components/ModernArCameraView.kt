@@ -215,6 +215,9 @@ fun ModernArCameraView(
                     viewModel.onResume()
                     modernArVulkanViewRef?.onResume()
                     if (hasCameraPermission) {
+                        if (viewModel.isCameraSimulationActive.value && hasHardwareCamera(context)) {
+                            viewModel.setCameraSimulationActive(false)
+                        }
                         val tv = textureViewRef
                         if (tv != null && tv.isAvailable) {
                             startCameraAndArPipeline(tv)
@@ -245,43 +248,10 @@ fun ModernArCameraView(
         }
     }
 
-    // Modern Refined Haptic Feedback Handler
+    // Modern Refined Haptic Feedback Handler (Google Pixel LRA Primitives)
     LaunchedEffect(Unit) {
         viewModel.hapticEvent.collect { type ->
-            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
-                vibratorManager?.defaultVibrator
-            } else {
-                @Suppress("DEPRECATION")
-                context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-            }
-
-            when (type) {
-                HapticType.SNAP -> {
-                    vibrator?.vibrate(
-                        VibrationEffect.createWaveform(
-                            longArrayOf(0, 18, 25, 28),
-                            intArrayOf(0, 255, 0, 160),
-                            -1
-                        )
-                    )
-                }
-                HapticType.CLICK -> {
-                    vibrator?.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK))
-                }
-                HapticType.HEAVY -> {
-                    vibrator?.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_HEAVY_CLICK))
-                }
-                HapticType.DOUBLE -> {
-                    vibrator?.vibrate(
-                        VibrationEffect.createWaveform(
-                            longArrayOf(0, 30, 40, 30),
-                            intArrayOf(0, 255, 0, 200),
-                            -1
-                        )
-                    )
-                }
-            }
+            com.example.logic.ModernHapticFeedback.play(context, type)
         }
     }
 
@@ -581,6 +551,9 @@ fun ModernArCameraView(
                                     }
                                 },
                                 onRetryClick = {
+                                    if (isCameraSimulationActive && hasHardwareCamera(context)) {
+                                        viewModel.setCameraSimulationActive(false)
+                                    }
                                     val tv = textureViewRef
                                     if (tv != null && tv.isAvailable) {
                                         startCameraAndArPipeline(tv)
@@ -777,4 +750,13 @@ private fun getDisplayRotation(context: Context): Int {
         (context.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager)?.defaultDisplay
     }
     return display?.rotation ?: android.view.Surface.ROTATION_0
+}
+
+private fun hasHardwareCamera(context: Context): Boolean {
+    return try {
+        val cm = context.getSystemService(Context.CAMERA_SERVICE) as? android.hardware.camera2.CameraManager
+        cm?.cameraIdList?.isNotEmpty() == true
+    } catch (_: Throwable) {
+        false
+    }
 }

@@ -278,7 +278,6 @@ fun SettingsScreen(
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 viewModel.applyMeasurementProfile("PRO_PRECISION")
-                                Toast.makeText(context, "已切換至「專業精密」模式", Toast.LENGTH_SHORT).show()
                             }
                         )
 
@@ -289,7 +288,6 @@ fun SettingsScreen(
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 viewModel.applyMeasurementProfile("BALANCED")
-                                Toast.makeText(context, "已切換至「智慧平衡」模式", Toast.LENGTH_SHORT).show()
                             }
                         )
 
@@ -300,7 +298,6 @@ fun SettingsScreen(
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 viewModel.applyMeasurementProfile("POWER_SAVER")
-                                Toast.makeText(context, "已切換至「省電模式」", Toast.LENGTH_SHORT).show()
                             }
                         )
                     }
@@ -963,7 +960,6 @@ fun SettingsScreen(
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         viewModel.resetAllSettingsToDefault()
                         showResetDefaultsConfirmDialog = false
-                        Toast.makeText(context, "已恢復原廠預設值", Toast.LENGTH_SHORT).show()
                     },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error
@@ -1092,11 +1088,7 @@ private fun QuickPresetChip(
         label = "presetCorner"
     )
     val scale by animateFloatAsState(
-        targetValue = when {
-            isPressed -> 0.94f
-            isSelected -> 1.02f
-            else -> 1.0f
-        },
+        targetValue = if (isSelected) 1.02f else 1.0f,
         animationSpec = ExpressiveMotion.spatialFast(),
         label = "presetScale"
     )

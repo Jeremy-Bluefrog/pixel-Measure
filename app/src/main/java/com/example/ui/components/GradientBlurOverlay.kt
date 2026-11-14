@@ -239,7 +239,8 @@ class GradientBlurBackdropState internal constructor(
 ) {
     internal var sourcePositionInRoot by mutableStateOf(Offset.Zero)
     internal var sourceSize by mutableStateOf(IntSize.Zero)
-    internal var isRecording by mutableStateOf(false)
+    @Volatile
+    internal var isRecording: Boolean = false
 }
 
 @Composable
@@ -259,14 +260,22 @@ fun Modifier.gradientBlurSource(state: GradientBlurBackdropState): Modifier = th
     .drawWithContent {
         if (size.width >= 1f && size.height >= 1f && !state.isRecording) {
             state.isRecording = true
+            var recorded = false
             try {
                 state.graphicsLayer.record {
                     this@drawWithContent.drawContent()
                 }
+                recorded = true
+            } catch (_: Throwable) {
+                recorded = false
             } finally {
                 state.isRecording = false
             }
-            drawLayer(state.graphicsLayer)
+            if (recorded) {
+                drawLayer(state.graphicsLayer)
+            } else {
+                drawContent()
+            }
         } else {
             drawContent()
         }
@@ -477,24 +486,28 @@ fun Modifier.progressiveBackdropBlur(
                 val offset = backdropState.sourcePositionInRoot - targetPositionInRoot
                 val recordSize = IntSize(w.roundToInt().coerceAtLeast(1), h.roundToInt().coerceAtLeast(1))
 
-                tier1Layer.clip = true
-                tier1Layer.renderEffect = tier1Effect
-                tier1Layer.record(size = recordSize) {
-                    translate(left = offset.x, top = offset.y) {
-                        drawLayer(backdropState.graphicsLayer)
-                    }
-                }
-                drawLayer(tier1Layer)
-
-                if (tier2Effect != null) {
-                    tier2Layer.clip = true
-                    tier2Layer.renderEffect = tier2Effect
-                    tier2Layer.record(size = recordSize) {
+                try {
+                    tier1Layer.clip = true
+                    tier1Layer.renderEffect = tier1Effect
+                    tier1Layer.record(size = recordSize) {
                         translate(left = offset.x, top = offset.y) {
                             drawLayer(backdropState.graphicsLayer)
                         }
                     }
-                    drawLayer(tier2Layer)
+                    drawLayer(tier1Layer)
+
+                    if (tier2Effect != null) {
+                        tier2Layer.clip = true
+                        tier2Layer.renderEffect = tier2Effect
+                        tier2Layer.record(size = recordSize) {
+                            translate(left = offset.x, top = offset.y) {
+                                drawLayer(backdropState.graphicsLayer)
+                            }
+                        }
+                        drawLayer(tier2Layer)
+                    }
+                } catch (_: Throwable) {
+                    // Fallback gracefully to tint brush if offscreen layer recording fails transiently
                 }
             }
 

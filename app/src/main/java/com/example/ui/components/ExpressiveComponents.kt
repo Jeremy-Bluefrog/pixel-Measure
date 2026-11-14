@@ -243,11 +243,7 @@ fun <T> ExpressiveConnectedButtonGroup(
                 label = "connBtnFg_$index"
             )
             val pressScale by animateFloatAsState(
-                targetValue = when {
-                    isPressed -> 0.94f
-                    isSelected -> 1.0f
-                    else -> 0.99f
-                },
+                targetValue = 1.0f,
                 animationSpec = ExpressiveMotion.spatialFast(),
                 label = "connBtnScale_$index"
             )
@@ -359,12 +355,12 @@ fun ExpressiveSplitButton(
         label = "splitChevronRot"
     )
     val leadingScale by animateFloatAsState(
-        targetValue = if (isLeadingPressed) 0.95f else 1f,
+        targetValue = 1f,
         animationSpec = ExpressiveMotion.spatialFast(),
         label = "splitLeadScale"
     )
     val trailingScale by animateFloatAsState(
-        targetValue = if (isTrailingPressed) 0.92f else 1f,
+        targetValue = 1f,
         animationSpec = ExpressiveMotion.spatialFast(),
         label = "splitTrailScale"
     )

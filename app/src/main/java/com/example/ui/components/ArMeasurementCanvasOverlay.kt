@@ -25,8 +25,6 @@ private val DASH_14_10 = floatArrayOf(14f, 10f)
 private val BOX_EDGE_A = intArrayOf(0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3)
 private val BOX_EDGE_B = intArrayOf(1, 2, 3, 0, 5, 6, 7, 4, 4, 5, 6, 7)
 
-private val TEMP_PROJ_HOLDER = FloatArray(2)
-
 /**
  * 繪製專業 AR 空間測量準心 (Professional Multi-Style AR HUD Targeting Reticle)
  * 完美支援四大風格：DOUBLE_RING (經典雙環), PRECISION_CROSSHAIR (高精十字), MINIMAL_DOT (極簡圓點), HOLOGRAPHIC_RADAR (全息雷達)
@@ -327,6 +325,7 @@ fun ArMeasurementCanvasOverlay(
     val planeCachedPath = remember { Path() }
     val planeScratchIn = remember { FloatArray(3) }
     val planeScratchOut = remember { FloatArray(3) }
+    val tempProjHolder = remember { FloatArray(2) }
     val reticleHolderProj = remember { ScreenPoint() }
     val validPtsBuffer = remember { Array(128) { ScreenPoint() } }
     val box3dX = remember { DoubleArray(8) }
@@ -411,14 +410,14 @@ fun ArMeasurementCanvasOverlay(
                         projectionMatrix,
                         screenW,
                         screenH,
-                        TEMP_PROJ_HOLDER,
+                        tempProjHolder,
                         isHorizontallyMirrored
                     )
                     if (ok) {
                         if (projectedVerts == 0) {
-                            planeCachedPath.moveTo(TEMP_PROJ_HOLDER[0], TEMP_PROJ_HOLDER[1])
+                            planeCachedPath.moveTo(tempProjHolder[0], tempProjHolder[1])
                         } else {
-                            planeCachedPath.lineTo(TEMP_PROJ_HOLDER[0], TEMP_PROJ_HOLDER[1])
+                            planeCachedPath.lineTo(tempProjHolder[0], tempProjHolder[1])
                         }
                         projectedVerts++
                     }
@@ -516,12 +515,12 @@ fun ArMeasurementCanvasOverlay(
         for (i in 0 until safePointsCount) {
             val rawPt = pointsSnapshot[i]
             val filteredPt = if (i < capturedKalmanFilters.size) capturedKalmanFilters[i].update(rawPt) else rawPt
-            val ok = ArMath.projectCoordsToScreen(filteredPt.x, filteredPt.y, filteredPt.z, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER, isHorizontallyMirrored)
+            val ok = ArMath.projectCoordsToScreen(filteredPt.x, filteredPt.y, filteredPt.z, viewMatrix, projectionMatrix, screenW, screenH, tempProjHolder, isHorizontallyMirrored)
             val bufIdx = i * 2
             if (bufIdx + 1 >= smoothScreenBuffer.size) break
             if (ok) {
-                val rawX = TEMP_PROJ_HOLDER[0]
-                val rawY = TEMP_PROJ_HOLDER[1]
+                val rawX = tempProjHolder[0]
+                val rawY = tempProjHolder[1]
                 val prevX = smoothScreenBuffer[bufIdx]
                 val prevY = smoothScreenBuffer[bufIdx + 1]
 
@@ -1054,12 +1053,12 @@ fun ArMeasurementCanvasOverlay(
             for (v in 0 until 8) {
                 val ok = ArMath.projectCoordsToScreen(
                     box3dX[v], box3dY[v], box3dZ[v],
-                    viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER, isHorizontallyMirrored
+                    viewMatrix, projectionMatrix, screenW, screenH, tempProjHolder, isHorizontallyMirrored
                 )
                 box2dValid[v] = ok
                 if (ok) {
-                    box2dX[v] = TEMP_PROJ_HOLDER[0]
-                    box2dY[v] = TEMP_PROJ_HOLDER[1]
+                    box2dX[v] = tempProjHolder[0]
+                    box2dY[v] = tempProjHolder[1]
                     validSumX += box2dX[v]
                     validSumY += box2dY[v]
                     validCount++
@@ -1119,10 +1118,10 @@ fun ArMeasurementCanvasOverlay(
             val gridStep = 0.5
             var gx = -gridSpan
             while (gx <= gridSpan + 0.01) {
-                val ok1 = ArMath.projectCoordsToScreen(gx, groundY, -gridSpan, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER, isHorizontallyMirrored)
-                val p1 = if (ok1) Offset(TEMP_PROJ_HOLDER[0], TEMP_PROJ_HOLDER[1]) else null
-                val ok2 = ArMath.projectCoordsToScreen(gx, groundY, gridSpan, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER, isHorizontallyMirrored)
-                val p2 = if (ok2) Offset(TEMP_PROJ_HOLDER[0], TEMP_PROJ_HOLDER[1]) else null
+                val ok1 = ArMath.projectCoordsToScreen(gx, groundY, -gridSpan, viewMatrix, projectionMatrix, screenW, screenH, tempProjHolder, isHorizontallyMirrored)
+                val p1 = if (ok1) Offset(tempProjHolder[0], tempProjHolder[1]) else null
+                val ok2 = ArMath.projectCoordsToScreen(gx, groundY, gridSpan, viewMatrix, projectionMatrix, screenW, screenH, tempProjHolder, isHorizontallyMirrored)
+                val p2 = if (ok2) Offset(tempProjHolder[0], tempProjHolder[1]) else null
                 if (p1 != null && p2 != null) {
                     drawLine(
                         color = colorPrimary.copy(alpha = 0.20f),
@@ -1135,10 +1134,10 @@ fun ArMeasurementCanvasOverlay(
             }
             var gz = -gridSpan
             while (gz <= gridSpan + 0.01) {
-                val ok1 = ArMath.projectCoordsToScreen(-gridSpan, groundY, gz, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER, isHorizontallyMirrored)
-                val p1 = if (ok1) Offset(TEMP_PROJ_HOLDER[0], TEMP_PROJ_HOLDER[1]) else null
-                val ok2 = ArMath.projectCoordsToScreen(gridSpan, groundY, gz, viewMatrix, projectionMatrix, screenW, screenH, TEMP_PROJ_HOLDER, isHorizontallyMirrored)
-                val p2 = if (ok2) Offset(TEMP_PROJ_HOLDER[0], TEMP_PROJ_HOLDER[1]) else null
+                val ok1 = ArMath.projectCoordsToScreen(-gridSpan, groundY, gz, viewMatrix, projectionMatrix, screenW, screenH, tempProjHolder, isHorizontallyMirrored)
+                val p1 = if (ok1) Offset(tempProjHolder[0], tempProjHolder[1]) else null
+                val ok2 = ArMath.projectCoordsToScreen(gridSpan, groundY, gz, viewMatrix, projectionMatrix, screenW, screenH, tempProjHolder, isHorizontallyMirrored)
+                val p2 = if (ok2) Offset(tempProjHolder[0], tempProjHolder[1]) else null
                 if (p1 != null && p2 != null) {
                     drawLine(
                         color = colorPrimary.copy(alpha = 0.20f),

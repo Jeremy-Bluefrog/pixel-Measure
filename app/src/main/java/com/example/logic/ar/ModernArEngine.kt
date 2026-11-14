@@ -87,8 +87,11 @@ enum class ArCoreEngineStatus {
  */
 class ModernArEngine(private val context: Context) {
 
+    @Volatile
     var session: Session? = null
         private set
+
+    private val arSessionLock = Any()
 
     val sharedCamera: SharedCamera?
         get() = try {
@@ -154,6 +157,21 @@ class ModernArEngine(private val context: Context) {
     private var eglHelper: HeadlessEglHelper? = null
     private val glContextLock = Any()
     private val isInitializing = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * Executes an ARCore frame update while holding [arSessionLock] so lifecycle transitions
+     * ([pause], [resume], [destroy]) cannot close or tear down EGL/Session mid-frame.
+     */
+    fun withLockedSessionUpdate(
+        fallbackSession: Session? = null,
+        block: (Session) -> Unit
+    ) {
+        synchronized(arSessionLock) {
+            if (!isSessionResumed) return
+            val activeSession = session ?: fallbackSession ?: return
+            block(activeSession)
+        }
+    }
 
     // Pre-allocated scratch buffers to eliminate per-frame heap allocations on Pixel
     private val scratchPointIn = FloatArray(3)
@@ -432,22 +450,24 @@ class ModernArEngine(private val context: Context) {
      */
     fun applyRuntimePerformanceConfig(allowDepth: Boolean) {
         allowDepthMode = allowDepth
-        val currentSession = session ?: return
-        try {
-            val config = currentSession.config
-            val desiredDepth = if (allowDepth && currentSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
-                Config.DepthMode.AUTOMATIC
-            } else {
-                Config.DepthMode.DISABLED
+        synchronized(arSessionLock) {
+            val currentSession = session ?: return
+            try {
+                val config = currentSession.config
+                val desiredDepth = if (allowDepth && currentSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
+                    Config.DepthMode.AUTOMATIC
+                } else {
+                    Config.DepthMode.DISABLED
+                }
+                if (config.depthMode != desiredDepth) {
+                    config.depthMode = desiredDepth
+                    currentSession.configure(config)
+                    isDepthModeActive = (desiredDepth == Config.DepthMode.AUTOMATIC)
+                    Log.i("ModernArEngine", "Adjusted ARCore DepthMode=$desiredDepth for thermal/performance policy.")
+                }
+            } catch (t: Throwable) {
+                Log.w("ModernArEngine", "applyRuntimePerformanceConfig skipped: ${t.message}")
             }
-            if (config.depthMode != desiredDepth) {
-                config.depthMode = desiredDepth
-                currentSession.configure(config)
-                isDepthModeActive = (desiredDepth == Config.DepthMode.AUTOMATIC)
-                Log.i("ModernArEngine", "Adjusted ARCore DepthMode=$desiredDepth for thermal/performance policy.")
-            }
-        } catch (t: Throwable) {
-            Log.w("ModernArEngine", "applyRuntimePerformanceConfig skipped: ${t.message}")
         }
     }
 
@@ -491,29 +511,31 @@ class ModernArEngine(private val context: Context) {
         } catch (_: Throwable) {}
     }
 
-    fun rebindCameraTexture(): Boolean = synchronized(glContextLock) {
+    fun rebindCameraTexture(): Boolean = synchronized(arSessionLock) {
         val curSession = session ?: return false
-        return try {
-            eglHelper?.release()
-            val helper = HeadlessEglHelper()
-            val texId = helper.init()
-            if (texId > 0) {
-                helper.makeCurrent()
-                try {
-                    curSession.setCameraTextureName(texId)
-                } finally {
-                    helper.detachCurrent()
+        synchronized(glContextLock) {
+            return try {
+                eglHelper?.release()
+                val helper = HeadlessEglHelper()
+                val texId = helper.init()
+                if (texId > 0) {
+                    helper.makeCurrent()
+                    try {
+                        curSession.setCameraTextureName(texId)
+                    } finally {
+                        helper.detachCurrent()
+                    }
+                    eglHelper = helper
+                    true
+                } else {
+                    helper.release()
+                    eglHelper = null
+                    false
                 }
-                eglHelper = helper
-                true
-            } else {
-                helper.release()
-                eglHelper = null
+            } catch (t: Throwable) {
+                Log.w("ModernArEngine", "rebindCameraTexture error: ${t.message}")
                 false
             }
-        } catch (t: Throwable) {
-            Log.w("ModernArEngine", "rebindCameraTexture error: ${t.message}")
-            false
         }
     }
 
@@ -523,35 +545,40 @@ class ModernArEngine(private val context: Context) {
 
     fun setTorchMode(enabled: Boolean): Boolean {
         isTorchActive = enabled
-        val currentSession = session ?: return false
-        return try {
-            val config = currentSession.config
-            config.flashMode = if (enabled) Config.FlashMode.TORCH else Config.FlashMode.OFF
-            currentSession.configure(config)
-            Log.i("ModernArEngine", "ARCore FlashMode configured: ${config.flashMode}")
-            true
-        } catch (e: Throwable) {
-            Log.w("ModernArEngine", "Failed to set ARCore flashMode: ${e.message}")
-            false
+        synchronized(arSessionLock) {
+            val currentSession = session ?: return false
+            return try {
+                val config = currentSession.config
+                config.flashMode = if (enabled) Config.FlashMode.TORCH else Config.FlashMode.OFF
+                currentSession.configure(config)
+                Log.i("ModernArEngine", "ARCore FlashMode configured: ${config.flashMode}")
+                true
+            } catch (e: Throwable) {
+                Log.w("ModernArEngine", "Failed to set ARCore flashMode: ${e.message}")
+                false
+            }
         }
     }
 
     fun pause() {
-        isSessionResumed = false
-        if (isTorchActive) {
-            setTorchMode(false)
-        }
-        try {
-            synchronized(glContextLock) {
-                makeGlContextCurrent()
-                try {
-                    session?.pause()
-                } finally {
-                    detachGlContext()
-                }
+        synchronized(arSessionLock) {
+            isSessionResumed = false
+            if (isTorchActive) {
+                setTorchMode(false)
             }
-        } catch (e: Throwable) {
-            Log.w("ModernArEngine", "Failed to pause ARCore session: ${e.message}")
+            val curSession = session ?: return
+            try {
+                synchronized(glContextLock) {
+                    makeGlContextCurrent()
+                    try {
+                        curSession.pause()
+                    } finally {
+                        detachGlContext()
+                    }
+                }
+            } catch (e: Throwable) {
+                Log.w("ModernArEngine", "Failed to pause ARCore session: ${e.message}")
+            }
         }
     }
 
@@ -564,36 +591,38 @@ class ModernArEngine(private val context: Context) {
     }
 
     fun resume() {
-        val curSession = session ?: return
-        if (isSessionResumed) return
-        try {
-            synchronized(glContextLock) {
-                if (eglHelper == null) {
-                    rebindCameraTexture()
-                }
-                makeGlContextCurrent()
-                try {
-                    if (viewportWidth > 0 && viewportHeight > 0) {
-                        curSession.setDisplayGeometry(lastDisplayRotation, viewportWidth, viewportHeight)
+        synchronized(arSessionLock) {
+            val curSession = session ?: return
+            if (isSessionResumed) return
+            try {
+                synchronized(glContextLock) {
+                    if (eglHelper == null) {
+                        rebindCameraTexture()
                     }
-                    curSession.resume()
-                } finally {
-                    detachGlContext()
+                    makeGlContextCurrent()
+                    try {
+                        if (viewportWidth > 0 && viewportHeight > 0) {
+                            curSession.setDisplayGeometry(lastDisplayRotation, viewportWidth, viewportHeight)
+                        }
+                        curSession.resume()
+                    } finally {
+                        detachGlContext()
+                    }
                 }
+                // Publish resumed state ONLY after EGL context has been detached so VulkanRenderThread can acquire it
+                isSessionResumed = true
+                _arCoreStatus.value = ArCoreEngineStatus.ACTIVE
+                _arCoreStatusMessage.value = "Google ARCore 已就緒 (水平/垂直平面與深度追蹤)"
+                Log.i("ModernArEngine", "ARCore session resumed successfully.")
+            } catch (e: CameraNotAvailableException) {
+                isSessionResumed = false
+                _arCoreStatusMessage.value = "⚠️ 相機暫時不可用，等待重新連線..."
+                Log.w("ModernArEngine", "Camera not available for ARCore: ${e.message}")
+            } catch (e: Exception) {
+                isSessionResumed = false
+                _arCoreStatusMessage.value = "⚠️ ARCore 啟動異常：${e.localizedMessage ?: e.javaClass.simpleName}"
+                Log.e("ModernArEngine", "Failed to resume ARCore session", e)
             }
-            // Publish resumed state ONLY after EGL context has been detached so VulkanRenderThread can acquire it
-            isSessionResumed = true
-            _arCoreStatus.value = ArCoreEngineStatus.ACTIVE
-            _arCoreStatusMessage.value = "Google ARCore 已就緒 (水平/垂直平面與深度追蹤)"
-            Log.i("ModernArEngine", "ARCore session resumed successfully.")
-        } catch (e: CameraNotAvailableException) {
-            isSessionResumed = false
-            _arCoreStatusMessage.value = "⚠️ 相機暫時不可用，等待重新連線..."
-            Log.w("ModernArEngine", "Camera not available for ARCore: ${e.message}")
-        } catch (e: Exception) {
-            isSessionResumed = false
-            _arCoreStatusMessage.value = "⚠️ ARCore 啟動異常：${e.localizedMessage ?: e.javaClass.simpleName}"
-            Log.e("ModernArEngine", "Failed to resume ARCore session", e)
         }
     }
 
@@ -608,31 +637,35 @@ class ModernArEngine(private val context: Context) {
         lastDisplayRotation = rotation
         viewportWidth = width
         viewportHeight = height
-        try {
-            session?.setDisplayGeometry(rotation, width, height)
-        } catch (t: Throwable) {
-            Log.w("ModernArEngine", "setDisplayGeometry note: ${t.message}")
+        synchronized(arSessionLock) {
+            try {
+                session?.setDisplayGeometry(rotation, width, height)
+            } catch (t: Throwable) {
+                Log.w("ModernArEngine", "setDisplayGeometry note: ${t.message}")
+            }
         }
     }
 
     fun destroy() {
-        isSessionResumed = false
-        if (isTorchActive) {
-            setTorchMode(false)
-        }
-        try {
-            session?.close()
-        } catch (e: Exception) {
-            Log.e("ModernArEngine", "Error closing ARCore session", e)
-        }
-        session = null
-        selectedCameraId = null
-        selectedCameraImageSize = null
-        selectedCameraFpsRange = null
-        isTorchActive = false
-        synchronized(glContextLock) {
-            eglHelper?.release()
-            eglHelper = null
+        synchronized(arSessionLock) {
+            isSessionResumed = false
+            if (isTorchActive) {
+                setTorchMode(false)
+            }
+            try {
+                session?.close()
+            } catch (e: Exception) {
+                Log.e("ModernArEngine", "Error closing ARCore session", e)
+            }
+            session = null
+            selectedCameraId = null
+            selectedCameraImageSize = null
+            selectedCameraFpsRange = null
+            isTorchActive = false
+            synchronized(glContextLock) {
+                eglHelper?.release()
+                eglHelper = null
+            }
         }
     }
 
@@ -1071,9 +1104,9 @@ class ModernArEngine(private val context: Context) {
             val allPlanes = session?.getAllTrackables(Plane::class.java)
             allPlanes?.forEach { plane ->
                 if (plane.subsumedBy == null) {
-                    val poly2d = plane.polygon
+                    val poly2d = plane.polygon?.duplicate()
                     val rem = poly2d?.remaining() ?: 0
-                    val polyArray = if (rem > 0) {
+                    val polyArray = if (poly2d != null && rem > 0) {
                         val arr = FloatArray(rem)
                         try { poly2d.get(arr); arr } catch (_: Throwable) { FloatArray(0) }
                     } else FloatArray(0)
@@ -1139,11 +1172,12 @@ class ModernArEngine(private val context: Context) {
 
         // 2. Camera panning velocity estimation (m/s)
         val nowNs = frame.timestamp
-        val speed = if (lastCameraPose != null && lastFrameTimeNs > 0 && nowNs > lastFrameTimeNs) {
+        val prevPose = lastCameraPose
+        val speed = if (prevPose != null && lastFrameTimeNs > 0 && nowNs > lastFrameTimeNs) {
             val dt = (nowNs - lastFrameTimeNs) / 1_000_000_000.0f
-            val dx = pose.tx() - lastCameraPose!!.tx()
-            val dy = pose.ty() - lastCameraPose!!.ty()
-            val dz = pose.tz() - lastCameraPose!!.tz()
+            val dx = pose.tx() - prevPose.tx()
+            val dy = pose.ty() - prevPose.ty()
+            val dz = pose.tz() - prevPose.tz()
             val dist = kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
             if (dt in 0.001f..0.5f) (dist / dt) else 0f
         } else 0f
@@ -1228,8 +1262,8 @@ class ModernArEngine(private val context: Context) {
         return ModernArFrame(
             trackingState = camera.trackingState,
             trackingFailureReason = camera.trackingFailureReason,
-            viewMatrix = vMatrix,
-            projectionMatrix = pMatrix,
+            viewMatrix = vMatrix.copyOf(),
+            projectionMatrix = pMatrix.copyOf(),
             pointCloud = null,
             planes = cachedPlanes,
             cameraPoseX = pose.tx(),

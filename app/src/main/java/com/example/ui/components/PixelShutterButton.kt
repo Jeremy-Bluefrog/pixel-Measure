@@ -7,7 +7,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -47,17 +46,9 @@ fun PixelShutterButton(
     testTag: String = "pixel_shutter_button"
 ) {
     val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
 
-    // Base press scale
-    val animatedPressScale by animateFloatAsState(
-        targetValue = if (isPressed) 0.88f else 1.0f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioLowBouncy,
-            stiffness = Spring.StiffnessHigh
-        ),
-        label = "PixelShutterPressScale"
-    )
+    // Keep size steady on press without shrinking
+    val animatedPressScale = 1.0f
 
     // Pulsing animation strictly active ONLY during recording (zero recomposition overhead when idle)
     val pulseScale: Float
@@ -131,9 +122,10 @@ fun PixelShutterButton(
                 color = animatedBorderColor,
                 shape = CircleShape
             )
+            .clip(CircleShape)
             .combinedClickable(
                 interactionSource = interactionSource,
-                indication = null,
+                indication = androidx.compose.material3.ripple(bounded = true),
                 onClick = onClick,
                 onLongClick = onLongClick
             )

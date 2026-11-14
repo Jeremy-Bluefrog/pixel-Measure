@@ -144,6 +144,12 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
      * On older Android versions, opens the App Details screen.
      */
     fun openSystemLanguageSettings(context: Context) {
+        val addNewTaskIfNeeded: (Intent) -> Intent = { intent ->
+            if (context !is Activity) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            intent
+        }
         val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             Intent(Settings.ACTION_APP_LOCALE_SETTINGS).apply {
                 data = Uri.fromParts("package", context.packageName, null)
@@ -154,12 +160,16 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             }
         }
         try {
-            context.startActivity(intent)
+            context.startActivity(addNewTaskIfNeeded(intent))
         } catch (e: Exception) {
             try {
-                context.startActivity(Intent(Settings.ACTION_LOCALE_SETTINGS))
+                context.startActivity(addNewTaskIfNeeded(Intent(Settings.ACTION_LOCALE_SETTINGS)))
             } catch (e2: Exception) {
-                context.startActivity(Intent(Settings.ACTION_SETTINGS))
+                try {
+                    context.startActivity(addNewTaskIfNeeded(Intent(Settings.ACTION_SETTINGS)))
+                } catch (_: Exception) {
+                    _toastMessage.tryEmit("無法開啟系統語言設定頁面")
+                }
             }
         }
     }
@@ -256,8 +266,8 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         val proj = FloatArray(16)
         com.example.logic.vulkan.VulkanMatrix4.setIdentity(view, 0)
         com.example.logic.vulkan.VulkanMatrix4.perspective(proj, 0, 60f, aspect, 0.05f, 50f)
-        _viewMatrix.value = view
-        _projectionMatrix.value = proj
+        if (!view.contentEquals(_viewMatrix.value)) _viewMatrix.value = view
+        if (!proj.contentEquals(_projectionMatrix.value)) _projectionMatrix.value = proj
     }
 
     suspend fun ensureArCoreInitialized(activity: Activity? = null, forceRetry: Boolean = false): Session? {
@@ -369,6 +379,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     private val vulkanViewMatrixBuffer = FloatArray(16)
     private val vulkanProjMatrixBuffer = FloatArray(16)
     private var lastTapTimestampMs = 0L
+    private var lastDriftWarningTimestampMs = 0L
     private val screenPosBuffer = FloatArray(2)
 
     private val _liveTargetScreenPos = MutableStateFlow<androidx.compose.ui.geometry.Offset?>(null)
@@ -437,6 +448,15 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     // Toast / Feedback event channel
     private val _toastMessage = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val toastMessage = _toastMessage.asSharedFlow()
+
+    @Volatile
+    private var suppressSettingToasts = false
+
+    private fun emitSettingToast(message: String) {
+        if (!suppressSettingToasts) {
+            _toastMessage.tryEmit(message)
+        }
+    }
 
     fun showToast(message: String) {
         _toastMessage.tryEmit(message)
@@ -562,7 +582,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         _reticleStyle.value = "DOUBLE_RING"
         prefs.edit().putString("reticle_style", "DOUBLE_RING").apply()
         triggerHapticFeedback()
-        _toastMessage.tryEmit("已強制鎖定為 3D 圓環準心樣式")
+        emitSettingToast("已鎖定為 3D 雙環準心樣式")
     }
 
     private val _lineThickness = MutableStateFlow(prefs.getFloat("line_thickness", 3.5f))
@@ -581,7 +601,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         _hudStyle.value = style
         prefs.edit().putString("hud_style", style).apply()
         triggerHapticFeedback()
-        _toastMessage.tryEmit("已套用 HUD 介面風格")
+        emitSettingToast("已套用 HUD 介面風格")
     }
 
     // Extended Custom UI Preferences
@@ -597,7 +617,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             "LARGE" -> "放大 (17sp)"
             else -> "標準 (14sp)"
         }
-        _toastMessage.tryEmit("已調整 AR 空間標籤字體：$label")
+        emitSettingToast("已調整 AR 空間標籤字體：$label")
     }
 
     private val _rulerTheme = MutableStateFlow(prefs.getString("ruler_theme", "STEEL") ?: "STEEL")
@@ -612,7 +632,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             "HIGH_CONTRAST" -> "高對比工程黃"
             else -> "質感鋼鐵灰"
         }
-        _toastMessage.tryEmit("已更換螢幕直尺主題：$label")
+        emitSettingToast("已更換螢幕直尺主題：$label")
     }
 
     private val _uiCornerStyle = MutableStateFlow(prefs.getString("ui_corner_style", "ROUNDED") ?: "ROUNDED")
@@ -627,7 +647,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             "ANGULAR" -> "硬朗工業"
             else -> "圓潤現代"
         }
-        _toastMessage.tryEmit("已套用組件圓角風格：$label")
+        emitSettingToast("已套用組件圓角風格：$label")
     }
 
     private val _badgeOpacity = MutableStateFlow(prefs.getString("badge_opacity", "GLASS") ?: "GLASS")
@@ -642,7 +662,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             "CLEAR" -> "40% 極簡透視"
             else -> "70% 柔和毛玻璃"
         }
-        _toastMessage.tryEmit("已更新 AR 標註底框透明度：$label")
+        emitSettingToast("已更新 AR 標註底框透明度：$label")
     }
 
     private val _gridOverlayStyle = MutableStateFlow(prefs.getString("grid_overlay_style", "OFF") ?: "OFF")
@@ -657,7 +677,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             "OFF" -> "關閉輔助網格"
             else -> "透視地面網格"
         }
-        _toastMessage.tryEmit("已變更 AR 輔助網格：$label")
+        emitSettingToast("已變更 AR 輔助網格：$label")
     }
 
     // Customizable UI Button Size Scale (0.85f, 1.0f, 1.15f, 1.30f)
@@ -674,7 +694,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             scale in 1.10f..1.20f -> "放大 (1.15x)"
             else -> "特大 (1.30x)"
         }
-        _toastMessage.tryEmit("已變更 AR 操作按鈕大小：$label")
+        emitSettingToast("已變更 AR 操作按鈕大小：$label")
     }
 
     // Camera Aspect Ratio (4:3, 16:9, 1:1, FULL) - Default to FULL so no mask covers screen
@@ -700,7 +720,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             "4_3" -> "4:3 標準"
             else -> "全螢幕 (無遮罩)"
         }
-        _toastMessage.tryEmit("已切換相機畫面比例：$label")
+        emitSettingToast("已切換相機畫面比例：$label")
     }
 
     fun cycleCameraAspectRatio() {
@@ -735,7 +755,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         _useDisplayP3ColorSpace.value = enabled
         prefs.edit().putBoolean("use_display_p3", enabled).apply()
         triggerHapticFeedback()
-        _toastMessage.tryEmit(if (enabled) "已啟用 Display P3 廣色域格式 (豐富鮮豔相片色彩)" else "已切換為 sRGB 標準色彩格式")
+        emitSettingToast(if (enabled) "已啟用 Display P3 廣色域格式 (豐富鮮豔相片色彩)" else "已切換為 sRGB 標準色彩格式")
     }
 
     // Camera Lens Dirt & Smudge Detection Warning
@@ -747,7 +767,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         prefs.edit().putBoolean("lens_dirt_warning", enabled).apply()
         if (!enabled) _isLensSmudged.value = false
         triggerHapticFeedback()
-        _toastMessage.tryEmit(if (enabled) "已開啟鏡頭髒污與指紋自動檢測警示" else "已關閉鏡頭髒污警示")
+        emitSettingToast(if (enabled) "已開啟鏡頭髒污與指紋自動檢測警示" else "已關閉鏡頭髒污警示")
     }
 
     private val _isLensSmudged = MutableStateFlow(false)
@@ -927,7 +947,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             highDef = highDefinitionQualityEnabled.value,
             maxFps = policy.targetFps
         )
-        _toastMessage.tryEmit(if (enabled) "已啟用 60Hz 高幀率相機預覽" else "已切換至 30Hz 省電穩定幀率")
+        emitSettingToast(if (enabled) "已啟用 60Hz 高幀率相機預覽" else "已切換至 30Hz 省電穩定幀率")
     }
 
     fun setHighDefinitionQualityEnabled(enabled: Boolean) {
@@ -941,7 +961,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             highDef = enabled,
             maxFps = policy.targetFps
         )
-        _toastMessage.tryEmit(if (enabled) "已啟用 Full HD 高畫質採樣" else "已切換至 720p 效能省電畫質")
+        emitSettingToast(if (enabled) "已啟用 Full HD 高畫質採樣" else "已切換至 720p 效能省電畫質")
     }
 
     // Vulkan 1.4 AR Hardware Accelerated Graphics Engine
@@ -952,14 +972,14 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun setVulkanGraphicsEnabled(enabled: Boolean) {
         isVulkanGraphicsEnabled.value = enabled
         prefs.edit().putBoolean("vulkan_graphics_enabled", enabled).apply()
-        _toastMessage.tryEmit(if (enabled) "🚀 已啟用 Vulkan 3D 空間網格與線段硬件加速渲染" else "已切換至標準 Vulkan 渲染模式")
+        emitSettingToast(if (enabled) "🚀 已啟用 Vulkan 3D 空間網格與線段硬件加速渲染" else "已切換至標準 Vulkan 渲染模式")
     }
 
     fun setSensorCorrectionEnabled(enabled: Boolean) {
         sensorCorrectionEnabled.value = enabled
         sensorCorrectionEngine.isSensorCorrectionEnabled = enabled
         prefs.edit().putBoolean("sensor_correction_enabled", enabled).apply()
-        _toastMessage.tryEmit(if (enabled) "已啟用感應器融合校正" else "已關閉感應器校正")
+        emitSettingToast(if (enabled) "已啟用感應器融合校正" else "已關閉感應器校正")
     }
 
     fun setAntiJitterEnabled(enabled: Boolean) {
@@ -1020,7 +1040,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         rawDepthConfidenceEnabled.value = enabled
         modernArEngine.isRawDepthConfidenceFilterEnabled = enabled
         prefs.edit().putBoolean("raw_depth_confidence_enabled", enabled).apply()
-        _toastMessage.tryEmit(if (enabled) "已啟用 Pixel Raw Depth 置信度過濾" else "已關閉 Raw Depth 置信度過濾")
+        emitSettingToast(if (enabled) "已啟用 Pixel Raw Depth 置信度過濾" else "已關閉 Raw Depth 置信度過濾")
     }
 
     fun setRawDepthConfidenceThreshold(threshold: Int) {
@@ -1035,7 +1055,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         scaleCalibrationFactor.value = clamped
         sensorCorrectionEngine.userScaleCalibrationFactor = clamped
         prefs.edit().putFloat("scale_calibration_factor", clamped).apply()
-        _toastMessage.tryEmit("尺度校正係數已設定為：${"%.4f".format(clamped)}x")
+        emitSettingToast("尺度校正係數已設定為：${"%.4f".format(Locale.US, clamped)}x")
     }
 
 
@@ -1052,53 +1072,60 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         _currentAppliedProfile.value = profileKey
         prefs.edit().putString("current_applied_profile", profileKey).apply()
 
-        when (profileKey) {
-            "PRO_PRECISION" -> {
-                setSelectedUnit("mm")
-                setHighFpsModeEnabled(true)
-                setHighDefinitionQualityEnabled(true)
-                setAntiJitterEnabled(true)
-                setMultiSampleAveragingEnabled(true)
-                setOrthogonalSnapEnabled(true)
-                setReticleStyle("PRECISION_CROSSHAIR")
-                setVibrateOnAlignment(true)
-                setRawDepthConfidenceEnabled(true)
-                setRawDepthConfidenceThreshold(55)
-                setShowPointCloud(true)
-                val prefix = if (isAutoTriggered) "🔋 智能電量調優：" else ""
-                _toastMessage.tryEmit("${prefix}已套用「專業工程極限精密」情境模式")
+        suppressSettingToasts = true
+        try {
+            when (profileKey) {
+                "PRO_PRECISION" -> {
+                    setSelectedUnit("mm")
+                    setHighFpsModeEnabled(true)
+                    setHighDefinitionQualityEnabled(true)
+                    setAntiJitterEnabled(true)
+                    setMultiSampleAveragingEnabled(true)
+                    setOrthogonalSnapEnabled(true)
+                    setReticleStyle("DOUBLE_RING")
+                    setVibrateOnAlignment(true)
+                    setRawDepthConfidenceEnabled(true)
+                    setRawDepthConfidenceThreshold(55)
+                    setShowPointCloud(true)
+                }
+                "POWER_SAVER" -> {
+                    setSelectedUnit("cm")
+                    setHighFpsModeEnabled(false)
+                    setHighDefinitionQualityEnabled(false)
+                    setAntiJitterEnabled(false)
+                    setMultiSampleAveragingEnabled(false)
+                    setOrthogonalSnapEnabled(false)
+                    setReticleStyle("DOUBLE_RING")
+                    setGridOverlayStyle("OFF")
+                    setRawDepthConfidenceEnabled(false)
+                    setShowPointCloud(false)
+                }
+                else -> { // "BALANCED"
+                    setSelectedUnit("cm")
+                    setHighFpsModeEnabled(true)
+                    setHighDefinitionQualityEnabled(true)
+                    setAntiJitterEnabled(true)
+                    setMultiSampleAveragingEnabled(false)
+                    setOrthogonalSnapEnabled(true)
+                    setReticleStyle("DOUBLE_RING")
+                    setVibrateOnAlignment(true)
+                    setGridOverlayStyle("PERSPECTIVE_GRID")
+                    setRawDepthConfidenceEnabled(true)
+                    setRawDepthConfidenceThreshold(45)
+                    setShowPointCloud(true)
+                }
             }
-            "POWER_SAVER" -> {
-                setSelectedUnit("cm")
-                setHighFpsModeEnabled(false)
-                setHighDefinitionQualityEnabled(false)
-                setAntiJitterEnabled(false)
-                setMultiSampleAveragingEnabled(false)
-                setOrthogonalSnapEnabled(false)
-                setReticleStyle("MINIMAL_DOT")
-                setGridOverlayStyle("OFF")
-                setRawDepthConfidenceEnabled(false)
-                setShowPointCloud(false)
-                val prefix = if (isAutoTriggered) "🔋 智能電量調優：" else ""
-                _toastMessage.tryEmit("${prefix}已套用「省電長效極速」情境模式")
-            }
-            else -> { // "BALANCED"
-                setSelectedUnit("cm")
-                setHighFpsModeEnabled(true)
-                setHighDefinitionQualityEnabled(true)
-                setAntiJitterEnabled(true)
-                setMultiSampleAveragingEnabled(false)
-                setOrthogonalSnapEnabled(true)
-                setReticleStyle("DOUBLE_RING")
-                setVibrateOnAlignment(true)
-                setGridOverlayStyle("PERSPECTIVE_GRID")
-                setRawDepthConfidenceEnabled(true)
-                setRawDepthConfidenceThreshold(45)
-                setShowPointCloud(true)
-                val prefix = if (isAutoTriggered) "🔋 智能電量調優：" else ""
-                _toastMessage.tryEmit("${prefix}已套用「日常智慧平衡」情境模式")
-            }
+        } finally {
+            suppressSettingToasts = false
         }
+
+        val prefix = if (isAutoTriggered) "🔋 智能電量調優：" else ""
+        val profileLabel = when (profileKey) {
+            "PRO_PRECISION" -> "專業工程極限精密"
+            "POWER_SAVER" -> "省電長效極速"
+            else -> "日常智慧平衡"
+        }
+        _toastMessage.tryEmit("${prefix}已套用「$profileLabel」情境模式")
         triggerHapticFeedback()
     }
 
@@ -1106,33 +1133,38 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
      * 恢復原廠預設設定
      */
     fun resetAllSettingsToDefault() {
-        setSelectedUnit("cm")
-        setReticleStyle("DOUBLE_RING")
-        setLineThickness(3.5f)
-        setArFontSize("STANDARD")
-        setHudStyle("GLASS")
-        setGridOverlayStyle("OFF")
-        setUiButtonScale(1.0f)
-        setCameraAspectRatio("4_3")
-        setUseDisplayP3ColorSpace(true)
-        setLensDirtWarningEnabled(true)
-        setHighFpsModeEnabled(true)
-        setHighDefinitionQualityEnabled(true)
-        setAntiJitterEnabled(true)
-        setSensorCorrectionEnabled(true)
-        setGravityAlignmentEnabled(true)
-        setBarometerFusionEnabled(true)
-        setJerkRejectionEnabled(true)
-        setProximityContactEnabled(true)
-        setStereoParallaxEnabled(true)
-        setMultiSampleAveragingEnabled(false)
-        setOrthogonalSnapEnabled(true)
-        setRawDepthConfidenceEnabled(true)
-        setRawDepthConfidenceThreshold(45)
-        setScaleCalibrationFactor(1.0000f)
-        setShowPointCloud(true)
-        setVibrateOnAlignment(true)
-        updateRulerCalibration(1.0f, true)
+        suppressSettingToasts = true
+        try {
+            setSelectedUnit("cm")
+            setReticleStyle("DOUBLE_RING")
+            setLineThickness(3.5f)
+            setArFontSize("STANDARD")
+            setHudStyle("GLASS")
+            setGridOverlayStyle("OFF")
+            setUiButtonScale(1.0f)
+            setCameraAspectRatio("4_3")
+            setUseDisplayP3ColorSpace(true)
+            setLensDirtWarningEnabled(true)
+            setHighFpsModeEnabled(true)
+            setHighDefinitionQualityEnabled(true)
+            setAntiJitterEnabled(true)
+            setSensorCorrectionEnabled(true)
+            setGravityAlignmentEnabled(true)
+            setBarometerFusionEnabled(true)
+            setJerkRejectionEnabled(true)
+            setProximityContactEnabled(true)
+            setStereoParallaxEnabled(true)
+            setMultiSampleAveragingEnabled(false)
+            setOrthogonalSnapEnabled(true)
+            setRawDepthConfidenceEnabled(true)
+            setRawDepthConfidenceThreshold(45)
+            setScaleCalibrationFactor(1.0000f)
+            setShowPointCloud(true)
+            setVibrateOnAlignment(true)
+            updateRulerCalibration(1.0f, true)
+        } finally {
+            suppressSettingToasts = false
+        }
         triggerHapticFeedback()
         _toastMessage.tryEmit("已恢復原廠預設測量與系統設定")
     }
@@ -1536,13 +1568,13 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private fun updateAutoDetectedGeometry() {
         if (_cameraSubMode.value != 0) return // Manual mode override
-
-        when (capturedPoints.size) {
+        val points = getCapturedPointsSnapshot()
+        when (points.size) {
             0, 1 -> _autoDetectedType.value = "DISTANCE"
             2 -> {
                 // Check if vertical height
-                val p1 = capturedPoints[0]
-                val p2 = capturedPoints[1]
+                val p1 = points[0]
+                val p2 = points[1]
                 val dy = abs(p2.y - p1.y)
                 val dxz = sqrt((p2.x - p1.x) * (p2.x - p1.x) + (p2.z - p1.z) * (p2.z - p1.z))
                 if (dy > 0.35 && dy > dxz * 2.2) {
@@ -1561,7 +1593,9 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun onArFrameUpdated(data: ModernArFrame) {
         if (_arTrackingState.value != data.trackingState) _arTrackingState.value = data.trackingState
         if (_trackingFailureReason.value != data.trackingFailureReason) _trackingFailureReason.value = data.trackingFailureReason
-        _viewMatrix.value = data.viewMatrix
+        if (!data.viewMatrix.contentEquals(_viewMatrix.value)) {
+            _viewMatrix.value = data.viewMatrix
+        }
         if (!data.projectionMatrix.contentEquals(_projectionMatrix.value)) {
             _projectionMatrix.value = data.projectionMatrix
         }
@@ -1596,22 +1630,26 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             var driftUpdates: MutableList<Pair<Int, Point3D>>? = null
             for (i in snapshot.indices) {
                 val pt = snapshot[i]
-                val anchor = pt.anchor
-                if (anchor != null && anchor.trackingState == TrackingState.TRACKING) {
-                    val pose = anchor.pose
-                    val newX = pose.tx().toDouble()
-                    val newY = pose.ty().toDouble()
-                    val newZ = pose.tz().toDouble()
-                    val dx = abs(newX - pt.x)
-                    val dy = abs(newY - pt.y)
-                    val dz = abs(newZ - pt.z)
-                    if (dx > 0.015 || dy > 0.015 || dz > 0.015) {
-                        val candidate = pt.copy(x = newX, y = newY, z = newZ)
-                        if (ArMath.isPointValid(candidate)) {
-                            val list = driftUpdates ?: mutableListOf<Pair<Int, Point3D>>().also { driftUpdates = it }
-                            list.add(Pair(i, candidate))
+                val anchor = pt.anchor ?: continue
+                try {
+                    if (anchor.trackingState == TrackingState.TRACKING) {
+                        val pose = anchor.pose
+                        val newX = pose.tx().toDouble()
+                        val newY = pose.ty().toDouble()
+                        val newZ = pose.tz().toDouble()
+                        val dx = abs(newX - pt.x)
+                        val dy = abs(newY - pt.y)
+                        val dz = abs(newZ - pt.z)
+                        if (dx > 0.015 || dy > 0.015 || dz > 0.015) {
+                            val candidate = pt.copy(x = newX, y = newY, z = newZ)
+                            if (ArMath.isPointValid(candidate)) {
+                                val list = driftUpdates ?: mutableListOf<Pair<Int, Point3D>>().also { driftUpdates = it }
+                                list.add(Pair(i, candidate))
+                            }
                         }
                     }
+                } catch (_: Throwable) {
+                    // Anchor was detached or session invalidated concurrently; ignore safely
                 }
             }
             val updates = driftUpdates
@@ -1619,7 +1657,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 mainHandler.post {
                     synchronized(pointsLock) {
                         for ((idx, cand) in updates) {
-                            if (idx in capturedPoints.indices) {
+                            if (idx in capturedPoints.indices && capturedPoints[idx].anchor === snapshot.getOrNull(idx)?.anchor) {
                                 capturedPoints[idx] = cand
                             }
                         }
@@ -1648,9 +1686,10 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         val y = pixelY ?: (displayHeight / 2f)
 
         if (!isOpticalFallbackMode() && modernArEngine.session != null) {
-            // Proactive warning when AR tracking feature points are deficient or camera moves too fast
+            // Proactive warning when AR tracking feature points are deficient or camera moves too fast (throttled)
             val stability = _trackingStability.value
-            if (stability.isDriftRisk) {
+            if (stability.isDriftRisk && (now - lastDriftWarningTimestampMs >= 3000L)) {
+                lastDriftWarningTimestampMs = now
                 val warn = stability.warningMessage ?: "特徵點不足，請慢速平移相機"
                 _toastMessage.tryEmit("⚠️ $warn（避免測量偏移）")
             }
@@ -1709,8 +1748,13 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         _isMeasurementAvailable.value = true
     }
 
-    private fun saveUndoState() {
-        undoStack.add(capturedPoints.toList())
+    private fun saveUndoState(stripAnchors: Boolean = false) {
+        val snapshot = if (stripAnchors) {
+            capturedPoints.map { it.copy(anchor = null) }
+        } else {
+            capturedPoints.toList()
+        }
+        undoStack.add(snapshot)
         if (undoStack.size > 20) undoStack.removeAt(0)
     }
 
@@ -1743,10 +1787,15 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun clearActivePoints() {
         lastHapticMeterMark = 0
         synchronized(pointsLock) {
-            saveUndoState()
-            capturedPoints.forEach { it.anchor?.detach() }
-            capturedPoints.clear()
-            updateCapturedPointsSnapshotCache()
+            if (capturedPoints.isNotEmpty()) {
+                // Clear anchor handles on undo snapshot before detaching to prevent IllegalStateException after undo()
+                saveUndoState(stripAnchors = true)
+                capturedPoints.forEach { pt ->
+                    try { pt.anchor?.detach() } catch (_: Throwable) {}
+                }
+                capturedPoints.clear()
+                updateCapturedPointsSnapshotCache()
+            }
         }
         _liveDistanceMeters.value = null
         _autoDetectedType.value = "DISTANCE"
@@ -1800,6 +1849,12 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun setHighSpeedCamera2Manager(manager: com.example.logic.camera.HighSpeedCamera2Manager?) {
         highSpeedCamera2Manager = manager
         if (manager != null) {
+            manager.onCameraAvailable = {
+                if (_isCameraSimulationActive.value) {
+                    _isCameraSimulationActive.value = false
+                    Log.i("MeasureViewModel", "Hardware camera recovered; exited simulation fallback.")
+                }
+            }
             manager.onCameraUnavailable = {
                 _isCameraSimulationActive.value = true
                 if (ModernArEngine.isArCorePackageInstalled(app)) {
@@ -2000,37 +2055,41 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     // Measurement Calculations (兩點成一線，不共用點)
     fun calculateTotalDistance(): Double {
-        if (capturedPoints.size < 2) return 0.0
+        val points = getCapturedPointsSnapshot()
+        if (points.size < 2) return 0.0
         var raw = 0.0
-        for (i in 0 until capturedPoints.size - 1 step 2) {
-            raw += ArMath.distance(capturedPoints[i], capturedPoints[i + 1])
+        for (i in 0 until points.size - 1 step 2) {
+            raw += ArMath.distance(points[i], points[i + 1])
         }
         val corrected = sensorCorrectionEngine.correctDistanceWithStereoParallax(raw)
         return corrected * scaleCalibrationFactor.value
     }
 
     fun calculatePolygonArea(): Double {
-        val rawArea = ArMath.polygonArea(capturedPoints)
+        val points = getCapturedPointsSnapshot()
+        val rawArea = ArMath.polygonArea(points)
         // Area scales with square of distance scale factor
         val scale = sensorCorrectionEngine.correctDistanceWithStereoParallax(1.0) * scaleCalibrationFactor.value
         return rawArea * (scale * scale)
     }
 
     fun calculateBoundingBox(): BoundingBoxResult {
-        return ArMath.calculateBoundingBox(capturedPoints)
+        return ArMath.calculateBoundingBox(getCapturedPointsSnapshot())
     }
 
     fun calculateVerticalHeight(): Double {
-        return if (capturedPoints.size >= 2) {
-            sensorCorrectionEngine.correctVerticalHeightWithGravity(capturedPoints.first(), capturedPoints.last()) * scaleCalibrationFactor.value
+        val points = getCapturedPointsSnapshot()
+        return if (points.size >= 2) {
+            sensorCorrectionEngine.correctVerticalHeightWithGravity(points.first(), points.last()) * scaleCalibrationFactor.value
         } else {
             0.0
         }
     }
 
     fun calculateCircle(): CircleResult? {
-        return if (capturedPoints.size >= 3) {
-            val res = ArMath.fitCircle3Points(capturedPoints[0], capturedPoints[1], capturedPoints[2])
+        val points = getCapturedPointsSnapshot()
+        return if (points.size >= 3) {
+            val res = ArMath.fitCircle3Points(points[0], points[1], points[2])
             if (res != null) {
                 val scale = scaleCalibrationFactor.value.toDouble()
                 res.copy(
@@ -2046,8 +2105,9 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     fun calculateAngle(): Double {
-        return if (capturedPoints.size >= 3) {
-            ArMath.calculateAngleDegrees(capturedPoints[0], capturedPoints[1], capturedPoints[2])
+        val points = getCapturedPointsSnapshot()
+        return if (points.size >= 3) {
+            ArMath.calculateAngleDegrees(points[0], points[1], points[2])
         } else {
             0.0
         }
@@ -2116,7 +2176,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
                 else -> {
                     val dist = calculateTotalDistance()
-                    val lineCount = capturedPoints.size / 2
+                    val lineCount = getCapturedPointsSnapshot().size / 2
                     val titleDesc = if (lineCount > 1) {
                         "AR 測量 ($lineCount 條獨立線段 · 總長 ${formatLength(dist, unit)}) · $timeStr"
                     } else {

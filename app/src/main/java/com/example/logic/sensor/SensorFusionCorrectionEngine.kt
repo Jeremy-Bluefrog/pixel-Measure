@@ -230,6 +230,7 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
         }
     }
 
+    private val fusionLock = Any()
     private var isListening = false
     private var sensorThread: HandlerThread? = null
     private var sensorHandler: Handler? = null
@@ -238,7 +239,7 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
         if (isListening) return
         isListening = true
 
-        if (sensorThread == null) {
+        if (sensorThread == null || sensorThread?.isAlive != true) {
             sensorThread = HandlerThread("SensorFusionBgThread", android.os.Process.THREAD_PRIORITY_MORE_FAVORABLE).apply { start() }
             sensorHandler = Handler(sensorThread!!.looper)
         }
@@ -262,80 +263,90 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
             sensorHandler?.removeCallbacksAndMessages(null)
             val thread = sensorThread
             thread?.quitSafely()
-            try {
-                thread?.join(200)
-            } catch (_: InterruptedException) {}
+            if (thread != null && Thread.currentThread() !== thread) {
+                try {
+                    thread.join(200)
+                } catch (_: InterruptedException) {}
+            }
             sensorThread = null
             sensorHandler = null
         } catch (_: Exception) {}
     }
 
     fun resetBarometerBase() {
-        if (currentPressure > 0f) {
-            initialPressure = currentPressure
-            pressureRingCount = 0
-            pressureRingHead = 0
+        synchronized(fusionLock) {
+            if (currentPressure > 0f) {
+                initialPressure = currentPressure
+                pressureRingCount = 0
+                pressureRingHead = 0
+            }
+            isKalmanInitialized = false
+            burstSampleWindow.clear()
         }
-        isKalmanInitialized = false
-        burstSampleWindow.clear()
     }
 
     override fun onSensorChanged(event: SensorEvent?) {
-        if (event == null) return
+        if (event == null || event.values.isEmpty()) return
 
-        when (event.sensor.type) {
-            Sensor.TYPE_GRAVITY, Sensor.TYPE_ACCELEROMETER -> {
-                val alpha = 0.85f
-                lastGravity[0] = alpha * lastGravity[0] + (1 - alpha) * event.values[0]
-                lastGravity[1] = alpha * lastGravity[1] + (1 - alpha) * event.values[1]
-                lastGravity[2] = alpha * lastGravity[2] + (1 - alpha) * event.values[2]
-            }
-
-            Sensor.TYPE_GYROSCOPE -> {
-                val wx = event.values[0]
-                val wy = event.values[1]
-                val wz = event.values[2]
-                val angVel = sqrt(wx * wx + wy * wy + wz * wz)
-                lastAngularVelocity = 0.7f * lastAngularVelocity + 0.3f * angVel
-            }
-
-            Sensor.TYPE_ROTATION_VECTOR, Sensor.TYPE_GAME_ROTATION_VECTOR -> {
-                System.arraycopy(event.values, 0, lastRotationVector, 0, min(event.values.size, 4))
-                SensorManager.getRotationMatrixFromVector(rotationMatrix, lastRotationVector)
-                SensorManager.getOrientation(rotationMatrix, orientationAngles)
-            }
-
-            Sensor.TYPE_LINEAR_ACCELERATION -> {
-                val ax = event.values[0]
-                val ay = event.values[1]
-                val az = event.values[2]
-                val linAcc = sqrt(ax * ax + ay * ay + az * az)
-                lastLinearAccel = 0.7f * lastLinearAccel + 0.3f * linAcc
-            }
-
-            Sensor.TYPE_PRESSURE -> {
-                val p = event.values[0]
-                currentPressure = p
-                if (initialPressure == null || initialPressure == 0f) {
-                    initialPressure = p
+        synchronized(fusionLock) {
+            when (event.sensor.type) {
+                Sensor.TYPE_GRAVITY, Sensor.TYPE_ACCELEROMETER -> {
+                    if (event.values.size < 3) return
+                    val alpha = 0.85f
+                    lastGravity[0] = alpha * lastGravity[0] + (1 - alpha) * event.values[0]
+                    lastGravity[1] = alpha * lastGravity[1] + (1 - alpha) * event.values[1]
+                    lastGravity[2] = alpha * lastGravity[2] + (1 - alpha) * event.values[2]
                 }
-                // Zero-alloc circular ring buffer insertion
-                pressureRingBuffer[pressureRingHead] = p
-                pressureRingHead = (pressureRingHead + 1) % pressureRingBuffer.size
-                if (pressureRingCount < pressureRingBuffer.size) {
-                    pressureRingCount++
+
+                Sensor.TYPE_GYROSCOPE -> {
+                    if (event.values.size < 3) return
+                    val wx = event.values[0]
+                    val wy = event.values[1]
+                    val wz = event.values[2]
+                    val angVel = sqrt(wx * wx + wy * wy + wz * wz)
+                    lastAngularVelocity = 0.7f * lastAngularVelocity + 0.3f * angVel
+                }
+
+                Sensor.TYPE_ROTATION_VECTOR, Sensor.TYPE_GAME_ROTATION_VECTOR -> {
+                    if (event.values.size < 3) return
+                    System.arraycopy(event.values, 0, lastRotationVector, 0, min(event.values.size, 4))
+                    SensorManager.getRotationMatrixFromVector(rotationMatrix, lastRotationVector)
+                    SensorManager.getOrientation(rotationMatrix, orientationAngles)
+                }
+
+                Sensor.TYPE_LINEAR_ACCELERATION -> {
+                    if (event.values.size < 3) return
+                    val ax = event.values[0]
+                    val ay = event.values[1]
+                    val az = event.values[2]
+                    val linAcc = sqrt(ax * ax + ay * ay + az * az)
+                    lastLinearAccel = 0.7f * lastLinearAccel + 0.3f * linAcc
+                }
+
+                Sensor.TYPE_PRESSURE -> {
+                    val p = event.values[0]
+                    currentPressure = p
+                    if (initialPressure == null || initialPressure == 0f) {
+                        initialPressure = p
+                    }
+                    // Zero-alloc circular ring buffer insertion
+                    pressureRingBuffer[pressureRingHead] = p
+                    pressureRingHead = (pressureRingHead + 1) % pressureRingBuffer.size
+                    if (pressureRingCount < pressureRingBuffer.size) {
+                        pressureRingCount++
+                    }
+                }
+
+                Sensor.TYPE_PROXIMITY -> {
+                    val distance = event.values[0]
+                    lastProximityDistance = distance
+                    val maxRange = proximitySensor?.maximumRange ?: 5.0f
+                    isNearContact = distance < min(maxRange, 3.5f)
                 }
             }
 
-            Sensor.TYPE_PROXIMITY -> {
-                val distance = event.values[0]
-                lastProximityDistance = distance
-                val maxRange = proximitySensor?.maximumRange ?: 5.0f
-                isNearContact = distance < min(maxRange, 3.5f)
-            }
+            updateTelemetryState()
         }
-
-        updateTelemetryState()
     }
 
     private fun updateTelemetryState() {
@@ -436,172 +447,171 @@ class SensorFusionCorrectionEngine(context: Context) : SensorEventListener {
             return rawPoint
         }
 
-        val now = android.os.SystemClock.uptimeMillis()
+        return synchronized(fusionLock) {
+            val now = android.os.SystemClock.uptimeMillis()
 
-        // 1. Check if moving or hovering
-        val distFromPrev = if (previousPoint != null) {
-            val dx = rawPoint.x - previousPoint.x
-            val dy = rawPoint.y - previousPoint.y
-            val dz = rawPoint.z - previousPoint.z
-            sqrt(dx * dx + dy * dy + dz * dz)
-        } else 0.0
+            // 1. Check if moving or hovering
+            val distFromPrev = if (previousPoint != null) {
+                val dx = rawPoint.x - previousPoint.x
+                val dy = rawPoint.y - previousPoint.y
+                val dz = rawPoint.z - previousPoint.z
+                sqrt(dx * dx + dy * dy + dz * dz)
+            } else 0.0
 
-        val stability = _telemetry.value.stabilityScore
-        val isSteady = _telemetry.value.isHandSteady
+            val stability = _telemetry.value.stabilityScore
+            val isSteady = _telemetry.value.isHandSteady
 
-        // Initialize or reset Kalman state on large jumps
-        if (!isKalmanInitialized || previousPoint == null || distFromPrev > 0.40) {
-            kalmanStateX = rawPoint.x
-            kalmanStateY = rawPoint.y
-            kalmanStateZ = rawPoint.z
-            kalmanCovariance[0] = 0.005
-            kalmanCovariance[1] = 0.005
-            kalmanCovariance[2] = 0.005
-            isKalmanInitialized = true
-            burstSampleWindow.clear()
-            steadyStartTimeMs = now
-            isBurstLocked = false
-            burstProgress = 0f
-            currentEstimatedErrorMm = 4.0f
-        }
-
-        // 2. Multi-Sample Burst Hover Detection
-        if (distFromPrev < 0.015 && isSteady) {
-            if (steadyStartTimeMs == 0L) steadyStartTimeMs = now
-            val hoverDuration = now - steadyStartTimeMs
-
-            burstSampleWindow.addLast(rawPoint)
-            if (burstSampleWindow.size > 20) {
-                burstSampleWindow.removeFirst()
+            // Initialize or reset Kalman state on large jumps
+            if (!isKalmanInitialized || previousPoint == null || distFromPrev > 0.40) {
+                kalmanStateX = rawPoint.x
+                kalmanStateY = rawPoint.y
+                kalmanStateZ = rawPoint.z
+                kalmanCovariance[0] = 0.005
+                kalmanCovariance[1] = 0.005
+                kalmanCovariance[2] = 0.005
+                isKalmanInitialized = true
+                burstSampleWindow.clear()
+                steadyStartTimeMs = now
+                isBurstLocked = false
+                burstProgress = 0f
+                currentEstimatedErrorMm = 4.0f
             }
 
-            burstProgress = (hoverDuration / 200f).coerceIn(0f, 1f)
-            isBurstLocked = hoverDuration >= 200L && burstSampleWindow.size >= 6
-        } else {
-            steadyStartTimeMs = now
-            burstProgress = 0f
-            isBurstLocked = false
-            if (burstSampleWindow.size > 2) {
-                burstSampleWindow.removeFirst()
-            }
-        }
-        syncMultiSampleState()
+            // 2. Multi-Sample Burst Hover Detection
+            if (distFromPrev < 0.015 && isSteady) {
+                if (steadyStartTimeMs == 0L) steadyStartTimeMs = now
+                val hoverDuration = now - steadyStartTimeMs
 
-        // 3. Multi-Sample Cluster Averaging with Outlier Rejection
-        var targetX = rawPoint.x
-        var targetY = rawPoint.y
-        var targetZ = rawPoint.z
+                burstSampleWindow.addLast(rawPoint)
+                if (burstSampleWindow.size > 20) {
+                    burstSampleWindow.removeFirst()
+                }
 
-        if (isMultiSampleAveragingEnabled && burstSampleWindow.size >= 4) {
-            // Compute mean
-            var sumX = 0.0
-            var sumY = 0.0
-            var sumZ = 0.0
-            val count = burstSampleWindow.size.toDouble()
-            for (pt in burstSampleWindow) {
-                sumX += pt.x
-                sumY += pt.y
-                sumZ += pt.z
-            }
-            val meanX = sumX / count
-            val meanY = sumY / count
-            val meanZ = sumZ / count
-
-            // Compute standard deviation (sigma)
-            var varianceSum = 0.0
-            for (pt in burstSampleWindow) {
-                val dx = pt.x - meanX
-                val dy = pt.y - meanY
-                val dz = pt.z - meanZ
-                varianceSum += (dx * dx + dy * dy + dz * dz)
-            }
-            val sigma = sqrt(varianceSum / count)
-            currentEstimatedErrorMm = ((sigma * 1000.0) / sqrt(count)).toFloat().coerceIn(0.5f, 4.0f)
-
-            // Sigma clipping: filter outliers > 1.5 * sigma for ultra-clean sub-mm measurement
-            var validSumX = 0.0
-            var validSumY = 0.0
-            var validSumZ = 0.0
-            var validCount = 0
-
-            for (pt in burstSampleWindow) {
-                val dx = pt.x - meanX
-                val dy = pt.y - meanY
-                val dz = pt.z - meanZ
-                val d = sqrt(dx * dx + dy * dy + dz * dz)
-                if (d <= sigma * 1.5 || validCount == 0) {
-                    validSumX += pt.x
-                    validSumY += pt.y
-                    validSumZ += pt.z
-                    validCount++
+                burstProgress = (hoverDuration / 200f).coerceIn(0f, 1f)
+                isBurstLocked = hoverDuration >= 200L && burstSampleWindow.size >= 6
+            } else {
+                steadyStartTimeMs = now
+                burstProgress = 0f
+                isBurstLocked = false
+                if (burstSampleWindow.size > 2) {
+                    burstSampleWindow.removeFirst()
                 }
             }
+            syncMultiSampleState()
 
-            if (validCount > 0) {
-                targetX = validSumX / validCount
-                targetY = validSumY / validCount
-                targetZ = validSumZ / validCount
+            // 3. Multi-Sample Cluster Averaging with Outlier Rejection
+            var targetX = rawPoint.x
+            var targetY = rawPoint.y
+            var targetZ = rawPoint.z
+
+            if (isMultiSampleAveragingEnabled && burstSampleWindow.size >= 4) {
+                // Compute mean
+                var sumX = 0.0
+                var sumY = 0.0
+                var sumZ = 0.0
+                val count = burstSampleWindow.size.toDouble()
+                for (pt in burstSampleWindow) {
+                    sumX += pt.x
+                    sumY += pt.y
+                    sumZ += pt.z
+                }
+                val meanX = sumX / count
+                val meanY = sumY / count
+                val meanZ = sumZ / count
+
+                // Compute standard deviation (sigma)
+                var varianceSum = 0.0
+                for (pt in burstSampleWindow) {
+                    val dx = pt.x - meanX
+                    val dy = pt.y - meanY
+                    val dz = pt.z - meanZ
+                    varianceSum += (dx * dx + dy * dy + dz * dz)
+                }
+                val sigma = sqrt(varianceSum / count)
+                currentEstimatedErrorMm = ((sigma * 1000.0) / sqrt(count)).toFloat().coerceIn(0.5f, 4.0f)
+
+                // Sigma clipping: filter outliers > 1.5 * sigma for ultra-clean sub-mm measurement
+                var validSumX = 0.0
+                var validSumY = 0.0
+                var validSumZ = 0.0
+                var validCount = 0
+
+                for (pt in burstSampleWindow) {
+                    val dx = pt.x - meanX
+                    val dy = pt.y - meanY
+                    val dz = pt.z - meanZ
+                    val d = sqrt(dx * dx + dy * dy + dz * dz)
+                    if (d <= sigma * 1.5 || validCount == 0) {
+                        validSumX += pt.x
+                        validSumY += pt.y
+                        validSumZ += pt.z
+                        validCount++
+                    }
+                }
+
+                if (validCount > 0) {
+                    targetX = validSumX / validCount
+                    targetY = validSumY / validCount
+                    targetZ = validSumZ / validCount
+                }
+            } else {
+                currentEstimatedErrorMm = (3.5f - stability * 2.0f).coerceIn(1.2f, 5.0f)
             }
-        } else {
-            currentEstimatedErrorMm = (3.5f - stability * 2.0f).coerceIn(1.2f, 5.0f)
+
+            // 4. Adaptive 3D Kalman Covariance Update
+            val motionFactor = ((distFromPrev / 0.04).pow(2) / (1.0 + (distFromPrev / 0.04).pow(2))) * 0.6 +
+                    ((lastAngularVelocity / 0.25f).toDouble().pow(2) / (1.0 + (lastAngularVelocity / 0.25f).toDouble().pow(2))) * 0.4
+            val processNoiseQ = 0.00003 + 0.00072 * motionFactor
+
+            val measurementNoiseR = if (isJerkRejectionEnabled && lastLinearAccel > JERK_THRESHOLD_MPS2) {
+                0.08 // Sudden bump: heavy rejection
+            } else if (isBurstLocked) {
+                0.00012 // Steady locked: ultra-low noise trust
+            } else {
+                val hoverFactor = if (isSteady) (1.0 - (distFromPrev / 0.03).coerceIn(0.0, 1.0)) else 0.0
+                val baseR = 0.0010 + 0.0040 * (1.0 - motionFactor)
+                (baseR * (1.0 - hoverFactor * 0.75)).coerceIn(0.00025, 0.015)
+            }
+
+            // Predict Step
+            kalmanCovariance[0] += processNoiseQ
+            kalmanCovariance[1] += processNoiseQ
+            kalmanCovariance[2] += processNoiseQ
+
+            // Update Step
+            val kx = kalmanCovariance[0] / (kalmanCovariance[0] + measurementNoiseR)
+            val ky = kalmanCovariance[1] / (kalmanCovariance[1] + measurementNoiseR)
+            val kz = kalmanCovariance[2] / (kalmanCovariance[2] + measurementNoiseR)
+
+            kalmanStateX += kx * (targetX - kalmanStateX)
+            kalmanStateY += ky * (targetY - kalmanStateY)
+            kalmanStateZ += kz * (targetZ - kalmanStateZ)
+
+            kalmanCovariance[0] *= (1.0 - kx)
+            kalmanCovariance[1] *= (1.0 - ky)
+            kalmanCovariance[2] *= (1.0 - kz)
+
+            val finalX: Double
+            val finalY: Double
+            val finalZ: Double
+            if (distFromPrev < 0.0025 && previousPoint != null) {
+                val t = (distFromPrev / 0.0025).coerceIn(0.0, 1.0)
+                val blend = t * t * (3.0 - 2.0 * t)
+                finalX = previousPoint.x * (1.0 - blend) + kalmanStateX * blend
+                finalY = previousPoint.y * (1.0 - blend) + kalmanStateY * blend
+                finalZ = previousPoint.z * (1.0 - blend) + kalmanStateZ * blend
+            } else {
+                finalX = kalmanStateX
+                finalY = kalmanStateY
+                finalZ = kalmanStateZ
+            }
+
+            rawPoint.copy(
+                x = finalX,
+                y = finalY,
+                z = finalZ
+            )
         }
-
-        // 4. Adaptive 3D Kalman Covariance Update
-        // Dynamic Process Noise Q and Measurement Noise R: scale continuously with camera angular velocity, acceleration and displacement
-        val motionFactor = ((distFromPrev / 0.04).pow(2) / (1.0 + (distFromPrev / 0.04).pow(2))) * 0.6 +
-                ((lastAngularVelocity / 0.25f).toDouble().pow(2) / (1.0 + (lastAngularVelocity / 0.25f).toDouble().pow(2))) * 0.4
-        val processNoiseQ = 0.00003 + 0.00072 * motionFactor
-
-        val measurementNoiseR = if (isJerkRejectionEnabled && lastLinearAccel > JERK_THRESHOLD_MPS2) {
-            0.08 // Sudden bump: heavy rejection
-        } else if (isBurstLocked) {
-            0.00012 // Steady locked: ultra-low noise trust
-        } else {
-            // Smooth continuous curve: low noise when steady hovering, responsive when panning
-            val hoverFactor = if (isSteady) (1.0 - (distFromPrev / 0.03).coerceIn(0.0, 1.0)) else 0.0
-            val baseR = 0.0010 + 0.0040 * (1.0 - motionFactor)
-            (baseR * (1.0 - hoverFactor * 0.75)).coerceIn(0.00025, 0.015)
-        }
-
-        // Predict Step
-        kalmanCovariance[0] += processNoiseQ
-        kalmanCovariance[1] += processNoiseQ
-        kalmanCovariance[2] += processNoiseQ
-
-        // Update Step
-        val kx = kalmanCovariance[0] / (kalmanCovariance[0] + measurementNoiseR)
-        val ky = kalmanCovariance[1] / (kalmanCovariance[1] + measurementNoiseR)
-        val kz = kalmanCovariance[2] / (kalmanCovariance[2] + measurementNoiseR)
-
-        kalmanStateX += kx * (targetX - kalmanStateX)
-        kalmanStateY += ky * (targetY - kalmanStateY)
-        kalmanStateZ += kz * (targetZ - kalmanStateZ)
-
-        kalmanCovariance[0] *= (1.0 - kx)
-        kalmanCovariance[1] *= (1.0 - ky)
-        kalmanCovariance[2] *= (1.0 - kz)
-
-        // Smooth Hermite deadband: micro-flutter under 2.5mm is smoothly blended to eliminate vibration
-        val finalX: Double
-        val finalY: Double
-        val finalZ: Double
-        if (distFromPrev < 0.0025 && previousPoint != null) {
-            val t = (distFromPrev / 0.0025).coerceIn(0.0, 1.0)
-            val blend = t * t * (3.0 - 2.0 * t)
-            finalX = previousPoint.x * (1.0 - blend) + kalmanStateX * blend
-            finalY = previousPoint.y * (1.0 - blend) + kalmanStateY * blend
-            finalZ = previousPoint.z * (1.0 - blend) + kalmanStateZ * blend
-        } else {
-            finalX = kalmanStateX
-            finalY = kalmanStateY
-            finalZ = kalmanStateZ
-        }
-
-        return rawPoint.copy(
-            x = finalX,
-            y = finalY,
-            z = finalZ
-        )
     }
 
     /**

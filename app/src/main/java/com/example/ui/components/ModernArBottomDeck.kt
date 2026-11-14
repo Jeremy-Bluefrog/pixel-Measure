@@ -71,6 +71,56 @@ fun ModernArBottomDeck(
     val coroutineScope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
 
+    // Non-blocking video frame caches (eliminates Main-thread CountDownLatch deadlock and TextureView Bitmap GC churn)
+    val latestVulkanVideoBitmap = remember { java.util.concurrent.atomic.AtomicReference<Bitmap?>(null) }
+    val isVulkanVideoCapturePending = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+    val reusableTvVideoBitmap = remember { java.util.concurrent.atomic.AtomicReference<Bitmap?>(null) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            try { latestVulkanVideoBitmap.getAndSet(null)?.recycle() } catch (_: Throwable) {}
+            try { reusableTvVideoBitmap.getAndSet(null)?.recycle() } catch (_: Throwable) {}
+        }
+    }
+
+    val provideVideoCameraBitmap: () -> Bitmap? = remember(textureViewRef, modernArVulkanViewRef) {
+        {
+            val currentTv = textureViewRef()
+            val currentVulkan = modernArVulkanViewRef()
+            if (currentTv != null && currentTv.isAvailable && currentTv.width > 0 && currentTv.height > 0) {
+                try {
+                    val targetW = 480
+                    val targetH = ((480f * currentTv.height / currentTv.width).toInt()).coerceIn(320, 1280)
+                    var reuse = reusableTvVideoBitmap.get()
+                    if (reuse == null || reuse.isRecycled || reuse.width != targetW || reuse.height != targetH) {
+                        val old = reusableTvVideoBitmap.getAndSet(null)
+                        if (old != null && !old.isRecycled) try { old.recycle() } catch (_: Throwable) {}
+                        reuse = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
+                        reusableTvVideoBitmap.set(reuse)
+                    }
+                    currentTv.getBitmap(reuse)
+                } catch (_: Throwable) {
+                    null
+                }
+            } else if (currentVulkan != null && currentVulkan.isAvailable) {
+                if (isVulkanVideoCapturePending.compareAndSet(false, true)) {
+                    currentVulkan.captureBitmap { bmp ->
+                        if (bmp != null) {
+                            val old = latestVulkanVideoBitmap.getAndSet(bmp)
+                            if (old != null && old !== bmp && !old.isRecycled) {
+                                try { old.recycle() } catch (_: Throwable) {}
+                            }
+                        }
+                        isVulkanVideoCapturePending.set(false)
+                    }
+                }
+                latestVulkanVideoBitmap.get()?.takeIf { !it.isRecycled }
+            } else {
+                null
+            }
+        }
+    }
+
     val colorPrimary = MaterialTheme.colorScheme.primary
     val colorOnPrimary = MaterialTheme.colorScheme.onPrimary
     val colorOnSurface = MaterialTheme.colorScheme.onSurface
@@ -152,11 +202,7 @@ fun ModernArBottomDeck(
                 label = "addFabCornerRadius"
             )
             val addFabScale by animateFloatAsState(
-                targetValue = when {
-                    isAddFabPressed -> 0.89f
-                    isMeasurementAvailable -> 1.03f
-                    else -> 0.96f
-                },
+                targetValue = if (isMeasurementAvailable) 1.03f else 0.96f,
                 animationSpec = ExpressiveMotion.spatialFast(),
                 label = "addFabScale"
             )
@@ -236,7 +282,7 @@ fun ModernArBottomDeck(
                             pressedCorner = 12.dp
                         )
                         val backScale by animateFloatAsState(
-                            targetValue = if (isBackPressed) 0.90f else 1.0f,
+                            targetValue = 1.0f,
                             animationSpec = ExpressiveMotion.spatialFast(),
                             label = "backBtnScale"
                         )
@@ -292,26 +338,9 @@ fun ModernArBottomDeck(
                                 }
                             }
                         } else if (isCameraVideoMode) {
-                            val currentTv = textureViewRef()
-                            val currentVulkan = modernArVulkanViewRef()
                             videoRecorder.startRecording(
                                 view = localView,
-                                cameraBitmapProvider = {
-                                    if (currentTv != null && currentTv.isAvailable) {
-                                        try { currentTv.bitmap } catch (_: Throwable) { null }
-                                    } else if (currentVulkan != null) {
-                                        var vkBmp: Bitmap? = null
-                                        val latch = java.util.concurrent.CountDownLatch(1)
-                                        currentVulkan.captureBitmap { bmp ->
-                                            vkBmp = bmp
-                                            latch.countDown()
-                                        }
-                                        latch.await(80, java.util.concurrent.TimeUnit.MILLISECONDS)
-                                        vkBmp
-                                    } else {
-                                        null
-                                    }
-                                },
+                                cameraBitmapProvider = provideVideoCameraBitmap,
                                 onStarted = {
                                     viewModel.showToast("開始 AR 測量錄影 (點擊快門按鈕即可停止)")
                                 }
@@ -335,6 +364,9 @@ fun ModernArBottomDeck(
                                             useDisplayP3 = useDisplayP3ColorSpace,
                                             primaryMeasurement = viewModel.getPrimaryMeasurementDisplayString()
                                         ) { savedPath ->
+                                            if (cameraBmp != null && !cameraBmp.isRecycled) {
+                                                try { cameraBmp.recycle() } catch (_: Throwable) {}
+                                            }
                                             viewModel.setIsTakingPhoto(false)
                                             onTriggerShutterFlash()
                                             viewModel.saveMeasurementRecord(imagePath = savedPath)
@@ -367,26 +399,9 @@ fun ModernArBottomDeck(
                     onLongClick = {
                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
                         if (!isRecordingVideo) {
-                            val currentTv = textureViewRef()
-                            val currentVulkan = modernArVulkanViewRef()
                             videoRecorder.startRecording(
                                 view = localView,
-                                cameraBitmapProvider = {
-                                    if (currentTv != null && currentTv.isAvailable) {
-                                        try { currentTv.bitmap } catch (_: Throwable) { null }
-                                    } else if (currentVulkan != null) {
-                                        var vkBmp: Bitmap? = null
-                                        val latch = java.util.concurrent.CountDownLatch(1)
-                                        currentVulkan.captureBitmap { bmp ->
-                                            vkBmp = bmp
-                                            latch.countDown()
-                                        }
-                                        latch.await(80, java.util.concurrent.TimeUnit.MILLISECONDS)
-                                        vkBmp
-                                    } else {
-                                        null
-                                    }
-                                },
+                                cameraBitmapProvider = provideVideoCameraBitmap,
                                 onStarted = {
                                     viewModel.showToast("開始 AR 測量錄影 (點擊快門按鈕即可停止)")
                                 }

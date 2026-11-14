@@ -301,8 +301,9 @@ object ShareUtility {
 
             // If no screenshot exists, generate a sleek blueprint card bitmap
             if (imageUri == null) {
+                var bitmap: Bitmap? = null
                 try {
-                    val bitmap = generateMeasurementBitmap(record)
+                    bitmap = generateMeasurementBitmap(record)
                     val cacheFile = File(context.cacheDir, "measure_share_${record.id}.jpg")
                     FileOutputStream(cacheFile).use { out ->
                         bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
@@ -315,6 +316,12 @@ object ShareUtility {
                     )
                 } catch (e: Exception) {
                     // Fall back to text only
+                } finally {
+                    try {
+                        if (bitmap != null && !bitmap.isRecycled) {
+                            bitmap.recycle()
+                        }
+                    } catch (_: Throwable) {}
                 }
             }
 
@@ -380,9 +387,11 @@ object ShareUtility {
      * Copies measurement text report directly to system clipboard.
      */
     fun copyToClipboard(context: Context, record: MeasureRecord) {
-        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        val clip = ClipData.newPlainText("AR 測量紀錄", formatTextReport(record))
-        clipboard.setPrimaryClip(clip)
+        try {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+            val clip = ClipData.newPlainText("AR 測量紀錄", formatTextReport(record))
+            clipboard.setPrimaryClip(clip)
+        } catch (_: Exception) {}
     }
 
     /**

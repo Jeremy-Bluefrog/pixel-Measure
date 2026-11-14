@@ -238,14 +238,7 @@ fun SpiritLevelComponent(
     var wasLevel by remember { mutableStateOf(false) }
     LaunchedEffect(stateHolder.isLevel) {
         if (stateHolder.isLevel && !wasLevel) {
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    vibrator?.vibrate(VibrationEffect.createOneShot(32, VibrationEffect.DEFAULT_AMPLITUDE))
-                } else {
-                    @Suppress("DEPRECATION")
-                    vibrator?.vibrate(32)
-                }
-            } catch (_: Throwable) {}
+            com.example.logic.ModernHapticFeedback.play(context, com.example.ui.viewmodel.HapticType.SNAP)
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
 
             if (isAudioEnabled) {
@@ -526,7 +519,7 @@ fun SpiritLevelComponent(
             innerActiveCorner = 18.dp
         )
         val zeroScale by animateFloatAsState(
-            targetValue = if (isZeroPressed) 0.96f else 1.0f,
+            targetValue = 1.0f,
             animationSpec = ExpressiveMotion.spatialFast(),
             label = "zeroScale"
         )
@@ -543,7 +536,7 @@ fun SpiritLevelComponent(
             innerActiveCorner = 18.dp
         )
         val holdScale by animateFloatAsState(
-            targetValue = if (isHoldPressed) 0.96f else 1.0f,
+            targetValue = 1.0f,
             animationSpec = ExpressiveMotion.spatialFast(),
             label = "holdScale"
         )

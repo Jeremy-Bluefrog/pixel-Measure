@@ -44,7 +44,8 @@ class VulkanFrameSyncManager(
      * @return Frame slot index (0 .. maxFramesInFlight-1) if acquired, or -1 if timed out
      */
     fun acquireNextFrameSlot(timeoutMs: Long = DEFAULT_FENCE_TIMEOUT_MS): Int {
-        lock.withLock {
+        var shouldTriggerWatchdog = false
+        val acquiredSlot = lock.withLock {
             val slot = currentFrameIndex
             val fence = frameFences[slot]
 
@@ -57,9 +58,10 @@ class VulkanFrameSyncManager(
                         try { Log.w(TAG, "Fence wait timed out on slot $slot (consecutive: $count)") } catch (_: Throwable) {}
                         if (count >= MAX_CONSECUTIVE_TIMEOUTS_BEFORE_RESET) {
                             try { Log.e(TAG, "Watchdog triggered: $count consecutive timeouts. Requesting pipeline rebuild.") } catch (_: Throwable) {}
-                            onWatchdogTriggered?.invoke()
+                            consecutiveTimeoutCount.set(0)
+                            shouldTriggerWatchdog = true
                         }
-                        return -1
+                        return@withLock -1
                     }
                     condition.await(remainingMs, TimeUnit.MILLISECONDS)
                 }
@@ -69,8 +71,12 @@ class VulkanFrameSyncManager(
             consecutiveTimeoutCount.set(0)
             fence.set(true) // Mark in-flight for new frame
             currentFrameIndex = (currentFrameIndex + 1) % maxFramesInFlight
-            return slot
+            slot
         }
+        if (shouldTriggerWatchdog) {
+            onWatchdogTriggered?.invoke()
+        }
+        return acquiredSlot
     }
 
     /**
