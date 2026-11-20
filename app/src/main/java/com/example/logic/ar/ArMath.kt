@@ -1,0 +1,1211 @@
+package com.example.logic.ar
+
+import com.example.ui.viewmodel.Point3D
+import kotlin.math.*
+
+/**
+ * 3D Bounding Box result with dimensions and volume.
+ */
+data class BoundingBoxResult(
+    val minX: Double = 0.0,
+    val maxX: Double = 0.0,
+    val minY: Double = 0.0,
+    val maxY: Double = 0.0,
+    val minZ: Double = 0.0,
+    val maxZ: Double = 0.0,
+    val lengthX: Double = 0.0,
+    val heightY: Double = 0.0,
+    val widthZ: Double = 0.0,
+    val volume: Double = 0.0,
+    val surfaceArea: Double = 0.0
+)
+
+/**
+ * 3D Circle estimation result (Center, Radius, Diameter, Circumference, Area).
+ */
+data class CircleResult(
+    val center: Point3D,
+    val radius: Double,
+    val diameter: Double,
+    val circumference: Double,
+    val area: Double
+)
+
+/**
+ * High-precision 3D mathematical calculation utilities for modern AR spatial measurements.
+ */
+object ArMath {
+
+    /**
+     * Exact Euclidean distance between two 3D points in meters.
+     */
+    fun distance(p1: Point3D, p2: Point3D): Double {
+        val dx = p2.x - p1.x
+        val dy = p2.y - p1.y
+        val dz = p2.z - p1.z
+        val rawDist = sqrt(dx * dx + dy * dy + dz * dz)
+        if (rawDist.isNaN() || rawDist.isInfinite() || rawDist < 1e-7) return 0.0
+        return rawDist
+    }
+
+    /**
+     * Total length of a 3D polyline (chain of connected points) in meters.
+     */
+    fun polylineLength(points: List<Point3D>): Double {
+        if (points.size < 2) return 0.0
+        var total = 0.0
+        for (i in 0 until points.size - 1) {
+            total += distance(points[i], points[i + 1])
+        }
+        return total
+    }
+
+    /**
+     * Checks if a 2D line segment (p1->p2) intersects with (p3->p4).
+     * Excludes collinear overlapping endpoints.
+     */
+    private fun do2DSegmentsIntersect(
+        p1x: Double, p1y: Double, p2x: Double, p2y: Double,
+        p3x: Double, p3y: Double, p4x: Double, p4y: Double
+    ): Boolean {
+        fun ccw(ax: Double, ay: Double, bx: Double, by: Double, cx: Double, cy: Double): Double {
+            return (cy - ay) * (bx - ax) - (by - ay) * (cx - ax)
+        }
+
+        val ccw1 = ccw(p1x, p1y, p2x, p2y, p3x, p3y)
+        val ccw2 = ccw(p1x, p1y, p2x, p2y, p4x, p4y)
+        val ccw3 = ccw(p3x, p3y, p4x, p4y, p1x, p1y)
+        val ccw4 = ccw(p3x, p3y, p4x, p4y, p2x, p2y)
+
+        // Standard strict intersection check: opposite signs across both lines
+        return ((ccw1 > 1e-7 && ccw2 < -1e-7) || (ccw1 < -1e-7 && ccw2 > 1e-7)) &&
+               ((ccw3 > 1e-7 && ccw4 < -1e-7) || (ccw3 < -1e-7 && ccw4 > 1e-7))
+    }
+
+    /**
+     * Detects if a 3D polygon has self-intersecting boundary edges (e.g., figure-8 or bow-tie shape)
+     * when projected onto its best-fit 2D plane.
+     */
+    fun isPolygonSelfIntersecting(points: List<Point3D>): Boolean {
+        if (points.size < 4) return false
+
+        // Compute polygon normal vector to project onto 2D plane
+        var totalVectorX = 0.0
+        var totalVectorY = 0.0
+        var totalVectorZ = 0.0
+
+        val n = points.size
+        for (i in 0 until n) {
+            val pCurrent = points[i]
+            val pNext = points[(i + 1) % n]
+            totalVectorX += (pCurrent.y * pNext.z) - (pCurrent.z * pNext.y)
+            totalVectorY += (pCurrent.z * pNext.x) - (pCurrent.x * pNext.z)
+            totalVectorZ += (pCurrent.x * pNext.y) - (pCurrent.y * pNext.x)
+        }
+
+        val normalLength = sqrt(totalVectorX * totalVectorX + totalVectorY * totalVectorY + totalVectorZ * totalVectorZ)
+        var nx = 0.0
+        var ny = 0.0
+        var nz = 0.0
+
+        if (normalLength > 1e-6) {
+            nx = totalVectorX / normalLength
+            ny = totalVectorY / normalLength
+            nz = totalVectorZ / normalLength
+        } else {
+            // Newell's cross product sum cancelled out (e.g., self-intersecting polygon with equal and opposite loops!)
+            // Derive plane normal using any non-collinear vertices
+            var found = false
+            for (i in 0 until n - 1) {
+                val v1x = points[i + 1].x - points[i].x
+                val v1y = points[i + 1].y - points[i].y
+                val v1z = points[i + 1].z - points[i].z
+                for (j in (i + 2) until n) {
+                    val v2x = points[j].x - points[i].x
+                    val v2y = points[j].y - points[i].y
+                    val v2z = points[j].z - points[i].z
+                    val cx = v1y * v2z - v1z * v2y
+                    val cy = v1z * v2x - v1x * v2z
+                    val cz = v1x * v2y - v1y * v2x
+                    val len = sqrt(cx * cx + cy * cy + cz * cz)
+                    if (len > 1e-6) {
+                        nx = cx / len
+                        ny = cy / len
+                        nz = cz / len
+                        found = true
+                        break
+                    }
+                }
+                if (found) break
+            }
+            if (!found) return false // All points collinear in 3D
+        }
+
+        val (arbitraryX, arbitraryY, arbitraryZ) = if (abs(ny) < 0.9) Triple(0.0, 1.0, 0.0) else Triple(1.0, 0.0, 0.0)
+        val dot = nx * arbitraryX + ny * arbitraryY + nz * arbitraryZ
+        val ux = arbitraryX - nx * dot
+        val uy = arbitraryY - ny * dot
+        val uz = arbitraryZ - nz * dot
+        val uLen = sqrt(ux * ux + uy * uy + uz * uz)
+        if (uLen < 1e-6) return false
+
+        val u1x = ux / uLen
+        val u1y = uy / uLen
+        val u1z = uz / uLen
+
+        val v1x = ny * u1z - nz * u1y
+        val v1y = nz * u1x - nx * u1z
+        val v1z = nx * u1y - ny * u1x
+
+        // Project all points to 2D coordinates (U, V)
+        val uCoords = DoubleArray(n)
+        val vCoords = DoubleArray(n)
+        for (i in 0 until n) {
+            val p = points[i]
+            uCoords[i] = p.x * u1x + p.y * u1y + p.z * u1z
+            vCoords[i] = p.x * v1x + p.y * v1y + p.z * v1z
+        }
+
+        // Test every pair of non-adjacent edges (i, i+1) and (j, j+1)
+        for (i in 0 until n) {
+            val iNext = (i + 1) % n
+            for (j in i + 1 until n) {
+                val jNext = (j + 1) % n
+                // Skip adjacent edges that share an endpoint
+                if (i == j || iNext == j || (i == 0 && jNext == 0) || i == jNext) continue
+
+                if (do2DSegmentsIntersect(
+                        uCoords[i], vCoords[i], uCoords[iNext], vCoords[iNext],
+                        uCoords[j], vCoords[j], uCoords[jNext], vCoords[jNext]
+                    )
+                ) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    /**
+     * High-precision 3D polygon area using cross-product sum and planar 2D projection in meters².
+     * Protected against degenerate collinear shapes, self-intersections, and negative results.
+     */
+    fun polygonArea(points: List<Point3D>): Double {
+        if (points.size < 3) return 0.0
+
+        val n = points.size
+        // Subtract centroid first to prevent catastrophic floating-point cancellation far from world origin
+        var meanX = 0.0
+        var meanY = 0.0
+        var meanZ = 0.0
+        for (i in 0 until n) {
+            val p = points[i]
+            meanX += p.x
+            meanY += p.y
+            meanZ += p.z
+        }
+        meanX /= n
+        meanY /= n
+        meanZ /= n
+
+        // 1. Centroid-relative Cross product vector sum area estimation (Newell's vector area)
+        var totalVectorX = 0.0
+        var totalVectorY = 0.0
+        var totalVectorZ = 0.0
+
+        for (i in 0 until n) {
+            val pCurrent = points[i]
+            val pNext = points[(i + 1) % n]
+
+            val cx0 = pCurrent.x - meanX
+            val cy0 = pCurrent.y - meanY
+            val cz0 = pCurrent.z - meanZ
+            val cx1 = pNext.x - meanX
+            val cy1 = pNext.y - meanY
+            val cz1 = pNext.z - meanZ
+
+            val crossX = (cy0 * cz1) - (cz0 * cy1)
+            val crossY = (cz0 * cx1) - (cx0 * cz1)
+            val crossZ = (cx0 * cy1) - (cy0 * cx1)
+
+            totalVectorX += crossX
+            totalVectorY += crossY
+            totalVectorZ += crossZ
+        }
+
+        val normalLength = sqrt(
+            totalVectorX * totalVectorX +
+            totalVectorY * totalVectorY +
+            totalVectorZ * totalVectorZ
+        )
+        if (normalLength.isNaN() || normalLength < 1e-8) return 0.0
+        val crossArea3d = 0.5 * normalLength
+
+        // 2. Orthonormal 2D basis projection area (Green's theorem on best-fit plane)
+        val nx = totalVectorX / normalLength
+        val ny = totalVectorY / normalLength
+        val nz = totalVectorZ / normalLength
+
+        // Construct 2D plane orthonormal basis vectors (U, V) robustly for any plane orientation
+        val (arbitraryX, arbitraryY, arbitraryZ) = if (abs(ny) < 0.9) {
+            Triple(0.0, 1.0, 0.0)
+        } else {
+            Triple(1.0, 0.0, 0.0)
+        }
+
+        // Gram-Schmidt orthogonalization: U = arbitrary - N * (N . arbitrary)
+        val dot = nx * arbitraryX + ny * arbitraryY + nz * arbitraryZ
+        val ux = arbitraryX - nx * dot
+        val uy = arbitraryY - ny * dot
+        val uz = arbitraryZ - nz * dot
+        val uLen = sqrt(ux * ux + uy * uy + uz * uz)
+
+        if (uLen > 1e-6) {
+            val u1x = ux / uLen
+            val u1y = uy / uLen
+            val u1z = uz / uLen
+
+            val v1x = ny * u1z - nz * u1y
+            val v1y = nz * u1x - nx * u1z
+            val v1z = nx * u1y - ny * u1x
+
+            // Project centroid-relative 3D points to 2D plane coordinates
+            var shoelaceArea = 0.0
+            for (i in 0 until n) {
+                val p1 = points[i]
+                val p2 = points[(i + 1) % n]
+
+                val p1x = p1.x - meanX; val p1y = p1.y - meanY; val p1z = p1.z - meanZ
+                val p2x = p2.x - meanX; val p2y = p2.y - meanY; val p2z = p2.z - meanZ
+
+                val u1 = p1x * u1x + p1y * u1y + p1z * u1z
+                val v1 = p1x * v1x + p1y * v1y + p1z * v1z
+
+                val u2 = p2x * u1x + p2y * u1y + p2z * u1z
+                val v2 = p2x * v1x + p2y * v1y + p2z * v1z
+
+                shoelaceArea += (u1 * v2 - u2 * v1)
+            }
+            val shoelaceArea2d = abs(shoelaceArea) * 0.5
+            val finalArea = if (abs(shoelaceArea2d - crossArea3d) < 0.05 * crossArea3d) {
+                crossArea3d
+            } else {
+                max(crossArea3d, shoelaceArea2d)
+            }
+            return if (finalArea.isNaN() || finalArea.isInfinite()) 0.0 else max(0.0, finalArea)
+        }
+
+        return if (crossArea3d.isNaN() || crossArea3d.isInfinite()) 0.0 else max(0.0, crossArea3d)
+    }
+
+    /**
+     * 3D Bounding box and envelope volume computation.
+     */
+    fun calculateBoundingBox(points: List<Point3D>): BoundingBoxResult {
+        if (points.isEmpty()) return BoundingBoxResult()
+        if (points.size == 1) {
+            val p = points[0]
+            return BoundingBoxResult(
+                minX = p.x, maxX = p.x,
+                minY = p.y, maxY = p.y,
+                minZ = p.z, maxZ = p.z,
+                lengthX = 0.0, heightY = 0.0, widthZ = 0.0,
+                volume = 0.0, surfaceArea = 0.0
+            )
+        }
+
+        var minX = points[0].x
+        var maxX = points[0].x
+        var minY = points[0].y
+        var maxY = points[0].y
+        var minZ = points[0].z
+        var maxZ = points[0].z
+
+        for (p in points) {
+            if (p.x < minX) minX = p.x
+            if (p.x > maxX) maxX = p.x
+            if (p.y < minY) minY = p.y
+            if (p.y > maxY) maxY = p.y
+            if (p.z < minZ) minZ = p.z
+            if (p.z > maxZ) maxZ = p.z
+        }
+
+        val lenX = abs(maxX - minX)
+        val lenY = abs(maxY - minY)
+        val lenZ = abs(maxZ - minZ)
+        val vol = lenX * lenY * lenZ
+        val area = 2.0 * (lenX * lenY + lenY * lenZ + lenZ * lenX)
+
+        return BoundingBoxResult(
+            minX = minX, maxX = maxX,
+            minY = minY, maxY = maxY,
+            minZ = minZ, maxZ = maxZ,
+            lengthX = lenX, heightY = lenY, widthZ = lenZ,
+            volume = vol, surfaceArea = area
+        )
+    }
+
+    /**
+     * Vertical height difference between two points (e.g. base point and top point) in meters.
+     */
+    fun verticalHeight(base: Point3D, top: Point3D): Double {
+        return abs(top.y - base.y)
+    }
+
+    /**
+     * Angle between two 3D vectors formed by (p1 -> p2) and (p2 -> p3) in degrees.
+     */
+    fun calculateAngleDegrees(p1: Point3D, vertex: Point3D, p3: Point3D): Double {
+        val v1x = p1.x - vertex.x
+        val v1y = p1.y - vertex.y
+        val v1z = p1.z - vertex.z
+
+        val v2x = p3.x - vertex.x
+        val v2y = p3.y - vertex.y
+        val v2z = p3.z - vertex.z
+
+        val dot = v1x * v2x + v1y * v2y + v1z * v2z
+        val mag1 = sqrt(v1x * v1x + v1y * v1y + v1z * v1z)
+        val mag2 = sqrt(v2x * v2x + v2y * v2y + v2z * v2z)
+
+        if (mag1 < 1e-6 || mag2 < 1e-6) return 0.0
+
+        val cosVal = (dot / (mag1 * mag2)).coerceIn(-1.0, 1.0)
+        return Math.toDegrees(acos(cosVal))
+    }
+
+    /**
+     * Fit a 3D circle from 3 points on a plane.
+     * Hardened against collinear points, flat triangles, and division-by-zero.
+     */
+    /**
+     * Fit a 3D circle from 3 points on a plane using numerically well-conditioned
+     * local vector cross-product circumcenter math (avoids Heron/origin cancellation).
+     */
+    fun fitCircle3Points(p1: Point3D, p2: Point3D, p3: Point3D): CircleResult? {
+        val v1x = p2.x - p1.x
+        val v1y = p2.y - p1.y
+        val v1z = p2.z - p1.z
+        val v2x = p3.x - p1.x
+        val v2y = p3.y - p1.y
+        val v2z = p3.z - p1.z
+
+        val d1 = v1x * v1x + v1y * v1y + v1z * v1z // ||p2 - p1||^2
+        val d2 = v2x * v2x + v2y * v2y + v2z * v2z // ||p3 - p1||^2
+        val e23x = p3.x - p2.x
+        val e23y = p3.y - p2.y
+        val e23z = p3.z - p2.z
+        val d23 = e23x * e23x + e23y * e23y + e23z * e23z
+
+        val c = sqrt(d1)
+        val b = sqrt(d2)
+        val a = sqrt(d23)
+        if (a < 1e-4 || b < 1e-4 || c < 1e-4) return null
+        val maxEdge = max(a, max(b, c))
+
+        // Cross product cVec = v1 x v2; ||cVec|| = 2 * triangleArea
+        val crossX = v1y * v2z - v1z * v2y
+        val crossY = v1z * v2x - v1x * v2z
+        val crossZ = v1x * v2y - v1y * v2x
+        val crossMagSq = crossX * crossX + crossY * crossY + crossZ * crossZ
+        val crossMag = sqrt(crossMagSq)
+
+        if (crossMag < 2e-4 * maxEdge * maxEdge || crossMag < 1e-4 * maxEdge) return null
+
+        // Local offset u = ((d2 * (cVec x v1)) + (d1 * (v2 x cVec))) / (2 * ||cVec||^2)
+        val cv1x = crossY * v1z - crossZ * v1y
+        val cv1y = crossZ * v1x - crossX * v1z
+        val cv1z = crossX * v1y - crossY * v1x
+
+        val v2cx = v2y * crossZ - v2z * crossY
+        val v2cy = v2z * crossX - v2x * crossZ
+        val v2cz = v2x * crossY - v2y * crossX
+
+        val denom = 2.0 * crossMagSq
+        if (denom < 1e-12) return null
+
+        val ux = (d2 * cv1x + d1 * v2cx) / denom
+        val uy = (d2 * cv1y + d1 * v2cy) / denom
+        val uz = (d2 * cv1z + d1 * v2cz) / denom
+
+        val radius = sqrt(ux * ux + uy * uy + uz * uz)
+        if (radius.isNaN() || radius.isInfinite() || radius > 50.0 || radius < 0.005) return null
+
+        val cx = p1.x + ux
+        val cy = p1.y + uy
+        val cz = p1.z + uz
+        if (cx.isNaN() || cy.isNaN() || cz.isNaN() || cx.isInfinite() || cy.isInfinite() || cz.isInfinite()) {
+            return null
+        }
+
+        val diameter = radius * 2.0
+        val circumference = 2.0 * Math.PI * radius
+        val area = Math.PI * radius * radius
+        val center = Point3D(cx, cy, cz, 0f, 0f, true, "圓心")
+        return CircleResult(center, radius, diameter, circumference, area)
+    }
+
+    /**
+     * Zero-allocation robust 3D sample centroid using component-wise median + MAD outlier rejection.
+     * Rejects single-frame ARCore depth/plane spikes cleanly without biasing the centroid.
+     *
+     * @param count number of valid entries in [xs], [ys], [zs]
+     * @param sortScratch temporary scratch array of size >= [count]
+     * @param distScratch temporary scratch array of size >= [count]
+     * @param outCentroidXYZ output array of size >= 3 receiving [x, y, z]
+     * @return estimated standard error in meters (MAD-scaled / sqrt(inliers))
+     */
+    fun computeRobustSampleCentroid(
+        xs: DoubleArray,
+        ys: DoubleArray,
+        zs: DoubleArray,
+        count: Int,
+        sortScratch: DoubleArray,
+        distScratch: DoubleArray,
+        outCentroidXYZ: DoubleArray
+    ): Double {
+        if (count <= 0) return 0.0
+        if (count == 1) {
+            outCentroidXYZ[0] = xs[0]
+            outCentroidXYZ[1] = ys[0]
+            outCentroidXYZ[2] = zs[0]
+            return 0.003
+        }
+
+        fun medianOf(src: DoubleArray, n: Int): Double {
+            System.arraycopy(src, 0, sortScratch, 0, n)
+            for (i in 1 until n) {
+                val key = sortScratch[i]
+                var j = i - 1
+                while (j >= 0 && sortScratch[j] > key) {
+                    sortScratch[j + 1] = sortScratch[j]
+                    j--
+                }
+                sortScratch[j + 1] = key
+            }
+            return if (n % 2 == 1) {
+                sortScratch[n / 2]
+            } else {
+                0.5 * (sortScratch[n / 2 - 1] + sortScratch[n / 2])
+            }
+        }
+
+        val medX = medianOf(xs, count)
+        val medY = medianOf(ys, count)
+        val medZ = medianOf(zs, count)
+
+        for (i in 0 until count) {
+            val dx = xs[i] - medX
+            val dy = ys[i] - medY
+            val dz = zs[i] - medZ
+            distScratch[i] = sqrt(dx * dx + dy * dy + dz * dz)
+        }
+        val mad = medianOf(distScratch, count)
+        val cutoff = max(0.0025, mad * 2.5)
+
+        var sumX = 0.0
+        var sumY = 0.0
+        var sumZ = 0.0
+        var inlierCount = 0
+        var inlierVarSum = 0.0
+
+        for (i in 0 until count) {
+            val d = distScratch[i]
+            if (d <= cutoff) {
+                sumX += xs[i]
+                sumY += ys[i]
+                sumZ += zs[i]
+                inlierVarSum += d * d
+                inlierCount++
+            }
+        }
+
+        if (inlierCount > 0) {
+            outCentroidXYZ[0] = sumX / inlierCount
+            outCentroidXYZ[1] = sumY / inlierCount
+            outCentroidXYZ[2] = sumZ / inlierCount
+            val rms = sqrt(inlierVarSum / inlierCount)
+            return rms / sqrt(inlierCount.toDouble())
+        }
+
+        outCentroidXYZ[0] = medX
+        outCentroidXYZ[1] = medY
+        outCentroidXYZ[2] = medZ
+        return mad
+    }
+
+    /**
+     * Exact 3D ray-plane intersection. Writes `(hitX, hitY, hitZ, t)` into [outHitXYZT] (size >= 4)
+     * and returns true if the ray hits in front of the ray origin within [minCosIncidence] and `[minT], [maxT]`.
+     */
+    fun rayPlaneIntersection(
+        rayOriginX: Double,
+        rayOriginY: Double,
+        rayOriginZ: Double,
+        rayDirX: Double,
+        rayDirY: Double,
+        rayDirZ: Double,
+        planePointX: Double,
+        planePointY: Double,
+        planePointZ: Double,
+        planeNormalX: Double,
+        planeNormalY: Double,
+        planeNormalZ: Double,
+        minCosIncidence: Double = 0.15,
+        minT: Double = 0.05,
+        maxT: Double = 25.0,
+        outHitXYZT: DoubleArray
+    ): Boolean {
+        if (outHitXYZT.size < 4) return false
+        val denom = rayDirX * planeNormalX + rayDirY * planeNormalY + rayDirZ * planeNormalZ
+        if (abs(denom) <= minCosIncidence) return false
+        val t = ((planePointX - rayOriginX) * planeNormalX +
+            (planePointY - rayOriginY) * planeNormalY +
+            (planePointZ - rayOriginZ) * planeNormalZ) / denom
+        if (t.isNaN() || t.isInfinite() || t < minT || t > maxT) return false
+        outHitXYZT[0] = rayOriginX + t * rayDirX
+        outHitXYZT[1] = rayOriginY + t * rayDirY
+        outHitXYZT[2] = rayOriginZ + t * rayDirZ
+        outHitXYZT[3] = t
+        return true
+    }
+
+    /**
+     * Midpoint between two 3D points.
+     */
+    fun midpoint(p1: Point3D, p2: Point3D): Point3D {
+        return Point3D(
+            x = (p1.x + p2.x) / 2.0,
+            y = (p1.y + p2.y) / 2.0,
+            z = (p1.z + p2.z) / 2.0,
+            label = "",
+            isArPrecision = true,
+            anchor = null
+        )
+    }
+
+    /**
+     * Advanced Continuous Sigmoid Adaptive EMA Filter with Hermite Deadband.
+     * Eliminates discrete threshold steps to achieve C1-continuous silky tracking response:
+     * - Quadratic deadband (< 3.0mm): zero vibration and rock-solid hold on target.
+     * - Continuous Hill-sigmoid transition: smooth acceleration from micro-adjustment to rapid panning.
+     * - Instantaneous zero-lag tracking (> 12cm) during fast camera movement.
+     */
+    fun filterJitterEMA(previous: Point3D?, current: Point3D, snapDistanceThreshold: Double = 0.12): Point3D {
+        if (previous == null) return current
+        if (!isPointValid(current)) return previous
+
+        val d = distance(previous, current)
+        if (d.isNaN() || d.isInfinite()) return current
+
+        // Quad-tier anti-jitter filter with true zero-drift deadband:
+        // 1. Holding still (< 3.0mm): complete zero-drift deadband lock (stops hand tremor buzzing)
+        if (d < 0.0030) {
+            return previous
+        }
+
+        // 2. Micro-aiming adjustment (3.0mm .. 35mm): gentle, silky smooth interpolation
+        // 3. Normal motion (35mm .. 80mm): responsive smoothstep tracking
+        // 4. Fast sweeping (> 80mm): instantaneous zero-lag response
+        val minAlpha = 0.08
+        val maxAlpha = 0.96
+        val d0 = 0.035 // 35mm characteristic transition distance
+
+        val t = ((d - 0.0030) / (d0 - 0.0030)).coerceIn(0.0, 1.0)
+        val alphaScale = t * t * (3.0 - 2.0 * t)
+        val finalAlpha = minAlpha + (maxAlpha - minAlpha) * alphaScale
+
+        val smoothedX = previous.x * (1.0 - finalAlpha) + current.x * finalAlpha
+        val smoothedY = previous.y * (1.0 - finalAlpha) + current.y * finalAlpha
+        val smoothedZ = previous.z * (1.0 - finalAlpha) + current.z * finalAlpha
+
+        return current.copy(
+            x = smoothedX,
+            y = smoothedY,
+            z = smoothedZ
+        )
+    }
+
+    /**
+     * Validate that 3D coordinates are valid finite numbers within a realistic measuring range (0.02m to 40.0m).
+     */
+    fun isPointValid(point: Point3D): Boolean {
+        if (point.x.isNaN() || point.y.isNaN() || point.z.isNaN()) return false
+        if (point.x.isInfinite() || point.y.isInfinite() || point.z.isInfinite()) return false
+        val distSq = point.x * point.x + point.y * point.y + point.z * point.z
+        return distSq in 0.0004..1600.0 // 0.02m to 40.0m
+    }
+
+    /**
+     * Check if live point can magnetically snap and auto-follow an existing vertex,
+     * line segment midpoint, or segment edge within [snapThresholdMeters],
+     * with hysteresis and soft-magnetic potential well attraction to maintain auto-follow lock.
+     */
+    fun findVertexSnap(
+        livePoint: Point3D,
+        existingPoints: List<Point3D>,
+        snapThresholdMeters: Double = 0.075,
+        isCurrentlySnapped: Boolean = false
+    ): Point3D? {
+        if (existingPoints.isEmpty()) return null
+
+        val effectiveThreshold = if (isCurrentlySnapped) snapThresholdMeters * 1.65 else snapThresholdMeters
+        var bestVertex: Point3D? = null
+        var bestType = 0 // 0 = none, 1 = vertex, 2 = midpoint, 3 = edge
+        var bestX = 0.0
+        var bestY = 0.0
+        var bestZ = 0.0
+        var minD = effectiveThreshold
+
+        val lx = livePoint.x
+        val ly = livePoint.y
+        val lz = livePoint.z
+
+        // 1. Existing Node / Corner Vertex Snap (Highest Priority)
+        for (i in existingPoints.indices) {
+            val pt = existingPoints[i]
+            val dx = lx - pt.x
+            val dy = ly - pt.y
+            val dz = lz - pt.z
+            val dSq = dx * dx + dy * dy + dz * dz
+            if (dSq < minD * minD) {
+                val d = sqrt(dSq)
+                if (d < minD) {
+                    minD = d
+                    bestVertex = pt
+                    bestX = pt.x
+                    bestY = pt.y
+                    bestZ = pt.z
+                    bestType = 1
+                }
+            }
+        }
+
+        // 2. Line Segment Midpoint & Edge Sliding Snap (Zero-Alloc inner loop)
+        if (existingPoints.size >= 2) {
+            for (i in 0 until existingPoints.size - 1 step 2) {
+                val p1 = existingPoints[i]
+                val p2 = existingPoints[i + 1]
+
+                // Check Midpoint Snap (yields to Vertex snap priority)
+                if (bestType != 1) {
+                    val midX = (p1.x + p2.x) * 0.5
+                    val midY = (p1.y + p2.y) * 0.5
+                    val midZ = (p1.z + p2.z) * 0.5
+                    val mdx = lx - midX
+                    val mdy = ly - midY
+                    val mdz = lz - midZ
+                    val dMidSq = mdx * mdx + mdy * mdy + mdz * mdz
+                    val midCutoff = minD * 0.90
+                    if (dMidSq < midCutoff * midCutoff) {
+                        minD = sqrt(dMidSq)
+                        bestVertex = null
+                        bestX = midX
+                        bestY = midY
+                        bestZ = midZ
+                        bestType = 2
+                    }
+                }
+
+                // Check Segment Edge Orthogonal Projection (yields to Vertex and Midpoint snaps)
+                if (bestType == 0 || bestType == 3) {
+                    val segDx = p2.x - p1.x
+                    val segDy = p2.y - p1.y
+                    val segDz = p2.z - p1.z
+                    val segLenSq = segDx * segDx + segDy * segDy + segDz * segDz
+                    if (segLenSq > 1e-6) {
+                        val t = (((lx - p1.x) * segDx + (ly - p1.y) * segDy + (lz - p1.z) * segDz) / segLenSq).coerceIn(0.0, 1.0)
+                        val projX = p1.x + t * segDx
+                        val projY = p1.y + t * segDy
+                        val projZ = p1.z + t * segDz
+                        val pdx = lx - projX
+                        val pdy = ly - projY
+                        val pdz = lz - projZ
+                        val dProjSq = pdx * pdx + pdy * pdy + pdz * pdz
+                        val projCutoff = minD * 0.72
+                        if (dProjSq < projCutoff * projCutoff) {
+                            minD = sqrt(dProjSq)
+                            bestVertex = null
+                            bestX = projX
+                            bestY = projY
+                            bestZ = projZ
+                            bestType = 3
+                        }
+                    }
+                }
+            }
+        }
+
+        if (bestType == 0) return null
+
+        val candidateLabel = when (bestType) {
+            2 -> "中點"
+            3 -> "邊緣"
+            else -> bestVertex?.label ?: ""
+        }
+
+        // 3. Apply Soft-Magnetic Gravitational Attraction Curve
+        val innerLockRadius = 0.030
+        return if (minD <= innerLockRadius || isCurrentlySnapped) {
+            bestVertex ?: Point3D(bestX, bestY, bestZ, isArPrecision = true, label = candidateLabel)
+        } else {
+            val tNorm = ((minD - innerLockRadius) / (effectiveThreshold - innerLockRadius)).coerceIn(0.0, 1.0)
+            val magneticPull = 1.0 - (tNorm * tNorm * (3.0 - 2.0 * tNorm))
+            Point3D(
+                x = lx * (1.0 - magneticPull) + bestX * magneticPull,
+                y = ly * (1.0 - magneticPull) + bestY * magneticPull,
+                z = lz * (1.0 - magneticPull) + bestZ * magneticPull,
+                isArPrecision = true,
+                label = candidateLabel
+            )
+        }
+    }
+
+    /**
+     * Checks if a 4x4 matrix is non-null, has at least 16 elements, and is not all zeroes.
+     */
+    fun isMatrixValid(m: FloatArray?): Boolean {
+        if (m == null || m.size < 16) return false
+        return !(m[0] == 0f && m[5] == 0f && m[10] == 0f && m[15] == 0f)
+    }
+
+    /**
+     * Project raw 3D world coordinates (X, Y, Z) to 2D screen pixel coordinates without object allocation.
+     * Writes into outXY[0] and outXY[1]. Returns true if successfully projected in front of camera, false otherwise.
+     */
+    fun projectCoordsToScreen(
+        wx: Double,
+        wy: Double,
+        wz: Double,
+        viewMatrix: FloatArray,
+        projectionMatrix: FloatArray,
+        screenWidth: Int,
+        screenHeight: Int,
+        outXY: FloatArray,
+        isHorizontallyMirrored: Boolean = false
+    ): Boolean {
+        if (viewMatrix.size < 16 || projectionMatrix.size < 16 || screenWidth <= 0 || screenHeight <= 0 || outXY.size < 2) {
+            return false
+        }
+
+        // Fast reject uninitialized / all-zero matrices
+        if (!isMatrixValid(viewMatrix) || !isMatrixValid(projectionMatrix)) {
+            return false
+        }
+
+        val fx = wx.toFloat()
+        val fy = wy.toFloat()
+        val fz = wz.toFloat()
+
+        // Multiply ViewMatrix * WorldPoint
+        val vx = viewMatrix[0] * fx + viewMatrix[4] * fy + viewMatrix[8] * fz + viewMatrix[12]
+        val vy = viewMatrix[1] * fx + viewMatrix[5] * fy + viewMatrix[9] * fz + viewMatrix[13]
+        val vz = viewMatrix[2] * fx + viewMatrix[6] * fy + viewMatrix[10] * fz + viewMatrix[14]
+        val vw = viewMatrix[3] * fx + viewMatrix[7] * fy + viewMatrix[11] * fz + viewMatrix[15]
+
+        // Multiply ProjectionMatrix * ViewPoint
+        val clipX = projectionMatrix[0] * vx + projectionMatrix[4] * vy + projectionMatrix[8] * vz + projectionMatrix[12] * vw
+        val clipY = projectionMatrix[1] * vx + projectionMatrix[5] * vy + projectionMatrix[9] * vz + projectionMatrix[13] * vw
+        val clipZ = projectionMatrix[2] * vx + projectionMatrix[6] * vy + projectionMatrix[10] * vz + projectionMatrix[14] * vw
+        val clipW = projectionMatrix[3] * vx + projectionMatrix[7] * vy + projectionMatrix[11] * vz + projectionMatrix[15] * vw
+
+        if (clipW <= 0.001f || clipW.isNaN() || clipW.isInfinite()) {
+            return false
+        }
+
+        val invW = 1.0f / clipW
+        val ndcX = clipX * invW
+        val ndcY = clipY * invW
+        val ndcZ = clipZ * invW
+
+        if (ndcX.isNaN() || ndcY.isNaN() || ndcZ.isNaN() || ndcX.isInfinite() || ndcY.isInfinite() || ndcZ.isInfinite()) {
+            return false
+        }
+
+        // Clip near/far plane depth with safe margin
+        if (ndcZ < -1.2f || ndcZ > 1.2f) {
+            return false
+        }
+
+        val rawScreenX = (ndcX + 1.0f) * 0.5f * screenWidth
+        val screenX = if (isHorizontallyMirrored) screenWidth - rawScreenX else rawScreenX
+
+        // Automatically adapt to both Vulkan (m[5] < 0) and OpenGL/ARCore (m[5] > 0) NDC conventions:
+        // Ensures 3D points higher in space are always correctly rendered in the upper half of screen
+        val screenY = if (projectionMatrix[5] < 0f) {
+            (ndcY + 1.0f) * 0.5f * screenHeight
+        } else {
+            (1.0f - ndcY) * 0.5f * screenHeight
+        }
+
+        if (screenX.isNaN() || screenY.isNaN() || screenX.isInfinite() || screenY.isInfinite()) {
+            return false
+        }
+
+        val maxMarginX = screenWidth * 3f
+        val maxMarginY = screenHeight * 3f
+        if (screenX < -maxMarginX || screenX > screenWidth + maxMarginX ||
+            screenY < -maxMarginY || screenY > screenHeight + maxMarginY) {
+            return false
+        }
+
+        outXY[0] = screenX
+        outXY[1] = screenY
+        return true
+    }
+
+    /**
+     * In-place zero-allocation 3D world to 2D screen projection.
+     * Writes resulting (screenX, screenY) into [outScreenPos] at indices [outOffset] and [outOffset + 1].
+     * Returns true if successfully projected and within visible bounds; false otherwise.
+     */
+    fun projectWorldToScreenInPlace(
+        worldPoint: Point3D,
+        viewMatrix: FloatArray,
+        projectionMatrix: FloatArray,
+        screenWidth: Int,
+        screenHeight: Int,
+        outScreenPos: FloatArray,
+        outOffset: Int = 0,
+        isHorizontallyMirrored: Boolean = false
+    ): Boolean {
+        if (outOffset == 0) {
+            return projectCoordsToScreen(
+                worldPoint.x,
+                worldPoint.y,
+                worldPoint.z,
+                viewMatrix,
+                projectionMatrix,
+                screenWidth,
+                screenHeight,
+                outScreenPos,
+                isHorizontallyMirrored
+            )
+        }
+        val temp = FloatArray(2)
+        if (projectCoordsToScreen(worldPoint.x, worldPoint.y, worldPoint.z, viewMatrix, projectionMatrix, screenWidth, screenHeight, temp, isHorizontallyMirrored)) {
+            if (outScreenPos.size >= outOffset + 2) {
+                outScreenPos[outOffset] = temp[0]
+                outScreenPos[outOffset + 1] = temp[1]
+                return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * Projects a 3D point in world coordinates onto the 2D screen coordinate system.
+     */
+    fun projectWorldToScreen(
+        worldPoint: Point3D,
+        viewMatrix: FloatArray,
+        projectionMatrix: FloatArray,
+        screenWidth: Int,
+        screenHeight: Int,
+        isHorizontallyMirrored: Boolean = false
+    ): Pair<Float, Float>? {
+        val buffer = FloatArray(2)
+        if (projectCoordsToScreen(worldPoint.x, worldPoint.y, worldPoint.z, viewMatrix, projectionMatrix, screenWidth, screenHeight, buffer, isHorizontallyMirrored)) {
+            return Pair(buffer[0], buffer[1])
+        }
+        return null
+    }
+
+    /**
+     * Fits a 3D circle using two antipodal diameter points [p1] and [p2].
+     */
+    fun fitCircle2Points(p1: Point3D, p2: Point3D): CircleResult? {
+        val diameter = distance(p1, p2)
+        if (diameter < 0.01 || diameter > 100.0 || diameter.isNaN() || diameter.isInfinite()) return null
+        val radius = diameter * 0.5
+        val center = Point3D(
+            x = (p1.x + p2.x) * 0.5,
+            y = (p1.y + p2.y) * 0.5,
+            z = (p1.z + p2.z) * 0.5,
+            label = "圓心",
+            isArPrecision = true
+        )
+        return CircleResult(
+            center = center,
+            radius = radius,
+            diameter = diameter,
+            circumference = 2.0 * Math.PI * radius,
+            area = Math.PI * radius * radius
+        )
+    }
+
+    /**
+     * Extracts a normalized 3D surface normal (local +Y rotated by unit quaternion) into [outNormal] (size >= 3).
+     * Optionally flips the normal so it points toward [cameraToHitDir] (i.e. dot(normal, camPos - hitPos) >= 0).
+     */
+    fun extractSurfaceNormalFromQuaternion(
+        qx: Float,
+        qy: Float,
+        qz: Float,
+        qw: Float,
+        outNormal: FloatArray,
+        towardCamX: Float = 0f,
+        towardCamY: Float = 0f,
+        towardCamZ: Float = 0f,
+        orientTowardCamera: Boolean = false
+    ) {
+        if (outNormal.size < 3) return
+        val qxd = qx.toDouble()
+        val qyd = qy.toDouble()
+        val qzd = qz.toDouble()
+        val qwd = qw.toDouble()
+
+        var nx = 2.0 * (qxd * qyd - qwd * qzd)
+        var ny = 1.0 - 2.0 * (qxd * qxd + qzd * qzd)
+        var nz = 2.0 * (qyd * qzd + qwd * qxd)
+
+        val len = sqrt(nx * nx + ny * ny + nz * nz)
+        if (len < 1e-6 || len.isNaN() || len.isInfinite()) {
+            outNormal[0] = 0f
+            outNormal[1] = 1f
+            outNormal[2] = 0f
+            return
+        }
+        nx /= len
+        ny /= len
+        nz /= len
+
+        if (orientTowardCamera) {
+            val dot = nx * towardCamX + ny * towardCamY + nz * towardCamZ
+            if (dot < 0.0) {
+                nx = -nx
+                ny = -ny
+                nz = -nz
+            }
+        }
+
+        outNormal[0] = nx.toFloat()
+        outNormal[1] = ny.toFloat()
+        outNormal[2] = nz.toFloat()
+    }
+
+    /**
+     * Builds a right-handed orthonormal basis (N, U, V) in 3D space without heap allocations.
+     * Writes 9 doubles into [outBasis]: [nx, ny, nz, ux, uy, uz, vx, vy, vz].
+     * Defaults cleanly to world horizontal plane N=(0, 1, 0), U=(1, 0, 0), V=(0, 0, -1) if input normal is degenerate.
+     */
+    fun buildOrthonormalBasis(
+        nxIn: Double,
+        nyIn: Double,
+        nzIn: Double,
+        outBasis: DoubleArray
+    ): Boolean {
+        if (outBasis.size < 9) return false
+        val len = sqrt(nxIn * nxIn + nyIn * nyIn + nzIn * nzIn)
+        val nx: Double
+        val ny: Double
+        val nz: Double
+        if (len < 1e-6 || len.isNaN() || len.isInfinite()) {
+            nx = 0.0
+            ny = 1.0
+            nz = 0.0
+        } else {
+            nx = nxIn / len
+            ny = nyIn / len
+            nz = nzIn / len
+        }
+
+        // Choose stable world reference axis: keep U horizontal when normal is vertical/tilted
+        val refX: Double
+        val refY: Double
+        val refZ: Double
+        if (abs(ny) < 0.92) {
+            refX = 0.0; refY = 1.0; refZ = 0.0
+        } else {
+            refX = 0.0; refY = 0.0; refZ = 1.0
+        }
+
+        // U = normalize(N x ref)
+        var ux = ny * refZ - nz * refY
+        var uy = nz * refX - nx * refZ
+        var uz = nx * refY - ny * refX
+        val uLen = sqrt(ux * ux + uy * uy + uz * uz)
+        if (uLen < 1e-6) {
+            outBasis[0] = 0.0; outBasis[1] = 1.0; outBasis[2] = 0.0
+            outBasis[3] = 1.0; outBasis[4] = 0.0; outBasis[5] = 0.0
+            outBasis[6] = 0.0; outBasis[7] = 0.0; outBasis[8] = -1.0
+            return true
+        }
+        ux /= uLen
+        uy /= uLen
+        uz /= uLen
+
+        // V = N x U
+        val vx = ny * uz - nz * uy
+        val vy = nz * ux - nx * uz
+        val vz = nx * uy - ny * ux
+
+        outBasis[0] = nx; outBasis[1] = ny; outBasis[2] = nz
+        outBasis[3] = ux; outBasis[4] = uy; outBasis[5] = uz
+        outBasis[6] = vx; outBasis[7] = vy; outBasis[8] = vz
+        return true
+    }
+
+    /**
+     * Computes the exact plane normal and orthonormal basis (N, U, V) from 3 non-collinear 3D points.
+     * Writes 9 doubles into [outBasis]. Returns false if the points are collinear or degenerate.
+     */
+    fun computePlaneNormal3Points(
+        p1: Point3D,
+        p2: Point3D,
+        p3: Point3D,
+        outBasis: DoubleArray
+    ): Boolean {
+        if (outBasis.size < 9) return false
+        val v1x = p2.x - p1.x
+        val v1y = p2.y - p1.y
+        val v1z = p2.z - p1.z
+        val v2x = p3.x - p1.x
+        val v2y = p3.y - p1.y
+        val v2z = p3.z - p1.z
+
+        val cx = v1y * v2z - v1z * v2y
+        val cy = v1z * v2x - v1x * v2z
+        val cz = v1x * v2y - v1y * v2x
+        val crossMag = sqrt(cx * cx + cy * cy + cz * cz)
+        val e1 = sqrt(v1x * v1x + v1y * v1y + v1z * v1z)
+        val e2 = sqrt(v2x * v2x + v2y * v2y + v2z * v2z)
+        val maxEdge = max(e1, e2)
+        if (maxEdge < 1e-4 || crossMag < 1e-4 * maxEdge) {
+            return false
+        }
+        return buildOrthonormalBasis(cx, cy, cz, outBasis)
+    }
+
+    /**
+     * Samples [segments] 3D world coordinates of a circle centered at ([cx], [cy], [cz])
+     * with radius [radiusMeters] lying on the plane defined by [basis] ([nx, ny, nz, ux, uy, uz, vx, vy, vz]).
+     * Zero heap allocations; writes into [outX], [outY], [outZ].
+     */
+    fun sampleCircle3DWorldCoords(
+        cx: Double,
+        cy: Double,
+        cz: Double,
+        radiusMeters: Double,
+        basis: DoubleArray,
+        segments: Int,
+        outX: DoubleArray,
+        outY: DoubleArray,
+        outZ: DoubleArray,
+        phaseOffsetRad: Double = 0.0
+    ): Int {
+        if (basis.size < 9 || segments < 3 || radiusMeters <= 0.0 ||
+            outX.size < segments || outY.size < segments || outZ.size < segments
+        ) {
+            return 0
+        }
+        val ux = basis[3]; val uy = basis[4]; val uz = basis[5]
+        val vx = basis[6]; val vy = basis[7]; val vz = basis[8]
+        val step = (2.0 * Math.PI) / segments
+        for (i in 0 until segments) {
+            val theta = phaseOffsetRad + i * step
+            val c = cos(theta) * radiusMeters
+            val s = sin(theta) * radiusMeters
+            outX[i] = cx + c * ux + s * vx
+            outY[i] = cy + c * uy + s * vy
+            outZ[i] = cz + c * uz + s * vz
+        }
+        return segments
+    }
+
+    /**
+     * Zero-allocation 3D perspective circle projection onto 2D screen pixel buffers [outScreenX] and [outScreenY].
+     * Uses [basis] ([nx, ny, nz, ux, uy, uz, vx, vy, vz]) so circles tilt realistically with any floor, wall, or tilted plane.
+     * Returns [segments] if all vertices projected cleanly in front of the camera, or 0 if behind/invalid.
+     */
+    fun projectCircle3DToScreen(
+        cx: Double,
+        cy: Double,
+        cz: Double,
+        radiusMeters: Double,
+        basis: DoubleArray,
+        segments: Int,
+        viewMatrix: FloatArray,
+        projectionMatrix: FloatArray,
+        screenWidth: Int,
+        screenHeight: Int,
+        outScreenX: FloatArray,
+        outScreenY: FloatArray,
+        scratchXY: FloatArray,
+        isHorizontallyMirrored: Boolean = false,
+        phaseOffsetRad: Double = 0.0
+    ): Int {
+        if (basis.size < 9 || segments < 3 || radiusMeters <= 1e-5 ||
+            viewMatrix.size < 16 || projectionMatrix.size < 16 ||
+            screenWidth <= 0 || screenHeight <= 0 ||
+            outScreenX.size < segments || outScreenY.size < segments || scratchXY.size < 2 ||
+            !isMatrixValid(viewMatrix) || !isMatrixValid(projectionMatrix)
+        ) {
+            return 0
+        }
+
+        val ux = basis[3]; val uy = basis[4]; val uz = basis[5]
+        val vx = basis[6]; val vy = basis[7]; val vz = basis[8]
+        val step = (2.0 * Math.PI) / segments
+
+        for (i in 0 until segments) {
+            val theta = phaseOffsetRad + i * step
+            val c = cos(theta) * radiusMeters
+            val s = sin(theta) * radiusMeters
+            val wx = cx + c * ux + s * vx
+            val wy = cy + c * uy + s * vy
+            val wz = cz + c * uz + s * vz
+            if (!projectCoordsToScreen(
+                    wx = wx,
+                    wy = wy,
+                    wz = wz,
+                    viewMatrix = viewMatrix,
+                    projectionMatrix = projectionMatrix,
+                    screenWidth = screenWidth,
+                    screenHeight = screenHeight,
+                    outXY = scratchXY,
+                    isHorizontallyMirrored = isHorizontallyMirrored
+                )
+            ) {
+                return 0
+            }
+            outScreenX[i] = scratchXY[0]
+            outScreenY[i] = scratchXY[1]
+        }
+        return segments
+    }
+
+    /**
+     * Projects a 3D horizontal circle (parallel to the ground/floor XZ plane, normal = (0, 1, 0))
+     * centered at [center3D] with radius [radiusMeters] into a list of 2D screen points (forming an ellipse in perspective).
+     */
+    fun projectHorizontalGroundCircle(
+        center3D: Point3D,
+        radiusMeters: Double,
+        viewMatrix: FloatArray,
+        projectionMatrix: FloatArray,
+        screenWidth: Int,
+        screenHeight: Int,
+        segments: Int = 32
+    ): List<Pair<Float, Float>> {
+        if (viewMatrix.size < 16 || projectionMatrix.size < 16 || screenWidth <= 0 || screenHeight <= 0) {
+            return emptyList()
+        }
+        val result = ArrayList<Pair<Float, Float>>(segments)
+        val step = 2.0 * Math.PI / segments
+        for (i in 0 until segments) {
+            val angle = i * step
+            val x = center3D.x + radiusMeters * cos(angle)
+            val y = center3D.y
+            val z = center3D.z + radiusMeters * sin(angle)
+            val pt = Point3D(x, y, z)
+            val proj = projectWorldToScreen(pt, viewMatrix, projectionMatrix, screenWidth, screenHeight)
+            if (proj != null) {
+                result.add(proj)
+            } else {
+                return emptyList()
+            }
+        }
+        return result
+    }
+}

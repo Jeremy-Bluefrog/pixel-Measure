@@ -1,0 +1,670 @@
+package com.example.ui.components
+
+import android.content.Context
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.ui.i18n.tr
+import com.example.ui.theme.ExpressiveCookie8Shape
+import com.example.ui.theme.ExpressiveMotion
+import com.example.ui.theme.ExpressiveTypography
+import com.example.ui.theme.rememberExpressiveConnectedShape
+import com.example.ui.theme.rememberExpressivePressCorner
+import com.example.ui.viewmodel.MeasureViewModel
+
+@Composable
+fun ModernArTopBar(
+    viewModel: MeasureViewModel,
+    context: Context,
+    subMode: Int,
+    autoDetectedType: String,
+    selectedUnit: String,
+    isTorchOn: Boolean,
+    torchBrightness: Float,
+    cameraAspectRatio: String,
+    planesCount: Int,
+    isRecordingVideo: Boolean,
+    recordingSeconds: Int,
+    onShowHistoryClick: () -> Unit,
+    onShowSettingsClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    applyStatusBarsPadding: Boolean = true,
+    showStatusOrRecHud: Boolean = true,
+    extraTopHudContent: (@Composable ColumnScope.() -> Unit)? = null
+) {
+    val isDark = com.example.ui.theme.LocalAppDarkTheme.current
+    val haptic = LocalHapticFeedback.current
+    val colorPrimary = MaterialTheme.colorScheme.primary
+    val colorOnPrimary = MaterialTheme.colorScheme.onPrimary
+    val colorSurfaceVariant = MaterialTheme.colorScheme.surfaceVariant
+    val colorSurfaceContainer = MaterialTheme.colorScheme.surfaceContainer
+    val colorOutlineVariant = MaterialTheme.colorScheme.outlineVariant
+    val colorError = MaterialTheme.colorScheme.error
+    val colorOnError = MaterialTheme.colorScheme.onError
+    val colorOnSurface = MaterialTheme.colorScheme.onSurface
+    val colorOnSurfaceVariant = MaterialTheme.colorScheme.onSurfaceVariant
+
+    var showTorchBrightnessMenu by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .widthIn(max = 640.dp)
+            .then(if (applyStatusBarsPadding) Modifier.statusBarsPadding() else Modifier)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        // 1. Top Bar Controls Row (M3 Expressive SplitButton + Connected Action Group)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Left: Expressive SubMode Split Button & Morphing Unit Pill
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .horizontalScroll(rememberScrollState())
+            ) {
+                var showSubModeMenu by remember { mutableStateOf(false) }
+                val subModeLabel = when (subMode) {
+                    1 -> tr("topbar_submode_area")
+                    2 -> tr("topbar_submode_height")
+                    3 -> tr("topbar_submode_volume")
+                    4 -> tr("topbar_submode_circle")
+                    5 -> tr("topbar_submode_angle")
+                    else -> when (autoDetectedType) {
+                        "HEIGHT" -> tr("topbar_submode_auto_height")
+                        "AREA" -> tr("topbar_submode_auto_area")
+                        "VOLUME" -> tr("topbar_submode_auto_volume")
+                        "CIRCLE" -> tr("topbar_submode_auto_circle")
+                        "ANGLE" -> tr("topbar_submode_auto_angle")
+                        else -> tr("topbar_submode_auto")
+                    }
+                }
+                val subModeIcon = when (subMode) {
+                    1 -> Icons.Rounded.SquareFoot
+                    2 -> Icons.Rounded.Height
+                    3 -> Icons.Rounded.ViewInAr
+                    4 -> Icons.Rounded.Adjust
+                    5 -> Icons.Rounded.Architecture
+                    else -> Icons.Rounded.AutoMode
+                }
+
+                Box {
+                    ExpressiveSplitButton(
+                        label = subModeLabel,
+                        leadingIcon = subModeIcon,
+                        onPrimaryClick = {
+                            val cycleOrder = listOf(0, 1, 2, 3, 4, 5)
+                            val nextIdx = (cycleOrder.indexOf(subMode) + 1) % cycleOrder.size
+                            viewModel.setCameraSubMode(cycleOrder[nextIdx])
+                        },
+                        onTrailingClick = { showSubModeMenu = !showSubModeMenu },
+                        expanded = showSubModeMenu,
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.78f else 0.92f),
+                        contentColor = colorOnSurface,
+                        accentColor = colorPrimary,
+                        borderColor = colorOutlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f),
+                        height = 40.dp,
+                        leadingTestTag = "submode_selector_button",
+                        trailingTestTag = "submode_dropdown_button"
+                    )
+
+                    DropdownMenu(
+                        expanded = showSubModeMenu,
+                        onDismissRequest = { showSubModeMenu = false },
+                        modifier = Modifier.background(colorSurfaceContainer)
+                    ) {
+                        listOf(
+                            0 to (tr("topbar_menu_auto") to Icons.Rounded.AutoMode),
+                            -1 to (tr("topbar_menu_distance") to Icons.Rounded.Straighten),
+                            1 to (tr("topbar_menu_area") to Icons.Rounded.SquareFoot),
+                            2 to (tr("topbar_menu_height") to Icons.Rounded.Height),
+                            3 to (tr("topbar_menu_volume") to Icons.Rounded.ViewInAr),
+                            4 to (tr("topbar_menu_circle") to Icons.Rounded.Adjust),
+                            5 to (tr("topbar_menu_angle") to Icons.Rounded.Architecture)
+                        ).forEach { (modeId, info) ->
+                            val (label, icon) = info
+                            val isSelected = (modeId == 0 && subMode == 0) || (modeId == subMode) || (modeId == -1 && subMode == 0 && autoDetectedType == "DISTANCE")
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        label,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (isSelected) colorPrimary else colorOnSurface
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(icon, null, tint = if (isSelected) colorPrimary else colorOnSurfaceVariant)
+                                },
+                                onClick = {
+                                    if (modeId == -1) {
+                                        viewModel.setCameraSubMode(0)
+                                    } else {
+                                        viewModel.setCameraSubMode(modeId)
+                                    }
+                                    showSubModeMenu = false
+                                },
+                                modifier = Modifier.testTag("submode_menu_item_$modeId")
+                            )
+                        }
+                    }
+                }
+
+                // Unit Quick Selector Pill with Expressive Corner Morph
+                var showUnitMenu by remember { mutableStateOf(false) }
+                val unitInteraction = remember { MutableInteractionSource() }
+                val isUnitPressed by unitInteraction.collectIsPressedAsState()
+                val unitCorner by rememberExpressivePressCorner(
+                    isPressed = isUnitPressed || showUnitMenu,
+                    restingCorner = 20.dp,
+                    pressedCorner = 10.dp
+                )
+                val unitScale by animateFloatAsState(
+                    targetValue = 1.0f,
+                    animationSpec = ExpressiveMotion.spatialFast(),
+                    label = "unitPillScale"
+                )
+                Box {
+                    Surface(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            showUnitMenu = true
+                        },
+                        interactionSource = unitInteraction,
+                        shape = RoundedCornerShape(unitCorner),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.78f else 0.92f),
+                        contentColor = colorPrimary,
+                        border = BorderStroke(0.8.dp, colorOutlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f)),
+                        shadowElevation = 0.dp,
+                        modifier = Modifier
+                            .heightIn(min = 40.dp)
+                            .graphicsLayer {
+                                scaleX = unitScale
+                                scaleY = unitScale
+                            }
+                            .testTag("unit_selector_button")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(
+                                text = selectedUnit.uppercase(),
+                                style = ExpressiveTypography.labelNumeral,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = colorPrimary,
+                                maxLines = 1
+                            )
+                            Icon(
+                                Icons.Rounded.ArrowDropDown,
+                                contentDescription = null,
+                                tint = colorPrimary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+
+                    DropdownMenu(
+                        expanded = showUnitMenu,
+                        onDismissRequest = { showUnitMenu = false },
+                        modifier = Modifier.background(colorSurfaceContainer)
+                    ) {
+                        listOf(
+                            "mm" to tr("unit_mm"),
+                            "cm" to tr("unit_cm"),
+                            "m" to tr("unit_meter"),
+                            "in" to tr("unit_inch"),
+                            "ft" to tr("unit_ft"),
+                            "yd" to tr("unit_yd")
+                        ).forEach { (unitCode, label) ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        label,
+                                        fontWeight = if (selectedUnit == unitCode) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (selectedUnit == unitCode) colorPrimary else colorOnSurface
+                                    )
+                                },
+                                onClick = {
+                                    viewModel.setSelectedUnit(unitCode)
+                                    showUnitMenu = false
+                                },
+                                leadingIcon = if (selectedUnit == unitCode) {
+                                    { Icon(Icons.Rounded.Check, null, tint = colorPrimary) }
+                                } else null,
+                                modifier = Modifier.testTag("unit_menu_item_$unitCode")
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Right: Material 3 Expressive Connected Action Group (Torch · History · Settings)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                modifier = Modifier.wrapContentWidth()
+            ) {
+                val baseSurface = MaterialTheme.colorScheme.surface.copy(alpha = if (isDark) 0.78f else 0.92f)
+                val baseBorder = colorOutlineVariant.copy(alpha = if (isDark) 0.35f else 0.55f)
+
+                // 0: Torch Connected Action
+                val torchInteraction = remember { MutableInteractionSource() }
+                val isTorchPressed by torchInteraction.collectIsPressedAsState()
+                val torchShape = rememberExpressiveConnectedShape(
+                    index = 0,
+                    count = 3,
+                    isActive = isTorchOn || showTorchBrightnessMenu,
+                    isPressed = isTorchPressed,
+                    outerCorner = 20.dp,
+                    innerRestingCorner = 6.dp,
+                    innerActiveCorner = 16.dp,
+                    pressedOuterCorner = 12.dp
+                )
+                val torchBg by animateColorAsState(
+                    targetValue = if (isTorchOn) colorPrimary else baseSurface,
+                    animationSpec = ExpressiveMotion.effectsFast(),
+                    label = "torchConnectedBg"
+                )
+                val torchTint by animateColorAsState(
+                    targetValue = if (isTorchOn) colorOnPrimary else colorOnSurface,
+                    animationSpec = ExpressiveMotion.effectsFast(),
+                    label = "torchConnectedTint"
+                )
+                val torchScale by animateFloatAsState(
+                    targetValue = 1f,
+                    animationSpec = ExpressiveMotion.spatialFast(),
+                    label = "torchConnectedScale"
+                )
+
+                Box {
+                    Surface(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            if (!isTorchOn) {
+                                viewModel.toggleTorch(context)
+                            } else {
+                                showTorchBrightnessMenu = !showTorchBrightnessMenu
+                            }
+                        },
+                        interactionSource = torchInteraction,
+                        shape = torchShape,
+                        color = torchBg,
+                        border = if (isTorchOn) null else BorderStroke(0.8.dp, baseBorder),
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .size(42.dp)
+                            .graphicsLayer {
+                                scaleX = torchScale
+                                scaleY = torchScale
+                            }
+                            .testTag("flashlight_toggle_button")
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                if (isTorchOn) Icons.Rounded.FlashlightOn else Icons.Rounded.FlashlightOff,
+                                contentDescription = tr("topbar_torch_fill"),
+                                tint = torchTint,
+                                modifier = Modifier.size(19.dp)
+                            )
+                        }
+                    }
+
+                    DropdownMenu(
+                        expanded = showTorchBrightnessMenu,
+                        onDismissRequest = { showTorchBrightnessMenu = false },
+                        modifier = Modifier
+                            .background(colorSurfaceContainer)
+                            .widthIn(min = 220.dp)
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.LightMode,
+                                        contentDescription = null,
+                                        tint = colorPrimary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        tr("topbar_torch_brightness"),
+                                        color = colorOnSurface,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Text(
+                                    "${(torchBrightness * 100).toInt()}%",
+                                    style = ExpressiveTypography.labelNumeral,
+                                    color = colorPrimary,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+
+                            Slider(
+                                value = torchBrightness,
+                                onValueChange = { newVal ->
+                                    viewModel.setTorchBrightness(context, newVal)
+                                },
+                                valueRange = 0.2f..1.0f,
+                                steps = 3,
+                                colors = SliderDefaults.colors(
+                                    thumbColor = colorPrimary,
+                                    activeTrackColor = colorPrimary,
+                                    inactiveTrackColor = colorSurfaceVariant
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                listOf(
+                                    0.25f to "25%",
+                                    0.50f to "50%",
+                                    0.75f to "75%",
+                                    1.00f to "100%"
+                                ).forEachIndexed { idx, (level, label) ->
+                                    val isSelected = kotlin.math.abs(torchBrightness - level) < 0.12f
+                                    val chipShape = rememberExpressiveConnectedShape(
+                                        index = idx,
+                                        count = 4,
+                                        isActive = isSelected,
+                                        isPressed = false,
+                                        outerCorner = 12.dp,
+                                        innerRestingCorner = 4.dp,
+                                        innerActiveCorner = 10.dp
+                                    )
+                                    Surface(
+                                        color = if (isSelected) colorPrimary else colorSurfaceVariant,
+                                        shape = chipShape,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(chipShape)
+                                            .clickable {
+                                                viewModel.setTorchBrightness(context, level)
+                                            }
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Text(
+                                                text = label,
+                                                style = ExpressiveTypography.labelNumeral,
+                                                color = if (isSelected) colorOnPrimary else colorOnSurfaceVariant,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 5.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            HorizontalDivider(
+                                color = colorOutlineVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.padding(vertical = 4.dp)
+                            )
+
+                            Button(
+                                onClick = {
+                                    viewModel.turnOffTorch(context)
+                                    showTorchBrightnessMenu = false
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = colorError,
+                                    contentColor = colorOnError
+                                ),
+                                shape = RoundedCornerShape(14.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Rounded.FlashlightOff, null, Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text(tr("topbar_torch_off"), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+
+                // 1: History Connected Action
+                val historyInteraction = remember { MutableInteractionSource() }
+                val isHistoryPressed by historyInteraction.collectIsPressedAsState()
+                val historyShape = rememberExpressiveConnectedShape(
+                    index = 1,
+                    count = 3,
+                    isActive = false,
+                    isPressed = isHistoryPressed,
+                    outerCorner = 20.dp,
+                    innerRestingCorner = 6.dp,
+                    innerActiveCorner = 16.dp
+                )
+                val historyScale by animateFloatAsState(
+                    targetValue = 1f,
+                    animationSpec = ExpressiveMotion.spatialFast(),
+                    label = "historyConnectedScale"
+                )
+
+                Surface(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onShowHistoryClick()
+                    },
+                    interactionSource = historyInteraction,
+                    shape = historyShape,
+                    color = baseSurface,
+                    border = BorderStroke(0.8.dp, baseBorder),
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .size(42.dp)
+                        .graphicsLayer {
+                            scaleX = historyScale
+                            scaleY = historyScale
+                        }
+                        .testTag("top_history_button")
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.Rounded.History,
+                            contentDescription = tr("topbar_history"),
+                            tint = colorOnSurface,
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
+                }
+
+                // 2: Settings Connected Action
+                val settingsInteraction = remember { MutableInteractionSource() }
+                val isSettingsPressed by settingsInteraction.collectIsPressedAsState()
+                val settingsShape = rememberExpressiveConnectedShape(
+                    index = 2,
+                    count = 3,
+                    isActive = false,
+                    isPressed = isSettingsPressed,
+                    outerCorner = 20.dp,
+                    innerRestingCorner = 6.dp,
+                    innerActiveCorner = 16.dp,
+                    pressedOuterCorner = 12.dp
+                )
+                val settingsScale by animateFloatAsState(
+                    targetValue = 1f,
+                    animationSpec = ExpressiveMotion.spatialFast(),
+                    label = "settingsConnectedScale"
+                )
+
+                Surface(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onShowSettingsClick()
+                    },
+                    interactionSource = settingsInteraction,
+                    shape = settingsShape,
+                    color = baseSurface,
+                    border = BorderStroke(0.8.dp, baseBorder),
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .size(42.dp)
+                        .graphicsLayer {
+                            scaleX = settingsScale
+                            scaleY = settingsScale
+                        }
+                        .testTag("top_settings_button")
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.Rounded.Settings,
+                            contentDescription = tr("topbar_settings"),
+                            tint = colorOnSurface,
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        // 2. Video Recording Active HUD OR Detected AR Planes Indicator (never overlapping)
+        if (showStatusOrRecHud) {
+            if (isRecordingVideo) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.95f),
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    shape = CircleShape,
+                    border = BorderStroke(1.5.dp, Color(0xFFE53935)),
+                    shadowElevation = 0.dp
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .background(Color(0xFFE53935), CircleShape)
+                        )
+                        val mins = recordingSeconds / 60
+                        val secs = recordingSeconds % 60
+                        Text(
+                            text = String.format(java.util.Locale.US, "REC %02d:%02d", mins, secs),
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = tr("topbar_tap_shutter_stop"),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            } else {
+                ArDetectedPlanesIndicator(planesCount = planesCount)
+            }
+        }
+
+        // 3. Optional Extra Top HUD Content (Guidance Pill, Stability Warning Banner) stacked cleanly
+        extraTopHudContent?.invoke(this)
+    }
+}
+
+@Composable
+internal fun ArDetectedPlanesIndicator(
+    planesCount: Int,
+    modifier: Modifier = Modifier
+) {
+    if (planesCount <= 0) return
+
+    Surface(
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+        shape = CircleShape,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+        shadowElevation = 0.dp,
+        modifier = modifier
+            .animateContentSize(animationSpec = ExpressiveMotion.spatialDefault())
+            .testTag("ar_detected_planes_pill")
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 11.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Layers,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(13.dp)
+            )
+            Text(
+                text = tr("topbar_surface_detected"),
+                style = ExpressiveTypography.labelNumeral,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.Medium,
+                fontSize = 11.sp
+            )
+            Surface(
+                color = MaterialTheme.colorScheme.primaryContainer,
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Text(
+                    text = "×$planesCount",
+                    style = ExpressiveTypography.labelNumeral,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
+        }
+    }
+}

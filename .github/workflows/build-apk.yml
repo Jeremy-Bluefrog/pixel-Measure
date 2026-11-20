@@ -1,0 +1,89 @@
+name: Build & Release APK Automatically
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 檢出專案代碼 (Checkout)
+      uses: actions/checkout@v4
+
+    - name: 設定 JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+
+    - name: 準備 Keystore 簽名與環境檔 (.env)
+      run: |
+        if [ -f .env.example ]; then
+          cp .env.example .env
+        else
+          echo 'GEMINI_API_KEY="MY_GEMINI_API_KEY"' > .env
+        fi
+        if [ -f debug.keystore.base64 ]; then
+          base64 -d debug.keystore.base64 > debug.keystore || true
+        fi
+        if [ ! -f debug.keystore ]; then
+          keytool -genkey -v -keystore debug.keystore -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+        fi
+        cp debug.keystore app/debug.keystore || true
+        chmod +x gradlew || true
+
+    - name: 設定 Gradle 8.9 (相容 AGP 8.6.1)
+      uses: gradle/actions/setup-gradle@v3
+      with:
+        gradle-version: '8.9'
+
+    - name: 執行 Gradle 編譯 APK
+      run: |
+        echo "org.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8" > gradle.properties
+        echo "org.gradle.parallel=false" >> gradle.properties
+        echo "org.gradle.workers.max=1" >> gradle.properties
+        echo "kotlin.daemon.jvmargs=-Xmx1g" >> gradle.properties
+        echo "android.useAndroidX=true" >> gradle.properties
+        echo "android.enableJetifier=true" >> gradle.properties
+        echo "kotlin.code.style=official" >> gradle.properties
+        echo "android.nonTransitiveRClass=true" >> gradle.properties
+        echo "org.gradle.caching=false" >> gradle.properties
+        ./gradlew :app:assembleDebug --stacktrace --no-build-cache
+
+    - name: 上傳失敗日誌至 Github Branch
+      if: failure()
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git checkout -B build-failure-log
+        git add build_log.txt || true
+        git commit -m "Upload build failure log [skip ci]" || true
+        git push -f origin build-failure-log || true
+
+    - name: 更新 APK 至 build-outputs
+      continue-on-error: true
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        mkdir -p build-outputs
+        cp app/build/outputs/apk/debug/app-debug.apk build-outputs/app-debug.apk
+        git add -f build-outputs/app-debug.apk
+        if git diff --staged --quiet; then
+          echo "No changes in APK"
+        else
+          git commit -m "🤖 自動建置：GitHub Actions 產出最新 APK [skip ci]"
+          git push
+        fi
+
+    - name: 上傳 APK 至 GitHub Artifacts (隨時可下載)
+      uses: actions/upload-artifact@v4
+      with:
+        name: pixel-measure-app-debug
+        path: app/build/outputs/apk/debug/app-debug.apk
+        retention-days: 30

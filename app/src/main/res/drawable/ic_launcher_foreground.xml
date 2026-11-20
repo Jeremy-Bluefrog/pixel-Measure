@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Official Material 3 Rounded Square Foot icon centered inside 66dp adaptive safe zone -->
+    <group
+        android:translateX="28"
+        android:translateY="28"
+        android:scaleX="2.1667"
+        android:scaleY="2.1667">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M17.66,17.66l-1.06,1.06l-0.71,-0.71l1.06,-1.06l-1.94,-1.94l-1.06,1.06l-0.71,-0.71l1.06,-1.06l-1.94,-1.94l-1.06,1.06l-0.71,-0.71l1.06,-1.06l-1.94,-1.94l-1.06,1.06l-0.71,-0.71l1.06,-1.06L6.41,6.41C5.63,5.63 4.29,6.18 4.29,7.29v12.42c0,0.69 0.56,1.25 1.25,1.25h12.42c1.11,0 1.66,-1.34 0.88,-2.12L17.66,17.66zM7.29,17.96v-4.29l4.29,4.29H7.29z" />
+    </group>
+</vector>
