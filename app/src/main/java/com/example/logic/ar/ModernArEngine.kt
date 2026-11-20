@@ -17,6 +17,7 @@ import android.os.Handler
 import android.util.Log
 import android.util.Size
 import androidx.core.content.ContextCompat
+import com.example.logic.TranslationManager
 import com.example.ui.viewmodel.Point3D
 import com.google.ar.core.*
 import com.google.ar.core.exceptions.*
@@ -105,10 +106,13 @@ class ModernArEngine(private val context: Context) {
     var isSupported: Boolean = false
         private set
 
+    @Volatile
+    var currentLangCode: String = "zh-TW"
+
     private val _arCoreStatus = MutableStateFlow(ArCoreEngineStatus.UNSUPPORTED)
     val arCoreStatus: StateFlow<ArCoreEngineStatus> = _arCoreStatus.asStateFlow()
 
-    private val _arCoreStatusMessage = MutableStateFlow("正在檢查 Google ARCore 硬體狀態...")
+    private val _arCoreStatusMessage = MutableStateFlow(TranslationManager.getString("arcore_checking", currentLangCode))
     val arCoreStatusMessage: StateFlow<String> = _arCoreStatusMessage.asStateFlow()
 
     var is60FpsActive: Boolean = false
@@ -324,7 +328,7 @@ class ModernArEngine(private val context: Context) {
         ) {
             isSupported = false
             _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
-            _arCoreStatusMessage.value = "⚠️ 尚未安裝 Google Play Services for AR (com.google.ar.core)"
+            _arCoreStatusMessage.value = TranslationManager.getString("arcore_not_installed", currentLangCode)
             onResult?.invoke(ArCoreApk.Availability.SUPPORTED_NOT_INSTALLED)
             return
         }
@@ -336,30 +340,30 @@ class ModernArEngine(private val context: Context) {
                             playStoreInstallServiceBindFailed = true
                             isSupported = false
                             _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
-                            _arCoreStatusMessage.value = "⚠️ 尚未安裝 Google Play Services for AR (com.google.ar.core)"
+                            _arCoreStatusMessage.value = TranslationManager.getString("arcore_not_installed", currentLangCode)
                         }
                     }
                     ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE -> {
                         if (!isRobolectricEnvironment()) {
                             isSupported = false
                             _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
-                            _arCoreStatusMessage.value = "⚠️ 此裝置硬體不支援 Google ARCore"
+                            _arCoreStatusMessage.value = TranslationManager.getString("arcore_unsupported", currentLangCode)
                         }
                     }
                     ArCoreApk.Availability.SUPPORTED_NOT_INSTALLED -> {
                         isSupported = false
                         _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
-                        _arCoreStatusMessage.value = "⚠️ 尚未安裝 Google Play Services for AR (com.google.ar.core)"
+                        _arCoreStatusMessage.value = TranslationManager.getString("arcore_not_installed", currentLangCode)
                     }
                     ArCoreApk.Availability.SUPPORTED_APK_TOO_OLD -> {
                         isSupported = false
                         _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
-                        _arCoreStatusMessage.value = "⚠️ Google Play Services for AR 版本過舊，請更新"
+                        _arCoreStatusMessage.value = TranslationManager.getString("arcore_too_old", currentLangCode)
                     }
                     ArCoreApk.Availability.SUPPORTED_INSTALLED -> {
                         isSupported = true
                         if (_arCoreStatus.value != ArCoreEngineStatus.ACTIVE) {
-                            _arCoreStatusMessage.value = "Google ARCore 硬體已支援，準備啟動空間追蹤..."
+                            _arCoreStatusMessage.value = TranslationManager.getString("arcore_ready_pending", currentLangCode)
                         }
                     }
                     else -> {}
@@ -417,7 +421,7 @@ class ModernArEngine(private val context: Context) {
         if (!arCoreInstalled && (!canQueryPlayStoreForArCoreInstall(activity) || playStoreInstallServiceBindFailed)) {
             isSupported = false
             _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
-            _arCoreStatusMessage.value = "⚠️ 尚未安裝 Google Play Services for AR (com.google.ar.core)"
+            _arCoreStatusMessage.value = TranslationManager.getString("arcore_not_installed", currentLangCode)
             return false
         }
 
@@ -425,7 +429,7 @@ class ModernArEngine(private val context: Context) {
         if (availability == ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE && !isRobolectricEnvironment()) {
             isSupported = false
             _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
-            _arCoreStatusMessage.value = "⚠️ 此裝置硬體不支援 Google ARCore"
+            _arCoreStatusMessage.value = TranslationManager.getString("arcore_unsupported", currentLangCode)
             return false
         }
 
@@ -437,9 +441,9 @@ class ModernArEngine(private val context: Context) {
                 isSupported = false
                 _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
                 _arCoreStatusMessage.value = if (availability == ArCoreApk.Availability.SUPPORTED_APK_TOO_OLD) {
-                    "⚠️ Google Play Services for AR 版本過舊，請更新"
+                    TranslationManager.getString("arcore_too_old", currentLangCode)
                 } else {
-                    "⚠️ 尚未安裝 Google Play Services for AR (com.google.ar.core)"
+                    TranslationManager.getString("arcore_not_installed", currentLangCode)
                 }
                 return false
             }
@@ -450,26 +454,26 @@ class ModernArEngine(private val context: Context) {
                         installRequested = true
                         isSupported = false
                         _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
-                        _arCoreStatusMessage.value = "⚠️ 正在導向安裝或更新 Google Play Services for AR (com.google.ar.core)..."
+                        _arCoreStatusMessage.value = TranslationManager.getString("arcore_installing", currentLangCode)
                         false
                     }
                 }
             } catch (e: UnavailableUserDeclinedInstallationException) {
                 isSupported = false
                 _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
-                _arCoreStatusMessage.value = "⚠️ 使用者已取消安裝 Google Play Services for AR (com.google.ar.core)"
+                _arCoreStatusMessage.value = TranslationManager.getString("arcore_declined", currentLangCode)
                 false
             } catch (e: UnavailableDeviceNotCompatibleException) {
                 isSupported = false
                 _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
-                _arCoreStatusMessage.value = "⚠️ 此裝置硬體不相容 Google ARCore"
+                _arCoreStatusMessage.value = TranslationManager.getString("arcore_unsupported", currentLangCode)
                 false
             } catch (t: Throwable) {
                 Log.w("ModernArEngine", "requestInstall failed: ${t.message}")
                 playStoreInstallServiceBindFailed = true
                 isSupported = false
                 _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
-                _arCoreStatusMessage.value = "⚠️ 尚未安裝或需更新 Google Play Services for AR (com.google.ar.core)"
+                _arCoreStatusMessage.value = TranslationManager.getString("arcore_not_installed", currentLangCode)
                 false
             }
         }
@@ -500,7 +504,7 @@ class ModernArEngine(private val context: Context) {
             if (!arCoreInstalled && (!canQueryPlayStoreForArCoreInstall(context) || playStoreInstallServiceBindFailed)) {
                 isSupported = false
                 _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
-                _arCoreStatusMessage.value = "⚠️ 尚未安裝 Google Play Services for AR (com.google.ar.core)"
+                _arCoreStatusMessage.value = TranslationManager.getString("arcore_not_installed", currentLangCode)
                 Log.i("ModernArEngine", "ARCore package missing and Play Store InstallService unavailable; skipping ARCore Session creation.")
                 return null
             }
@@ -509,7 +513,7 @@ class ModernArEngine(private val context: Context) {
             if (availability == ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE && !isRobolectricEnvironment()) {
                 isSupported = false
                 _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
-                _arCoreStatusMessage.value = "⚠️ 此硬體不相容 Google ARCore"
+                _arCoreStatusMessage.value = TranslationManager.getString("arcore_unsupported", currentLangCode)
                 Log.w("ModernArEngine", "ArCoreApk reported UNSUPPORTED_DEVICE_NOT_CAPABLE.")
                 return null
             }
@@ -521,9 +525,9 @@ class ModernArEngine(private val context: Context) {
                 isSupported = false
                 _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
                 _arCoreStatusMessage.value = if (availability == ArCoreApk.Availability.SUPPORTED_APK_TOO_OLD) {
-                    "⚠️ Google Play Services for AR (com.google.ar.core) 版本過舊，請更新"
+                    TranslationManager.getString("arcore_too_old", currentLangCode)
                 } else {
-                    "⚠️ 尚未安裝 Google Play Services for AR (com.google.ar.core)"
+                    TranslationManager.getString("arcore_not_installed", currentLangCode)
                 }
                 Log.i("ModernArEngine", "ARCore not ready (installed=$arCoreInstalled, availability=$availability). Skipping Session creation.")
                 if (activity != null && !skipInstallPrompt &&
@@ -654,41 +658,45 @@ class ModernArEngine(private val context: Context) {
             hasNativeSessionResumed = false
             isSupported = true
             _arCoreStatus.value = ArCoreEngineStatus.ACTIVE
-            _arCoreStatusMessage.value = "Google ARCore 已就緒 (水平/垂直平面與深度追蹤)"
+            _arCoreStatusMessage.value = TranslationManager.getString("arcore_active", currentLangCode)
             Log.i("ModernArEngine", "Google ARCore Session configured: camId=$selectedCameraId, textureSize=$selectedCameraImageSize, fps=$selectedCameraFpsRange, depth=$isDepthModeActive, ahb=$isExposeHardwareBufferActive")
             return newSession
         } catch (e: UnavailableDeviceNotCompatibleException) {
             isSupported = false
             _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
-            _arCoreStatusMessage.value = "⚠️ 此硬體不相容 Google ARCore"
+            _arCoreStatusMessage.value = TranslationManager.getString("arcore_unsupported", currentLangCode)
             Log.w("ModernArEngine", "DeviceNotCompatible: ${e.message}")
             return null
         } catch (e: UnavailableArcoreNotInstalledException) {
             isSupported = false
             _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
-            _arCoreStatusMessage.value = "⚠️ 警告：尚未安裝 Google Play Services for AR (com.google.ar.core)"
+            _arCoreStatusMessage.value = TranslationManager.getString("arcore_not_installed", currentLangCode)
             Log.w("ModernArEngine", "ArcoreNotInstalled: ${e.message}")
             return null
         } catch (e: UnavailableApkTooOldException) {
             isSupported = false
             _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
-            _arCoreStatusMessage.value = "⚠️ 警告：Google Play Services for AR 版本過舊，請前往商店更新"
+            _arCoreStatusMessage.value = TranslationManager.getString("arcore_too_old", currentLangCode)
             Log.w("ModernArEngine", "ApkTooOld: ${e.message}")
             return null
         } catch (e: UnavailableSdkTooOldException) {
             isSupported = false
             _arCoreStatus.value = ArCoreEngineStatus.UNSUPPORTED
-            _arCoreStatusMessage.value = "⚠️ 警告：應用程式 ARCore SDK 版本不相容"
+            _arCoreStatusMessage.value = TranslationManager.getString("arcore_sdk_too_old", currentLangCode)
             return null
         } catch (e: UnavailableUserDeclinedInstallationException) {
             isSupported = false
             _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
-            _arCoreStatusMessage.value = "⚠️ 警告：使用者已取消安裝 ARCore"
+            _arCoreStatusMessage.value = TranslationManager.getString("arcore_declined", currentLangCode)
             return null
         } catch (t: Throwable) {
             Log.e("ModernArEngine", "ARCore Session init exception: ${t.message}", t)
             _arCoreStatus.value = ArCoreEngineStatus.ERROR
-            _arCoreStatusMessage.value = "⚠️ 警告：ARCore 初始化失敗 (${t.localizedMessage ?: "未知"})"
+            _arCoreStatusMessage.value = TranslationManager.formatString(
+                "arcore_init_failed_fmt",
+                currentLangCode,
+                t.localizedMessage ?: TranslationManager.getString("arcore_unknown", currentLangCode)
+            )
             isSupported = false
             return null
         } finally {
@@ -781,9 +789,9 @@ class ModernArEngine(private val context: Context) {
     fun requestInstallArCore(activity: Activity): Boolean {
         if (!canQueryPlayStoreForArCoreInstall(activity)) {
             _arCoreStatusMessage.value = if (isGooglePlayStoreAvailable(activity)) {
-                "⚠️ Play 商店安裝服務無法綁定，已嘗試開啟商店頁面"
+                TranslationManager.getString("arcore_play_store_redirect", currentLangCode)
             } else {
-                "裝置未安裝 Google Play 商店，無法自動安裝 ARCore"
+                TranslationManager.getString("arcore_no_play_store", currentLangCode)
             }
             Log.i("ModernArEngine", "Play Store InstallService unavailable on this device/emulator.")
             return if (isGooglePlayStoreAvailable(activity)) openArCorePlayStorePage(activity) else false
@@ -801,7 +809,7 @@ class ModernArEngine(private val context: Context) {
             }
         } catch (e: UnavailableUserDeclinedInstallationException) {
             _arCoreStatus.value = ArCoreEngineStatus.NEEDS_INSTALLATION
-            _arCoreStatusMessage.value = "⚠️ 使用者已取消安裝 ARCore"
+            _arCoreStatusMessage.value = TranslationManager.getString("arcore_declined", currentLangCode)
             false
         } catch (e: Throwable) {
             Log.w("ModernArEngine", "Error requesting ARCore install: ${e.message}")
@@ -886,10 +894,18 @@ class ModernArEngine(private val context: Context) {
         }
     }
 
+    private fun resetTransientMotionState() {
+        lastCameraPose = null
+        lastFrameTimeNs = 0L
+        smoothedSpeedMps = 0.05f
+        aimMissCounter = 0
+    }
+
     fun pause() {
         synchronized(arSessionLock) {
             isSessionResumed = false
             isTorchActive = false
+            resetTransientMotionState()
             if (!hasNativeSessionResumed) return
             hasNativeSessionResumed = false
             val curSession = session ?: return
@@ -916,6 +932,7 @@ class ModernArEngine(private val context: Context) {
     fun markSessionPaused() {
         isSessionResumed = false
         hasNativeSessionResumed = false
+        resetTransientMotionState()
     }
 
     fun reportRuntimeError(message: String) {
@@ -929,6 +946,7 @@ class ModernArEngine(private val context: Context) {
         synchronized(arSessionLock) {
             val curSession = session ?: return
             if (isSessionResumed && hasNativeSessionResumed) return
+            resetTransientMotionState()
             try {
                 if (isExposeHardwareBufferActive) {
                     if (viewportWidth > 0 && viewportHeight > 0) {
@@ -965,17 +983,21 @@ class ModernArEngine(private val context: Context) {
                 // Publish resumed state ONLY after resume + capture callback setup completes
                 isSessionResumed = true
                 _arCoreStatus.value = ArCoreEngineStatus.ACTIVE
-                _arCoreStatusMessage.value = "Google ARCore 已就緒 (水平/垂直平面與深度追蹤)"
+                _arCoreStatusMessage.value = TranslationManager.getString("arcore_active", currentLangCode)
                 Log.i("ModernArEngine", "ARCore session resumed successfully (ahb=$isExposeHardwareBufferActive).")
             } catch (e: CameraNotAvailableException) {
                 isSessionResumed = false
                 hasNativeSessionResumed = false
-                _arCoreStatusMessage.value = "⚠️ 相機暫時不可用，等待重新連線..."
+                _arCoreStatusMessage.value = TranslationManager.getString("arcore_cam_reconnecting", currentLangCode)
                 Log.w("ModernArEngine", "Camera not available for ARCore: ${e.message}")
             } catch (e: Exception) {
                 isSessionResumed = false
                 hasNativeSessionResumed = false
-                _arCoreStatusMessage.value = "⚠️ ARCore 啟動異常：${e.localizedMessage ?: e.javaClass.simpleName}"
+                _arCoreStatusMessage.value = TranslationManager.formatString(
+                    "arcore_resume_error_fmt",
+                    currentLangCode,
+                    e.localizedMessage ?: e.javaClass.simpleName
+                )
                 Log.e("ModernArEngine", "Failed to resume ARCore session", e)
             }
         }
@@ -1770,14 +1792,18 @@ class ModernArEngine(private val context: Context) {
 
         // Fast surface label inference from center hit test result
         val surfaceLabel = when {
-            centerHitResult?.planeType == Plane.Type.HORIZONTAL_UPWARD_FACING -> "水平地面/桌面"
-            centerHitResult?.planeType == Plane.Type.VERTICAL -> "垂直牆面"
-            centerHitResult?.planeType == Plane.Type.HORIZONTAL_DOWNWARD_FACING -> "天花板表面"
-            centerHitResult?.hitType == HitType.DEPTH_POINT -> "高精度深度表面"
+            centerHitResult?.planeType == Plane.Type.HORIZONTAL_UPWARD_FACING -> TranslationManager.getString("surf_horizontal", currentLangCode)
+            centerHitResult?.planeType == Plane.Type.VERTICAL -> TranslationManager.getString("surf_vertical", currentLangCode)
+            centerHitResult?.planeType == Plane.Type.HORIZONTAL_DOWNWARD_FACING -> TranslationManager.getString("surf_ceiling", currentLangCode)
+            centerHitResult?.hitType == HitType.DEPTH_POINT -> TranslationManager.getString("surf_depth_hi", currentLangCode)
             centerHitResult?.hitType == HitType.INSTANT_PLACEMENT && centerHitResult.isApproximatePlacement ->
-                "即時估測表面 (請緩慢移動對準)"
-            centerHitResult?.hitType == HitType.INSTANT_PLACEMENT -> "空間定位表面"
-            else -> if (isDepthModeActive && isDepthImageAvailable) "深度表面" else "空間特徵點"
+                TranslationManager.getString("surf_instant_approx", currentLangCode)
+            centerHitResult?.hitType == HitType.INSTANT_PLACEMENT -> TranslationManager.getString("surf_instant", currentLangCode)
+            else -> if (isDepthModeActive && isDepthImageAvailable) {
+                TranslationManager.getString("surf_depth", currentLangCode)
+            } else {
+                TranslationManager.getString("surf_features", currentLangCode)
+            }
         }
 
         // 1. Feature points count from PointCloud (throttled every 10 frames, deterministically closed)
@@ -1792,24 +1818,33 @@ class ModernArEngine(private val context: Context) {
         }
         val featurePointsCount = cachedFeaturePointsCount
 
-        // 2. Camera panning velocity estimation (m/s)
+        // 2. Camera panning velocity estimation (m/s) — only integrate when tracking is active
+        val isTracking = camera.trackingState == TrackingState.TRACKING
         val nowNs = frame.timestamp
-        val prevPose = lastCameraPose
-        val speed = if (prevPose != null && lastFrameTimeNs > 0 && nowNs > lastFrameTimeNs) {
-            val dt = (nowNs - lastFrameTimeNs) / 1_000_000_000.0f
-            val dx = pose.tx() - prevPose.tx()
-            val dy = pose.ty() - prevPose.ty()
-            val dz = pose.tz() - prevPose.tz()
-            val dist = kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
-            if (dt in 0.001f..0.5f) (dist / dt) else 0f
-        } else 0f
-        lastCameraPose = pose
-        lastFrameTimeNs = nowNs
+        val speed = if (isTracking) {
+            val prevPose = lastCameraPose
+            val s = if (prevPose != null && lastFrameTimeNs > 0 && nowNs > lastFrameTimeNs) {
+                val dt = (nowNs - lastFrameTimeNs) / 1_000_000_000.0f
+                val dx = pose.tx() - prevPose.tx()
+                val dy = pose.ty() - prevPose.ty()
+                val dz = pose.tz() - prevPose.tz()
+                val dist = kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
+                if (dt in 0.001f..0.5f) (dist / dt) else 0f
+            } else 0f
+            lastCameraPose = pose
+            lastFrameTimeNs = nowNs
+            s
+        } else {
+            lastCameraPose = null
+            lastFrameTimeNs = 0L
+            0f
+        }
         smoothedSpeedMps = smoothedSpeedMps * 0.75f + speed * 0.25f
 
         // 3. Multi-factor Stability & Confidence Calculation
-        val isTracking = camera.trackingState == TrackingState.TRACKING
         val failureReason = camera.trackingFailureReason
+        val isCameraUnavailable = failureReason == TrackingFailureReason.CAMERA_UNAVAILABLE ||
+            failureReason == TrackingFailureReason.BAD_STATE
         val isMotionExcessive = failureReason == TrackingFailureReason.EXCESSIVE_MOTION || smoothedSpeedMps > 0.55f
         val isFeatureDeficient = failureReason == TrackingFailureReason.INSUFFICIENT_FEATURES ||
                 (isTracking && featurePointsCount < 25 && cachedPlanes.isEmpty()) ||
@@ -1845,6 +1880,7 @@ class ModernArEngine(private val context: Context) {
         if (failureReason == TrackingFailureReason.EXCESSIVE_MOTION) score -= 0.30f
         if (failureReason == TrackingFailureReason.INSUFFICIENT_FEATURES) score -= 0.35f
         if (failureReason == TrackingFailureReason.INSUFFICIENT_LIGHT) score -= 0.25f
+        if (isCameraUnavailable) score -= 0.45f
 
         val clampedScore = score.coerceIn(0.05f, 0.99f)
         smoothedConfidence = smoothedConfidence * 0.80f + clampedScore * 0.20f
@@ -1856,14 +1892,15 @@ class ModernArEngine(private val context: Context) {
             else -> StabilityLevel.POOR
         }
 
-        val isDriftRisk = !isTracking || isMotionExcessive || isFeatureDeficient ||
+        val isDriftRisk = !isTracking || isCameraUnavailable || isMotionExcessive || isFeatureDeficient ||
                 stabilityLevel == StabilityLevel.LOW || stabilityLevel == StabilityLevel.POOR
 
         val warningMsg = when {
-            isFeatureDeficient -> "特徵點不足，請慢速平移相機"
-            isMotionExcessive -> "移動過快，請慢速平移相機"
-            isLightingDeficient -> "環境光線不足，建議開啟手電筒補光"
-            !isTracking -> "請將相機對準有紋理的地面，緩慢平移"
+            failureReason == TrackingFailureReason.CAMERA_UNAVAILABLE -> TranslationManager.getString("arcore_cam_reconnecting", currentLangCode)
+            isFeatureDeficient -> TranslationManager.getString("stab_banner_default", currentLangCode)
+            isMotionExcessive -> TranslationManager.getString("stab_warn_motion", currentLangCode)
+            isLightingDeficient -> TranslationManager.getString("stab_warn_light", currentLangCode)
+            !isTracking -> TranslationManager.getString("stab_warn_tracking", currentLangCode)
             else -> null
         }
 

@@ -116,6 +116,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                     if (matched != _currentLanguage.value) {
                         _currentLanguage.value = matched
                         prefs.edit().putString("selected_language", matched).apply()
+                        modernArEngine.currentLangCode = matched
                     }
                 }
             } catch (e: Exception) {
@@ -127,6 +128,10 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun setLanguage(langCode: String) {
         _currentLanguage.value = langCode
         prefs.edit().putString("selected_language", langCode).apply()
+        modernArEngine.currentLangCode = langCode
+        if (modernArEngine.session == null) {
+            _surfaceTypeAtCenter.value = tr("vm_surface_searching")
+        }
 
         // Synchronize to Android System LocaleManager on Android 13+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -170,11 +175,16 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 try {
                     context.startActivity(addNewTaskIfNeeded(Intent(Settings.ACTION_SETTINGS)))
                 } catch (_: Exception) {
-                    _toastMessage.tryEmit("無法開啟系統語言設定頁面")
+                    _toastMessage.tryEmit(tr("vm_cannot_open_lang_settings"))
                 }
             }
         }
     }
+
+    private fun tr(key: String): String = TranslationManager.getString(key, _currentLanguage.value)
+
+    private fun trFmt(key: String, vararg args: Any): String =
+        TranslationManager.formatString(key, _currentLanguage.value, *args)
 
     fun getString(key: String): String {
         return TranslationManager.getString(key, _currentLanguage.value)
@@ -392,7 +402,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     private val _detectedPlanes = MutableStateFlow<List<DetectedPlaneInfo>>(emptyList())
     val detectedPlanes: StateFlow<List<DetectedPlaneInfo>> = _detectedPlanes.asStateFlow()
 
-    private val _surfaceTypeAtCenter = MutableStateFlow("尋找空間特徵中...")
+    private val _surfaceTypeAtCenter = MutableStateFlow(TranslationManager.getString("vm_surface_searching", _currentLanguage.value))
     val surfaceTypeAtCenter: StateFlow<String> = _surfaceTypeAtCenter.asStateFlow()
 
     private val _isMeasurementAvailable = MutableStateFlow(false)
@@ -559,7 +569,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         if (enabled) {
             updateBatteryStatusAndEvaluate(showToast = true)
         } else {
-            _toastMessage.tryEmit("已關閉電量與省電模式自動情境調優")
+            _toastMessage.tryEmit(tr("vm_battery_opt_off"))
         }
         triggerHapticFeedback()
     }
@@ -619,7 +629,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         _dynamicColorEnabled.value = true
         prefs.edit().putBoolean("dynamic_color", true).apply()
         triggerHapticFeedback()
-        _toastMessage.tryEmit("已強制套用 M3 系統動態色彩 (Dynamic Color)")
+        _toastMessage.tryEmit(tr("vm_dynamic_color_forced"))
     }
 
     // Day/Night Theme Mode: "SYSTEM" (Follow system), "LIGHT" (Force Day), "DARK" (Force Night)
@@ -631,11 +641,11 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         prefs.edit().putString("theme_mode", mode).apply()
         triggerHapticFeedback()
         val label = when (mode) {
-            "LIGHT" -> "日間模式 (Light)"
-            "DARK" -> "夜間模式 (Dark)"
-            else -> "跟隨系統 (System)"
+            "LIGHT" -> tr("set_theme_light_short")
+            "DARK" -> tr("set_theme_dark_short")
+            else -> tr("set_theme_system_short")
         }
-        emitSettingToast("已切換顯示外觀：$label")
+        emitSettingToast(trFmt("vm_toast_theme_fmt", label))
     }
 
     // UI Customization Preferences (3D Reticle Styles: DOUBLE_RING, PRECISION_CROSSHAIR, MINIMAL_DOT, HOLOGRAPHIC_RADAR)
@@ -649,12 +659,12 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         prefs.edit().putString("reticle_style", style).apply()
         triggerHapticFeedback()
         val label = when (style) {
-            "PRECISION_CROSSHAIR" -> "高精十字準星"
-            "MINIMAL_DOT" -> "極簡圓點"
-            "HOLOGRAPHIC_RADAR" -> "全息雷達"
-            else -> "經典 3D 雙環"
+            "PRECISION_CROSSHAIR" -> tr("vm_reticle_crosshair")
+            "MINIMAL_DOT" -> tr("vm_reticle_dot")
+            "HOLOGRAPHIC_RADAR" -> tr("vm_reticle_radar")
+            else -> tr("vm_reticle_double")
         }
-        emitSettingToast("已切換 AR 準心樣式：$label")
+        emitSettingToast(trFmt("vm_toast_reticle_fmt", label))
     }
 
     // AR Accent Color Palette: DYNAMIC, PIXEL_BLUE, NEON_LIME, AMBER_GOLD, CORAL_ROSE
@@ -668,13 +678,13 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         prefs.edit().putString("ar_accent_palette", palette).apply()
         triggerHapticFeedback()
         val label = when (palette) {
-            "PIXEL_BLUE" -> "Pixel 亮藍"
-            "NEON_LIME" -> "工程螢光綠"
-            "AMBER_GOLD" -> "暖陽金橘"
-            "CORAL_ROSE" -> "高對比珊瑚紅"
-            else -> "跟隨系統動態色"
+            "PIXEL_BLUE" -> tr("vm_accent_blue")
+            "NEON_LIME" -> tr("vm_accent_lime")
+            "AMBER_GOLD" -> tr("vm_accent_amber")
+            "CORAL_ROSE" -> tr("vm_accent_coral")
+            else -> tr("vm_accent_dynamic")
         }
-        emitSettingToast("已套用 AR 標註強調色：$label")
+        emitSettingToast(trFmt("vm_toast_accent_fmt", label))
     }
 
     // Magnetic Vertex Snap Sensitivity in cm (0f = Off, 2.5f = Precision, 5.0f = Strong)
@@ -698,7 +708,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         _keepScreenOn.value = enabled
         prefs.edit().putBoolean("keep_screen_on", enabled).apply()
         triggerHapticFeedback()
-        emitSettingToast(if (enabled) "測量期間將保持螢幕恆亮" else "已允許螢幕依系統逾時休眠")
+        emitSettingToast(tr(if (enabled) "vm_toast_keep_on" else "vm_toast_keep_off"))
     }
 
     // Auto-Copy Measurement Value on Line Completion
@@ -709,7 +719,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         _autoCopyOnComplete.value = enabled
         prefs.edit().putBoolean("auto_copy_on_complete", enabled).apply()
         triggerHapticFeedback()
-        emitSettingToast(if (enabled) "完成測量後將自動複製數值到剪貼簿" else "已關閉自動複製測量數值")
+        emitSettingToast(tr(if (enabled) "vm_toast_autocopy_on" else "vm_toast_autocopy_off"))
     }
 
     // Ruler Dual-Unit Edge Display (false = cm on both sides, true = cm on left / inches on right)
@@ -720,7 +730,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         _rulerDualUnit.value = enabled
         prefs.edit().putBoolean("ruler_dual_unit", enabled).apply()
         triggerHapticFeedback()
-        emitSettingToast(if (enabled) "螢幕尺右側已切換為英吋 (in) 對照刻度" else "螢幕尺雙側皆顯示公分 (cm) 刻度")
+        emitSettingToast(tr(if (enabled) "vm_toast_dual_in" else "vm_toast_dual_cm"))
     }
 
     // Spirit Level Tolerance (degrees: 0.2f, 0.5f, 1.0f) & Acoustic Cue Default
@@ -761,7 +771,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         _hudStyle.value = style
         prefs.edit().putString("hud_style", style).apply()
         triggerHapticFeedback()
-        emitSettingToast("已套用 HUD 介面風格")
+        emitSettingToast(tr("vm_toast_hud_applied"))
     }
 
     // Extended Custom UI Preferences
@@ -773,11 +783,11 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         prefs.edit().putString("ar_font_size", size).apply()
         triggerHapticFeedback()
         val label = when (size) {
-            "COMPACT" -> "精簡 (12sp)"
-            "LARGE" -> "放大 (17sp)"
-            else -> "標準 (14sp)"
+            "COMPACT" -> tr("vm_font_compact")
+            "LARGE" -> tr("vm_font_large")
+            else -> tr("vm_font_standard")
         }
-        emitSettingToast("已調整 AR 空間標籤字體：$label")
+        emitSettingToast(trFmt("vm_toast_font_fmt", label))
     }
 
     private val _rulerTheme = MutableStateFlow(prefs.getString("ruler_theme", "MATERIAL_YOU") ?: "MATERIAL_YOU")
@@ -788,12 +798,12 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         prefs.edit().putString("ruler_theme", theme).apply()
         triggerHapticFeedback()
         val label = when (theme) {
-            "STEEL" -> "質感鋼鐵灰"
-            "NEON_CYAN" -> "霓光青黑"
-            "HIGH_CONTRAST" -> "高對比工程黃"
-            else -> "跟隨系統動態色"
+            "STEEL" -> tr("vm_ruler_steel")
+            "NEON_CYAN" -> tr("vm_ruler_cyan")
+            "HIGH_CONTRAST" -> tr("vm_ruler_contrast")
+            else -> tr("vm_ruler_dynamic")
         }
-        emitSettingToast("已更換螢幕直尺主題：$label")
+        emitSettingToast(trFmt("vm_toast_ruler_theme_fmt", label))
     }
 
     private val _uiCornerStyle = MutableStateFlow(prefs.getString("ui_corner_style", "ROUNDED") ?: "ROUNDED")
@@ -804,11 +814,11 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         prefs.edit().putString("ui_corner_style", style).apply()
         triggerHapticFeedback()
         val label = when (style) {
-            "PILL" -> "柔和膠囊"
-            "ANGULAR" -> "硬朗工業"
-            else -> "圓潤現代"
+            "PILL" -> tr("vm_corner_pill")
+            "ANGULAR" -> tr("vm_corner_angular")
+            else -> tr("vm_corner_rounded")
         }
-        emitSettingToast("已套用組件圓角風格：$label")
+        emitSettingToast(trFmt("vm_toast_corner_fmt", label))
     }
 
     private val _badgeOpacity = MutableStateFlow(prefs.getString("badge_opacity", "GLASS") ?: "GLASS")
@@ -819,11 +829,11 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         prefs.edit().putString("badge_opacity", opacity).apply()
         triggerHapticFeedback()
         val label = when (opacity) {
-            "SOLID" -> "95% 高顯色"
-            "CLEAR" -> "40% 極簡透視"
-            else -> "70% 柔和毛玻璃"
+            "SOLID" -> tr("vm_opacity_solid")
+            "CLEAR" -> tr("vm_opacity_clear")
+            else -> tr("vm_opacity_glass")
         }
-        emitSettingToast("已更新 AR 標註底框透明度：$label")
+        emitSettingToast(trFmt("vm_toast_opacity_fmt", label))
     }
 
     private val _gridOverlayStyle = MutableStateFlow(prefs.getString("grid_overlay_style", "OFF") ?: "OFF")
@@ -834,11 +844,11 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         prefs.edit().putString("grid_overlay_style", style).apply()
         triggerHapticFeedback()
         val label = when (style) {
-            "DOT_MATRIX" -> "3D 幾何點陣"
-            "OFF" -> "關閉輔助網格"
-            else -> "透視地面網格"
+            "DOT_MATRIX" -> tr("vm_grid_dot_matrix")
+            "OFF" -> tr("vm_grid_off")
+            else -> tr("vm_grid_perspective")
         }
-        emitSettingToast("已變更 AR 輔助網格：$label")
+        emitSettingToast(trFmt("vm_toast_grid_fmt", label))
     }
 
     // Customizable UI Button Size Scale (0.85f, 1.0f, 1.15f, 1.30f)
@@ -850,12 +860,12 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         prefs.edit().putFloat("ui_button_scale", scale).apply()
         triggerHapticFeedback()
         val label = when {
-            scale <= 0.88f -> "緊湊 (0.85x)"
-            scale in 0.95f..1.05f -> "標準 (1.0x)"
-            scale in 1.10f..1.20f -> "放大 (1.15x)"
-            else -> "特大 (1.30x)"
+            scale <= 0.88f -> tr("vm_btn_scale_compact")
+            scale in 0.95f..1.05f -> tr("vm_btn_scale_standard")
+            scale in 1.10f..1.20f -> tr("vm_btn_scale_large")
+            else -> tr("vm_btn_scale_xl")
         }
-        emitSettingToast("已變更 AR 操作按鈕大小：$label")
+        emitSettingToast(trFmt("vm_toast_btn_scale_fmt", label))
     }
 
     // Camera Aspect Ratio (4:3, 16:9, 1:1, FULL) - Default to FULL so no mask covers screen
@@ -876,12 +886,12 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             .apply()
         triggerHapticFeedback()
         val label = when (ratio) {
-            "16_9" -> "16:9 寬螢幕"
-            "1_1" -> "1:1 正方形"
-            "4_3" -> "4:3 標準"
-            else -> "全螢幕 (無遮罩)"
+            "16_9" -> tr("vm_aspect_16_9")
+            "1_1" -> tr("vm_aspect_1_1")
+            "4_3" -> tr("vm_aspect_4_3")
+            else -> tr("vm_aspect_full")
         }
-        emitSettingToast("已切換相機畫面比例：$label")
+        emitSettingToast(trFmt("vm_toast_aspect_fmt", label))
     }
 
     fun cycleCameraAspectRatio() {
@@ -901,7 +911,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun setCameraVideoMode(isVideo: Boolean) {
         _isCameraVideoMode.value = isVideo
         triggerHapticFeedback()
-        _toastMessage.tryEmit(if (isVideo) "已切換至【錄影模式】(點擊快門按鈕開始錄影)" else "已切換至【拍照模式】")
+        _toastMessage.tryEmit(tr(if (isVideo) "vm_toast_video_mode" else "vm_toast_photo_mode"))
     }
 
     fun toggleCameraVideoMode() {
@@ -916,7 +926,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         _useDisplayP3ColorSpace.value = enabled
         prefs.edit().putBoolean("use_display_p3", enabled).apply()
         triggerHapticFeedback()
-        emitSettingToast(if (enabled) "已啟用 Display P3 廣色域格式 (豐富鮮豔相片色彩)" else "已切換為 sRGB 標準色彩格式")
+        emitSettingToast(tr(if (enabled) "vm_toast_p3_on" else "vm_toast_p3_off"))
     }
 
     // Camera Lens Dirt & Smudge Detection Warning
@@ -928,7 +938,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         prefs.edit().putBoolean("lens_dirt_warning", enabled).apply()
         if (!enabled) _isLensSmudged.value = false
         triggerHapticFeedback()
-        emitSettingToast(if (enabled) "已開啟鏡頭髒污與指紋自動檢測警示" else "已關閉鏡頭髒污警示")
+        emitSettingToast(tr(if (enabled) "vm_toast_dirt_on" else "vm_toast_dirt_off"))
     }
 
     private val _isLensSmudged = MutableStateFlow(false)
@@ -1018,26 +1028,26 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         _isLensSmudged.value = true
         _simulatedAlert.value = null
         triggerHapticFeedback()
-        _toastMessage.tryEmit("已觸發鏡頭清潔提醒")
+        _toastMessage.tryEmit(tr("vm_toast_alert_lens"))
     }
 
     fun triggerLowLightAlert() {
         _dismissedLowLight.value = false
         _simulatedAlert.value = "LOW_LIGHT"
         triggerHapticFeedback()
-        _toastMessage.tryEmit("已觸發亮度不足提醒")
+        _toastMessage.tryEmit(tr("vm_toast_alert_light"))
     }
 
     fun triggerFastMovementAlert() {
         _simulatedAlert.value = "MOTION_EXCESSIVE"
         triggerHapticFeedback()
-        _toastMessage.tryEmit("已觸發移動過快提醒")
+        _toastMessage.tryEmit(tr("vm_toast_alert_motion"))
     }
 
     fun triggerLowFeatureAlert() {
         _simulatedAlert.value = "FEATURE_DEFICIENT"
         triggerHapticFeedback()
-        _toastMessage.tryEmit("已觸發特徵不足提醒")
+        _toastMessage.tryEmit(tr("vm_toast_alert_feature"))
     }
 
     fun dismissMovementWarning() {
@@ -1116,9 +1126,9 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         )
         triggerHapticFeedback()
         emitSettingToast(when (mode) {
-            "120Hz" -> "⚡ 已啟用 Pixel 120Hz Pro 級流暢顯示與極速預覽"
-            "60Hz" -> "已啟用 60Hz 高流暢預覽"
-            else -> "已切換至 30Hz 省電穩定幀率"
+            "120Hz" -> tr("vm_toast_fps_120")
+            "60Hz" -> tr("vm_toast_fps_60")
+            else -> tr("vm_toast_fps_30")
         })
     }
 
@@ -1137,7 +1147,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             highDef = enabled,
             maxFps = policy.targetFps
         )
-        emitSettingToast(if (enabled) "已啟用 Full HD 高畫質採樣" else "已切換至 720p 效能省電畫質")
+        emitSettingToast(tr(if (enabled) "vm_toast_hq_on" else "vm_toast_hq_off"))
     }
 
     // Vulkan 1.4 AR Hardware Accelerated Graphics Engine
@@ -1151,14 +1161,14 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun setVulkanGraphicsEnabled(enabled: Boolean) {
         isVulkanGraphicsEnabled.value = enabled
         prefs.edit().putBoolean("vulkan_graphics_enabled", enabled).apply()
-        emitSettingToast(if (enabled) "🚀 已啟用 Vulkan 3D 空間網格與線段硬件加速渲染" else "已切換至標準 Vulkan 渲染模式")
+        emitSettingToast(tr(if (enabled) "vm_toast_vulkan_on" else "vm_toast_vulkan_off"))
     }
 
     fun setSensorCorrectionEnabled(enabled: Boolean) {
         sensorCorrectionEnabled.value = enabled
         sensorCorrectionEngine.isSensorCorrectionEnabled = enabled
         prefs.edit().putBoolean("sensor_correction_enabled", enabled).apply()
-        emitSettingToast(if (enabled) "已啟用感應器融合校正" else "已關閉感應器校正")
+        emitSettingToast(tr(if (enabled) "vm_toast_sensor_on" else "vm_toast_sensor_off"))
     }
 
     fun setAntiJitterEnabled(enabled: Boolean) {
@@ -1219,7 +1229,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         rawDepthConfidenceEnabled.value = enabled
         modernArEngine.isRawDepthConfidenceFilterEnabled = enabled
         prefs.edit().putBoolean("raw_depth_confidence_enabled", enabled).apply()
-        emitSettingToast(if (enabled) "已啟用 Pixel Raw Depth 置信度過濾" else "已關閉 Raw Depth 置信度過濾")
+        emitSettingToast(tr(if (enabled) "vm_toast_raw_depth_on" else "vm_toast_raw_depth_off"))
     }
 
     fun setRawDepthConfidenceThreshold(threshold: Int) {
@@ -1234,14 +1244,14 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         scaleCalibrationFactor.value = clamped
         sensorCorrectionEngine.userScaleCalibrationFactor = clamped
         prefs.edit().putFloat("scale_calibration_factor", clamped).apply()
-        emitSettingToast("尺度校正係數已設定為：${"%.4f".format(Locale.US, clamped)}x")
+        emitSettingToast(trFmt("vm_toast_scale_fmt", "%.4f".format(Locale.US, clamped)))
     }
 
 
     fun calibrateSensors() {
         sensorCorrectionEngine.resetBarometerBase()
         triggerHapticFeedback()
-        _toastMessage.tryEmit("已重設氣壓與感應器基準高度")
+        _toastMessage.tryEmit(tr("vm_toast_alt_reset"))
     }
 
     /**
@@ -1298,13 +1308,13 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             suppressSettingToasts = false
         }
 
-        val prefix = if (isAutoTriggered) "🔋 智能電量調優：" else ""
         val profileLabel = when (profileKey) {
-            "PRO_PRECISION" -> "專業工程極限精密"
-            "POWER_SAVER" -> "省電長效極速"
-            else -> "日常智慧平衡"
+            "PRO_PRECISION" -> tr("vm_profile_pro")
+            "POWER_SAVER" -> tr("vm_profile_saver")
+            else -> tr("vm_profile_balanced")
         }
-        _toastMessage.tryEmit("${prefix}已套用「$profileLabel」情境模式")
+        val toastKey = if (isAutoTriggered) "vm_toast_profile_auto_fmt" else "vm_toast_profile_fmt"
+        _toastMessage.tryEmit(trFmt(toastKey, profileLabel))
         triggerHapticFeedback()
     }
 
@@ -1356,35 +1366,40 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             suppressSettingToasts = false
         }
         triggerHapticFeedback()
-        _toastMessage.tryEmit("已恢復原廠預設測量與系統設定")
+        _toastMessage.tryEmit(tr("vm_toast_defaults_restored"))
     }
 
     /**
      * 產生當前設定參數報告 (供複製或分享備份)
      */
     fun getSettingsSummaryReport(): String {
+        val onStr = tr("common_on")
+        val offStr = tr("common_off")
+        val nowStr = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
         return buildString {
-            appendLine("=== AR 測量儀器參數設定報告 ===")
-            appendLine("• 測量單位: ${_selectedUnit.value.uppercase()}")
-            appendLine("• AR 準心樣式: ${_reticleStyle.value}")
-            appendLine("• AR 強調色盤: ${_arAccentPalette.value}")
-            appendLine("• 測量線粗細: ${_lineThickness.value} dp")
-            appendLine("• 空間標籤字體: ${_arFontSize.value}")
-            appendLine("• 端點吸附靈敏度: ${_vertexSnapThresholdCm.value} cm")
-            appendLine("• 相機畫面比例: ${_cameraAspectRatio.value}")
-            appendLine("• 60 FPS 模式: ${if (highFpsModeEnabled.value) "開啟" else "關閉"}")
-            appendLine("• 超高清晰度採樣: ${if (highDefinitionQualityEnabled.value) "開啟" else "關閉"}")
-            appendLine("• 9軸防手震濾波: ${if (antiJitterEnabled.value) "開啟" else "關閉"}")
-            appendLine("• 空間尺度校準: ${String.format(java.util.Locale.US, "%.4fx", scaleCalibrationFactor.value)}")
-            appendLine("• 螢幕尺主題與係數: ${_rulerTheme.value} / ${String.format(java.util.Locale.US, "%.3fx", _rulerCalibration.value)}")
-            appendLine("• 垂直/水平正交吸附: ${if (orthogonalSnapEnabled.value) "開啟" else "關閉"}")
-            appendLine("• 點雲可視化: ${if (_showPointCloud.value) "開啟" else "關閉"}")
-            appendLine("• 對齊觸覺回饋: ${if (vibrateOnAlignment.value) "開啟" else "關閉"}")
-            appendLine("報告產生時間: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())}")
+            appendLine(tr("vm_rpt_header"))
+            appendLine(trFmt("vm_rpt_unit", _selectedUnit.value.uppercase()))
+            appendLine(trFmt("vm_rpt_reticle", _reticleStyle.value))
+            appendLine(trFmt("vm_rpt_palette", _arAccentPalette.value))
+            appendLine(trFmt("vm_rpt_thickness", _lineThickness.value.toString()))
+            appendLine(trFmt("vm_rpt_font", _arFontSize.value))
+            appendLine(trFmt("vm_rpt_snap", _vertexSnapThresholdCm.value.toString()))
+            appendLine(trFmt("vm_rpt_ratio", _cameraAspectRatio.value))
+            appendLine(trFmt("vm_rpt_fps60", if (highFpsModeEnabled.value) onStr else offStr))
+            appendLine(trFmt("vm_rpt_uhd", if (highDefinitionQualityEnabled.value) onStr else offStr))
+            appendLine(trFmt("vm_rpt_antijitter", if (antiJitterEnabled.value) onStr else offStr))
+            appendLine(trFmt("vm_rpt_scale", String.format(java.util.Locale.US, "%.4fx", scaleCalibrationFactor.value)))
+            appendLine(trFmt("vm_rpt_ruler", _rulerTheme.value, String.format(java.util.Locale.US, "%.3fx", _rulerCalibration.value)))
+            appendLine(trFmt("vm_rpt_ortho", if (orthogonalSnapEnabled.value) onStr else offStr))
+            appendLine(trFmt("vm_rpt_pointcloud", if (_showPointCloud.value) onStr else offStr))
+            appendLine(trFmt("vm_rpt_vibrate", if (vibrateOnAlignment.value) onStr else offStr))
+            appendLine(trFmt("vm_rpt_generated", nowStr))
         }
     }
 
     init {
+        modernArEngine.currentLangCode = _currentLanguage.value
+        modernArEngine.reportRuntimeError(tr("arcore_checking"))
         sensorCorrectionEngine.isSensorCorrectionEnabled = sensorCorrectionEnabled.value
         sensorCorrectionEngine.isAntiJitterEnabled = antiJitterEnabled.value
         sensorCorrectionEngine.isGravityAlignmentEnabled = gravityAlignmentEnabled.value
@@ -1441,7 +1456,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         if (policy.forceDisableTorch && _isTorchOn.value) {
             mainHandler.post {
                 turnOffTorch(app)
-                _toastMessage.tryEmit("機身溫度偏高，已自動暫停補光並切換至 30 FPS 散熱模式")
+                _toastMessage.tryEmit(tr("vm_toast_thermal_30fps"))
             }
         } else if (policy.tier == ThermalTier.THROTTLED) {
             Log.i("MeasureViewModel", "Pixel thermal throttle active: 30fps, depth off")
@@ -1494,6 +1509,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun hasPendingTapRequest(): Boolean = pendingHitTestQueue.get() != null
 
     private fun checkMeterMilestoneHaptic(distMeters: Double) {
+        if (_trackingStability.value.isDriftRisk) return
         val meterMark = distMeters.toInt()
         if (meterMark > 0 && meterMark != lastHapticMeterMark) {
             lastHapticMeterMark = meterMark
@@ -1612,10 +1628,12 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 finalTargetPoint = sensorCorrectedPoint
             }
 
+            var snapHapticEmittedThisFrame = false
             if (isFeatureSnapped) {
                 if (!_isSnapped.value) {
                     _isSnapped.value = true
                     triggerHapticFeedback(HapticType.SNAP)
+                    snapHapticEmittedThisFrame = true
                 }
             } else {
                 _isSnapped.value = false
@@ -1651,7 +1669,9 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             if (isMetricHit) {
                 if (!_isMeasurementAvailable.value) {
                     _isMeasurementAvailable.value = true
-                    triggerHapticFeedback(HapticType.SNAP)
+                    if (!snapHapticEmittedThisFrame) {
+                        triggerHapticFeedback(HapticType.SNAP)
+                    }
                 }
             } else if (_isMeasurementAvailable.value) {
                 _isMeasurementAvailable.value = false
@@ -1773,7 +1793,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                         point = namedP,
                         isClosingLine = isClosing,
                         successToast = toastText,
-                        overflowToast = "已達最大測量點上限 (256點)，請儲存或清除後再繼續",
+                        overflowToast = tr("vm_toast_max_pts_overflow"),
                         onOverflow = { try { namedP.anchor?.detach() } catch (_: Throwable) {} }
                     )
                 }
@@ -1795,12 +1815,12 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                             point = namedP,
                             isClosingLine = isClosing,
                             successToast = toastText,
-                            overflowToast = "已達最大測量點上限 (256點)"
+                            overflowToast = tr("vm_toast_max_pts")
                         )
                     }
                 } else {
                     mainHandler.post {
-                        _toastMessage.tryEmit("尚未鎖定空間平面，請稍微緩慢平移相機掃描表面")
+                        _toastMessage.tryEmit(tr("vm_toast_no_plane"))
                     }
                 }
             }
@@ -1967,7 +1987,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             try {
                 val clipboard = app.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
                 clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("Measure Result", formatted))
-                _toastMessage.tryEmit("$successToast · 已自動複製 ($formatted)")
+                _toastMessage.tryEmit(trFmt("vm_toast_autocopy_append_fmt", successToast, formatted))
             } catch (_: Throwable) {
                 _toastMessage.tryEmit(successToast)
             }
@@ -2102,7 +2122,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     fun requestHitTest(pixelX: Float? = null, pixelY: Float? = null) {
         val context = getApplication<Application>()
         if (!ModernArEngine.isArCorePackageInstalled(context)) {
-            _toastMessage.tryEmit("⚠️ 請先安裝 Google Play Services for AR (com.google.ar.core) 應用程式才能進行測量")
+            _toastMessage.tryEmit(tr("vm_toast_install_arcore"))
             return
         }
 
@@ -2122,13 +2142,13 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         }
 
         if (_isFrontCamera.value) {
-            _toastMessage.tryEmit("⚠️ Google ARCore 原生空間測量僅支援後置鏡頭")
+            _toastMessage.tryEmit(tr("vm_toast_back_cam_only"))
             return
         }
 
         if (modernArEngine.session == null) {
             _isMeasurementAvailable.value = false
-            _toastMessage.tryEmit("⚠️ Google Play Services for AR (ARCore) 尚未就緒，請確認裝置支援並重新偵測")
+            _toastMessage.tryEmit(tr("vm_toast_arcore_not_ready"))
             return
         }
 
@@ -2136,11 +2156,11 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         val stability = _trackingStability.value
         if (stability.isDriftRisk && (now - lastDriftWarningTimestampMs >= 3000L)) {
             lastDriftWarningTimestampMs = now
-            val warn = stability.warningMessage ?: "特徵點不足，請慢速平移相機"
-            _toastMessage.tryEmit("⚠️ $warn（避免測量偏移）")
+            val warn = stability.warningMessage ?: tr("stab_banner_default")
+            _toastMessage.tryEmit(trFmt("vm_toast_stab_warn_fmt", warn))
         }
         if (!modernArEngine.isSessionResumed) {
-            _toastMessage.tryEmit("AR 相機正在初始化，請稍候")
+            _toastMessage.tryEmit(tr("vm_toast_ar_init_wait"))
             return
         }
         pendingHitTestQueue.set(Pair(x, y))
@@ -2177,7 +2197,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         var isClosingPoint = false
         synchronized(pointsLock) {
             if (capturedPoints.size >= 256) {
-                _toastMessage.tryEmit("已達最大測量點上限 (256點)")
+                _toastMessage.tryEmit(tr("vm_toast_max_pts"))
                 return
             }
             saveUndoState()
@@ -2185,7 +2205,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             val charCode = ('A'.code + (nextIndex % 26)).toChar()
             val (labelText, toastText, isClosing) = buildPointPlacementMeta(_cameraSubMode.value, nextIndex, charCode)
             isClosingPoint = isClosing
-            toastToEmit = "$toastText（光學感測輔助）"
+            toastToEmit = trFmt("vm_toast_optical_assist_fmt", toastText)
             capturedPoints.add(finalPoint.copy(label = labelText))
             updateCapturedPointsSnapshotCache()
         }
@@ -2196,7 +2216,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             try {
                 val clipboard = app.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
                 clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("Measure Result", formatted))
-                _toastMessage.tryEmit("${toastToEmit} · 已自動複製 ($formatted)")
+                _toastMessage.tryEmit(trFmt("vm_toast_autocopy_append_fmt", toastToEmit ?: "", formatted))
             } catch (_: Throwable) {
                 toastToEmit?.let { _toastMessage.tryEmit(it) }
             }
@@ -2213,7 +2233,19 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             capturedPoints.toList()
         }
         undoStack.add(snapshot)
-        if (undoStack.size > 20) undoStack.removeAt(0)
+        if (undoStack.size > 20) {
+            val evicted = undoStack.removeAt(0)
+            val stillReferenced = HashSet<Anchor>().apply {
+                capturedPoints.forEach { it.anchor?.let(::add) }
+                undoStack.forEach { frame -> frame.forEach { it.anchor?.let(::add) } }
+            }
+            evicted.forEach { pt ->
+                val anchor = pt.anchor
+                if (anchor != null && anchor !in stillReferenced) {
+                    try { anchor.detach() } catch (_: Throwable) {}
+                }
+            }
+        }
     }
 
     fun undo() {
@@ -2243,56 +2275,57 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     private fun buildPointPlacementMeta(subMode: Int, nextIndex: Int, charCode: Char): Triple<String, String, Boolean> {
+        val charStr = charCode.toString()
         return when (subMode) {
             1 -> {
-                val label = "頂點${nextIndex + 1} $charCode"
+                val label = trFmt("vm_pt_vertex_fmt", nextIndex + 1, charStr)
                 val toast = when (nextIndex) {
-                    0 -> "已設定面積第 1 頂點 ($charCode)，請瞄準第 2 頂點"
-                    1 -> "已設定面積第 2 頂點 ($charCode)，請瞄準第 3 頂點以計算面積"
-                    else -> "面積頂點 ${nextIndex + 1} ($charCode) 已加入（可繼續加點或儲存）"
+                    0 -> trFmt("vm_toast_area_p1_fmt", charStr)
+                    1 -> trFmt("vm_toast_area_p2_fmt", charStr)
+                    else -> trFmt("vm_toast_area_pn_fmt", nextIndex + 1, charStr)
                 }
                 Triple(label, toast, nextIndex >= 2)
             }
             2 -> {
                 val isClosing = nextIndex % 2 == 1
-                val label = if (isClosing) "高度頂點 $charCode" else "高度基準 $charCode"
-                val toast = if (isClosing) "垂直高度測量完成" else "已設定地面基準點 ($charCode)，請向上瞄準頂點"
+                val label = trFmt(if (isClosing) "vm_pt_height_top_fmt" else "vm_pt_height_base_fmt", charStr)
+                val toast = if (isClosing) tr("vm_toast_height_done") else trFmt("vm_toast_height_base_fmt", charStr)
                 Triple(label, toast, isClosing)
             }
             3 -> {
                 val isClosing = nextIndex % 2 == 1
-                val label = if (isClosing) "對角終點 $charCode" else "對角起點 $charCode"
-                val toast = if (isClosing) "3D 體積邊界盒測量完成" else "已設定對角起點 ($charCode)，請瞄準斜對角頂點"
+                val label = trFmt(if (isClosing) "vm_pt_box_end_fmt" else "vm_pt_box_start_fmt", charStr)
+                val toast = if (isClosing) tr("vm_toast_box_done") else trFmt("vm_toast_box_start_fmt", charStr)
                 Triple(label, toast, isClosing)
             }
             4 -> {
-                val label = "圓周點${nextIndex + 1} $charCode"
+                val label = trFmt("vm_pt_circle_fmt", nextIndex + 1, charStr)
                 val toast = when (nextIndex) {
-                    0 -> "已標記圓周第 1 點 ($charCode)，請瞄準第 2 點"
-                    1 -> "已標記圓周第 2 點 ($charCode)，可繼續標記第 3 點精確擬合 3D 圓"
-                    else -> "3D 圓形測量完成（三點定圓）"
+                    0 -> trFmt("vm_toast_circle_p1_fmt", charStr)
+                    1 -> trFmt("vm_toast_circle_p2_fmt", charStr)
+                    else -> tr("vm_toast_circle_done")
                 }
                 Triple(label, toast, nextIndex >= 2)
             }
             5 -> {
                 val label = when (nextIndex) {
-                    0 -> "第1邊端點 $charCode"
-                    1 -> "夾角頂點 $charCode"
-                    else -> "第2邊端點 $charCode"
+                    0 -> trFmt("vm_pt_angle_leg1_fmt", charStr)
+                    1 -> trFmt("vm_pt_angle_vertex_fmt", charStr)
+                    else -> trFmt("vm_pt_angle_leg2_fmt", charStr)
                 }
                 val toast = when (nextIndex) {
-                    0 -> "已設定第 1 邊端點 ($charCode)，請瞄準夾角頂點"
-                    1 -> "已設定夾角頂點 ($charCode)，請瞄準第 2 邊端點"
-                    else -> "3D 空間夾角測量完成"
+                    0 -> trFmt("vm_toast_angle_p1_fmt", charStr)
+                    1 -> trFmt("vm_toast_angle_p2_fmt", charStr)
+                    else -> tr("vm_toast_angle_done")
                 }
                 Triple(label, toast, nextIndex >= 2)
             }
             else -> {
                 val lineNum = (nextIndex / 2) + 1
                 val isClosing = nextIndex % 2 == 1
-                val role = if (isClosing) "終點" else "起點"
-                val label = "線段$lineNum $role $charCode"
-                val toast = if (isClosing) "線段 $lineNum 完成（兩點成一線）" else "已設定線段 $lineNum 起點 ($charCode)，請瞄準終點"
+                val role = tr(if (isClosing) "vm_role_end" else "vm_role_start")
+                val label = trFmt("vm_pt_line_fmt", lineNum, role, charStr)
+                val toast = if (isClosing) trFmt("vm_toast_line_done_fmt", lineNum) else trFmt("vm_toast_line_start_fmt", lineNum, charStr)
                 Triple(label, toast, isClosing)
             }
         }
@@ -2381,9 +2414,9 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 _isCameraSimulationActive.value = false
                 _isMeasurementAvailable.value = false
                 if (!ModernArEngine.isArCorePackageInstalled(app)) {
-                    _toastMessage.tryEmit("⚠️ 請先安裝 Google Play Services for AR (com.google.ar.core)")
+                    _toastMessage.tryEmit(tr("arcore_not_installed"))
                 } else {
-                    _toastMessage.tryEmit("⚠️ 相機硬體無法啟動，無法進行 Google ARCore 原生測量")
+                    _toastMessage.tryEmit(tr("vm_toast_camera_start_fail"))
                 }
                 Log.w("MeasureViewModel", "Camera unavailable callback invoked; strict ARCore gating active.")
             }
@@ -2547,10 +2580,10 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             _isTorchOn.value = newState
             triggerHapticFeedback()
             val percent = (brightness * 100).toInt()
-            _toastMessage.tryEmit(if (newState) "已開啟手電筒補光 (${percent}%)" else "已關閉手電筒")
+            _toastMessage.tryEmit(if (newState) trFmt("vm_toast_torch_on_fmt", percent) else tr("vm_toast_torch_off"))
         } else {
             _isTorchOn.value = false
-            _toastMessage.tryEmit("⚠️ 目前相機模式或硬體不支援手電筒補光")
+            _toastMessage.tryEmit(tr("vm_toast_torch_unsupported"))
         }
     }
 
@@ -2686,33 +2719,33 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             val (value, typeStr, autoTitle) = when (effectiveType) {
                 "AREA" -> {
                     val area = calculatePolygonArea()
-                    Triple(area, "AREA", "AR 自動偵測面積 (${formatArea(area, unit)}) · $timeStr")
+                    Triple(area, "AREA", trFmt("vm_rec_area_fmt", formatArea(area, unit), timeStr))
                 }
                 "HEIGHT" -> {
                     val height = calculateVerticalHeight()
-                    Triple(height, "HEIGHT", "AR 自動偵測高程 (${formatLength(height, unit)}) · $timeStr")
+                    Triple(height, "HEIGHT", trFmt("vm_rec_height_fmt", formatLength(height, unit), timeStr))
                 }
                 "VOLUME" -> {
                     val box = calculateBoundingBox()
-                    Triple(box.volume, "VOLUME", "3D 空間體積 (${formatVolume(box.volume, unit)}) · $timeStr")
+                    Triple(box.volume, "VOLUME", trFmt("vm_rec_vol_fmt", formatVolume(box.volume, unit), timeStr))
                 }
                 "CIRCLE" -> {
                     val circle = calculateCircle()
                     val d = circle?.diameter ?: 0.0
-                    Triple(d, "CIRCLE", "AR 圓形直徑 (${formatLength(d, unit)}) · $timeStr")
+                    Triple(d, "CIRCLE", trFmt("vm_rec_circle_fmt", formatLength(d, unit), timeStr))
                 }
                 "ANGLE" -> {
                     val angle = calculateAngle()
-                    Triple(angle, "ANGLE", "3D 空間夾角 (${Math.round(angle)}°) · $timeStr")
+                    Triple(angle, "ANGLE", trFmt("vm_rec_angle_fmt", Math.round(angle), timeStr))
                 }
                 else -> {
                     val dist = calculateTotalDistance()
                     val lineCount = getCapturedPointsSnapshot().size / 2
                     val titleDesc = when {
-                        lineCount > 1 -> "AR 測量 ($lineCount 條獨立線段 · 總長 ${formatLength(dist, unit)}) · $timeStr"
-                        dist > 0.0 -> "AR 兩點測量線段 (${formatLength(dist, unit)}) · $timeStr"
-                        !videoPath.isNullOrBlank() -> "AR 實境測量錄影 · $timeStr"
-                        else -> "AR 實境測量照片 · $timeStr"
+                        lineCount > 1 -> trFmt("vm_rec_lines_fmt", lineCount, formatLength(dist, unit), timeStr)
+                        dist > 0.0 -> trFmt("vm_rec_line_fmt", formatLength(dist, unit), timeStr)
+                        !videoPath.isNullOrBlank() -> trFmt("vm_rec_video_fmt", timeStr)
+                        else -> trFmt("vm_rec_photo_fmt", timeStr)
                     }
                     Triple(dist, "CAM", titleDesc)
                 }
@@ -2738,14 +2771,14 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                         repository.insert(record)
                     }
                     _lastSavedRecord.value = record
-                    _toastMessage.tryEmit("已自動儲存紀錄: $title")
+                    _toastMessage.tryEmit(trFmt("vm_toast_auto_saved_fmt", title))
                     onSaved?.invoke(record)
                     if (value > 0.0) {
                         clearActivePoints()
                     }
                     triggerHapticFeedback()
                 } catch (e: Exception) {
-                    _toastMessage.tryEmit("儲存失敗: ${e.localizedMessage}")
+                    _toastMessage.tryEmit(trFmt("vm_toast_save_failed_fmt", e.localizedMessage ?: ""))
                 }
             }
         }
@@ -2766,7 +2799,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             "AREA" -> formatArea(calculatePolygonArea(), unit)
             "HEIGHT" -> formatLength(calculateVerticalHeight(), unit)
             "VOLUME" -> formatVolume(calculateBoundingBox().volume, unit)
-            "CIRCLE" -> "直徑 ${formatLength(calculateCircle()?.diameter ?: 0.0, unit)}"
+            "CIRCLE" -> trFmt("ar_summary_diam_fmt", formatLength(calculateCircle()?.diameter ?: 0.0, unit))
             "ANGLE" -> "${Math.round(calculateAngle())}°"
             else -> formatLength(calculateTotalDistance(), unit)
         }
@@ -2783,7 +2816,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             val timeStr = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
             val meters = cmVal / 100.0
             val formatted = String.format(java.util.Locale.US, "%.2f cm", cmVal)
-            val title = if (!customTitle.isNullOrBlank()) customTitle else "螢幕尺測量 ($formatted) · $timeStr"
+            val title = if (!customTitle.isNullOrBlank()) customTitle else trFmt("vm_rec_ruler_fmt", formatted, timeStr)
             val record = MeasureRecord(
                 title = title,
                 value = meters,
@@ -2797,11 +2830,11 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                     repository.insert(record)
                 }
                 _lastSavedRecord.value = record
-                _toastMessage.tryEmit("已自動儲存: $title")
+                _toastMessage.tryEmit(trFmt("vm_toast_auto_saved_fmt", title))
                 onSaved?.invoke(record)
                 triggerHapticFeedback(HapticType.DOUBLE)
             } catch (e: Exception) {
-                _toastMessage.tryEmit("儲存失敗: ${e.localizedMessage}")
+                _toastMessage.tryEmit(trFmt("vm_toast_save_failed_fmt", e.localizedMessage ?: ""))
             }
         }
     }
@@ -2818,9 +2851,13 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
             val timeStr = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
             val dev = kotlin.math.sqrt((pitchDeg * pitchDeg + rollDeg * rollDeg).toDouble())
             val isLevel = dev <= toleranceDeg
-            val statusStr = if (isLevel) "水平精確 (±${toleranceDeg}°)" else String.format(java.util.Locale.US, "偏差 %.1f°", dev)
-            val title = "水準儀測量 ($modeName · $statusStr) · $timeStr"
-            val notes = customNotes ?: "高精水準儀測量紀錄 (容差: ±${toleranceDeg}°)"
+            val statusStr = if (isLevel) {
+                trFmt("vm_rec_level_ok_fmt", toleranceDeg.toString())
+            } else {
+                trFmt("vm_rec_level_dev_fmt", dev)
+            }
+            val title = trFmt("vm_rec_level_title_fmt", modeName, statusStr, timeStr)
+            val notes = customNotes ?: trFmt("vm_rec_level_notes_fmt", toleranceDeg.toString())
             val record = MeasureRecord(
                 title = title,
                 value = dev,
@@ -2834,11 +2871,11 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                     repository.insert(record)
                 }
                 _lastSavedRecord.value = record
-                _toastMessage.tryEmit("已儲存紀錄: $title")
+                _toastMessage.tryEmit(trFmt("vm_toast_saved_fmt", title))
                 onSaved?.invoke(record)
                 triggerHapticFeedback(HapticType.DOUBLE)
             } catch (e: Exception) {
-                _toastMessage.tryEmit("儲存失敗: ${e.localizedMessage}")
+                _toastMessage.tryEmit(trFmt("vm_toast_save_failed_fmt", e.localizedMessage ?: ""))
             }
         }
     }
@@ -2850,9 +2887,9 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 withContext(Dispatchers.IO) {
                     repository.insert(updated)
                 }
-                _toastMessage.tryEmit("備註已更新")
+                _toastMessage.tryEmit(tr("vm_toast_notes_updated"))
             } catch (e: Exception) {
-                _toastMessage.tryEmit("更新備註失敗: ${e.localizedMessage}")
+                _toastMessage.tryEmit(trFmt("vm_toast_notes_failed_fmt", e.localizedMessage ?: ""))
             }
         }
     }
@@ -2953,10 +2990,33 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         super.onCleared()
+        mainHandler.removeCallbacksAndMessages(null)
         try {
             getApplication<Application>().unregisterReceiver(batteryReceiver)
         } catch (_: Exception) {}
         turnOffTorch(getApplication())
+        synchronized(pointsLock) {
+            val detached = HashSet<Anchor>()
+            capturedPoints.forEach { pt ->
+                pt.anchor?.let { a ->
+                    if (detached.add(a)) {
+                        try { a.detach() } catch (_: Throwable) {}
+                    }
+                }
+            }
+            undoStack.forEach { frame ->
+                frame.forEach { pt ->
+                    pt.anchor?.let { a ->
+                        if (detached.add(a)) {
+                            try { a.detach() } catch (_: Throwable) {}
+                        }
+                    }
+                }
+            }
+            capturedPoints.clear()
+            undoStack.clear()
+            updateCapturedPointsSnapshotCache()
+        }
         vulkanGraphicsPipeline.release()
         modernArEngine.pause()
         try {

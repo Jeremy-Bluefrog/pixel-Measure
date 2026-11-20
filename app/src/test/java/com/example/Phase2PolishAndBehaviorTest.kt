@@ -37,7 +37,7 @@ import org.robolectric.annotation.Config
 import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [35], qualifiers = "w411dp-h891dp")
+@Config(sdk = [35], qualifiers = "zh-rTW-w411dp-h891dp")
 class Phase2PolishAndBehaviorTest {
 
     @get:Rule

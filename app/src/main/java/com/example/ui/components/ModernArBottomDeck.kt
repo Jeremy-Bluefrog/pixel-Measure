@@ -419,7 +419,8 @@ fun ModernArBottomDeck(
                                                 glView = currentVulkan,
                                                 aspectRatio = cameraAspectRatio,
                                                 useDisplayP3 = useDisplayP3ColorSpace,
-                                                primaryMeasurement = viewModel.getPrimaryMeasurementDisplayString()
+                                                primaryMeasurement = viewModel.getPrimaryMeasurementDisplayString(),
+                                                langCode = currentLang
                                             ) { savedPath ->
                                                 if (cameraBmp != null && !cameraBmp.isRecycled) {
                                                     try { cameraBmp.recycle() } catch (_: Throwable) {}

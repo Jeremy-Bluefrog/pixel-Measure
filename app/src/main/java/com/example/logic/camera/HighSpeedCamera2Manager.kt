@@ -340,15 +340,47 @@ class HighSpeedCamera2Manager(private val context: Context) {
         }
     }
 
+    @Volatile
+    private var consecutiveCaptureFailures = 0
+
     private val captureCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(
             session: CameraCaptureSession,
             request: CaptureRequest,
             result: TotalCaptureResult
         ) {
+            consecutiveCaptureFailures = 0
             countFrameAndCalculateFps()
             if (captureResultCounter++ % 6 == 0) {
                 lowLightBoostEngine.onCaptureResult(result)
+            }
+        }
+
+        override fun onCaptureFailed(
+            session: CameraCaptureSession,
+            request: CaptureRequest,
+            failure: CaptureFailure
+        ) {
+            if (isClosed || isSwitchingCamera.get()) return
+            if (failure.reason == CaptureFailure.REASON_ERROR) {
+                val count = ++consecutiveCaptureFailures
+                if (count % 10 == 1) {
+                    Log.w(TAG, "Camera2 frame capture error (consecutive=$count, frame=${failure.frameNumber})")
+                }
+                if (count >= 30) {
+                    consecutiveCaptureFailures = 0
+                    val expectedGen = cameraGeneration.get()
+                    val tv = activeTextureView?.get()
+                    Log.e(TAG, "Persistent Camera2 HAL capture failure streak ($count frames); attempting clean reopen.")
+                    mainHandler.post {
+                        if (!isClosed && cameraGeneration.get() == expectedGen && tv != null && tv.isAvailable) {
+                            closeCamera()
+                            openCameraAndStartSession(tv)
+                        } else if (!isClosed && cameraGeneration.get() == expectedGen) {
+                            onCameraUnavailable?.invoke()
+                        }
+                    }
+                }
             }
         }
     }
@@ -941,6 +973,7 @@ class HighSpeedCamera2Manager(private val context: Context) {
         arResumeTriggeredForSession.set(false)
         isSwitchingCamera.set(false)
         openRetryCount = 0
+        consecutiveCaptureFailures = 0
         mainHandler.removeCallbacksAndMessages(null)
         try {
             backgroundHandler?.removeCallbacksAndMessages(null)

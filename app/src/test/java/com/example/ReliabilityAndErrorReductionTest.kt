@@ -3,9 +3,16 @@ package com.example
 import android.app.Application
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
+import android.os.PowerManager
 import androidx.test.core.app.ApplicationProvider
+import com.example.logic.ModernHapticFeedback
+import com.example.logic.PixelPerformanceMonitor
+import com.example.logic.ThermalTier
 import com.example.logic.sensor.SensorFusionCorrectionEngine
+import com.example.logic.vulkan.VulkanArSceneView
 import com.example.logic.vulkan.VulkanFrameSyncManager
+import com.example.logic.vulkan.VulkanRenderState
+import com.example.ui.viewmodel.HapticType
 import com.example.ui.viewmodel.MeasureViewModel
 import com.example.ui.viewmodel.Point3D
 import kotlinx.coroutines.async
@@ -123,6 +130,7 @@ class ReliabilityAndErrorReductionTest {
     fun `applyMeasurementProfile emits single consolidated toast instead of toast storm`() = runBlocking {
         val app = ApplicationProvider.getApplicationContext<Application>()
         val viewModel = MeasureViewModel(app)
+        viewModel.setLanguage("zh-TW")
 
         val collected = mutableListOf<String>()
         val collectJob = launch {
@@ -241,5 +249,141 @@ class ReliabilityAndErrorReductionTest {
         assertEquals("content://media/external/video/media/99", attachedUri?.toString())
 
         com.example.logic.ShareUtility.sharePdfReport(app, record)
+    }
+
+    @Test
+    fun `PixelPerformanceMonitor predictive thermal headroom steps down proactively before severe throttling`() {
+        val optimal = PixelPerformanceMonitor.evaluateThermalPolicyWithHeadroom(
+            thermalStatus = PowerManager.THERMAL_STATUS_NONE,
+            thermalHeadroom = 0.72f,
+            userHighFps = true,
+            userHighDef = true,
+            targetRefreshRate = 120
+        )
+        assertEquals(ThermalTier.OPTIMAL, optimal.tier)
+        assertEquals(120, optimal.targetFps)
+        assertTrue(optimal.allowDepth)
+        assertTrue(optimal.allowHighRes)
+        assertFalse(optimal.forceDisableTorch)
+
+        // Proactive step-down at >= 0.85f even if OS thermalStatus still reports NONE
+        val warmProactive = PixelPerformanceMonitor.evaluateThermalPolicyWithHeadroom(
+            thermalStatus = PowerManager.THERMAL_STATUS_NONE,
+            thermalHeadroom = 0.88f,
+            userHighFps = true,
+            userHighDef = true,
+            targetRefreshRate = 120
+        )
+        assertEquals(ThermalTier.WARM, warmProactive.tier)
+        assertEquals(60, warmProactive.targetFps)
+        assertTrue(warmProactive.allowDepth)
+        assertFalse(warmProactive.allowHighRes)
+        assertFalse(warmProactive.forceDisableTorch)
+
+        // Imminent / severe threshold at >= 1.00f forces emergency cool-down
+        val throttledProactive = PixelPerformanceMonitor.evaluateThermalPolicyWithHeadroom(
+            thermalStatus = PowerManager.THERMAL_STATUS_NONE,
+            thermalHeadroom = 1.02f,
+            userHighFps = true,
+            userHighDef = true,
+            targetRefreshRate = 120
+        )
+        assertEquals(ThermalTier.THROTTLED, throttledProactive.tier)
+        assertEquals(30, throttledProactive.targetFps)
+        assertFalse(throttledProactive.allowDepth)
+        assertTrue(throttledProactive.forceDisableTorch)
+
+        // NaN headroom falls back cleanly to thermalStatus
+        val nanFallback = PixelPerformanceMonitor.evaluateThermalPolicyWithHeadroom(
+            thermalStatus = PowerManager.THERMAL_STATUS_NONE,
+            thermalHeadroom = Float.NaN,
+            userHighFps = true,
+            userHighDef = true,
+            targetRefreshRate = 60
+        )
+        assertEquals(ThermalTier.OPTIMAL, nanFallback.tier)
+        assertEquals(60, nanFallback.targetFps)
+
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val monitor = PixelPerformanceMonitor(app)
+        monitor.startMonitoring()
+        monitor.pollThermalHeadroomIfDue(1_000L)
+        monitor.stopMonitoring()
+    }
+
+    @Test
+    fun `VulkanArSceneView handles rapid surface and pause destroy transitions safely without deadlock`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val sceneView = VulkanArSceneView(app)
+
+        assertEquals(VulkanRenderState.UNINITIALIZED, sceneView.renderState)
+
+        sceneView.surfaceCreated(sceneView.holder)
+        assertEquals(VulkanRenderState.ACTIVE_RENDER_LOOP, sceneView.renderState)
+
+        sceneView.surfaceChanged(sceneView.holder, android.graphics.PixelFormat.RGBA_8888, 1080, 2400)
+        assertEquals(VulkanRenderState.ACTIVE_RENDER_LOOP, sceneView.renderState)
+
+        sceneView.setTargetFrameRate(120f)
+        sceneView.onPause()
+        assertEquals(VulkanRenderState.SAFE_SUSPENDED, sceneView.renderState)
+
+        // Rapid surfaceDestroyed + destroy + post-destroy onResume must not throw or re-enter active loop
+        sceneView.surfaceDestroyed(sceneView.holder)
+        assertEquals(VulkanRenderState.SAFE_SUSPENDED, sceneView.renderState)
+
+        sceneView.destroy()
+        assertEquals(VulkanRenderState.UNINITIALIZED, sceneView.renderState)
+
+        sceneView.onResume()
+        assertEquals(VulkanRenderState.UNINITIALIZED, sceneView.renderState)
+    }
+
+    @Test
+    fun `ModernHapticFeedback enforces per-type IMU cooldown windows without blocking distinct events`() {
+        ModernHapticFeedback.resetCooldowns()
+
+        assertTrue(ModernHapticFeedback.shouldAllowHaptic(HapticType.SNAP, 1_000L))
+        // Repeated SNAP within 160ms must be suppressed to avoid shaking the IMU
+        assertFalse(ModernHapticFeedback.shouldAllowHaptic(HapticType.SNAP, 1_050L))
+        assertFalse(ModernHapticFeedback.shouldAllowHaptic(HapticType.SNAP, 1_159L))
+        // Distinct CLICK allowed independently once its gap elapses
+        assertTrue(ModernHapticFeedback.shouldAllowHaptic(HapticType.CLICK, 1_050L))
+        assertFalse(ModernHapticFeedback.shouldAllowHaptic(HapticType.CLICK, 1_070L))
+        // Allowed once 160ms cooldown expires
+        assertTrue(ModernHapticFeedback.shouldAllowHaptic(HapticType.SNAP, 1_160L))
+    }
+
+    @Test
+    fun `MeasureViewModel bounds undo stack eviction cleanly over 25 sequential placements`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val shadowPm = Shadows.shadowOf(app.packageManager)
+        val info = PackageInfo().apply {
+            packageName = "com.google.ar.core"
+            applicationInfo = ApplicationInfo().apply {
+                packageName = "com.google.ar.core"
+                enabled = true
+            }
+        }
+        shadowPm.installPackage(info)
+
+        val vm = MeasureViewModel(app)
+        vm.setCameraSimulationActive(true)
+        vm.updateDisplayGeometry(0, 1080, 2400)
+
+        val prop = MeasureViewModel::class.java.getDeclaredField("lastTapTimestampMs").apply {
+            isAccessible = true
+        }
+        repeat(25) { i ->
+            prop.setLong(vm, 0L)
+            vm.requestHitTest(400f + (i % 5) * 20f, 900f + (i % 4) * 20f)
+        }
+        assertEquals(25, vm.getCapturedPointsSnapshot().size)
+
+        // Undo 20 times cleanly (matching bounded undo history)
+        repeat(20) {
+            vm.undo()
+        }
+        assertEquals(5, vm.getCapturedPointsSnapshot().size)
     }
 }

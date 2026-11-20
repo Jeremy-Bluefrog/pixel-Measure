@@ -43,12 +43,16 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.data.model.MeasureRecord
 import com.example.logic.ShareUtility
+import com.example.logic.TranslationManager
 import com.example.ui.adaptive.AdaptiveWindowState
 import com.example.ui.adaptive.rememberLocalHingeTracker
 import com.example.ui.components.EnableWindowBlur
+import com.example.ui.i18n.LocalAppLanguage
+import com.example.ui.i18n.tr
 import com.example.ui.theme.ExpressiveCookie9Shape
 import com.example.ui.theme.ExpressiveMotion
 import com.example.ui.theme.ExpressiveTypography
@@ -158,6 +162,7 @@ fun HistoryTwoPaneWorkspace(
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
+    val currentLang by viewModel.currentLanguage.collectAsStateWithLifecycle()
     val (hingeTrackerModifier, hingeMetrics) = rememberLocalHingeTracker(adaptiveState)
 
     val arRecords = remember(records) {
@@ -176,6 +181,7 @@ fun HistoryTwoPaneWorkspace(
         }
     }
 
+    CompositionLocalProvider(LocalAppLanguage provides currentLang) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerLowest,
         modifier = modifier
@@ -276,13 +282,13 @@ fun HistoryTwoPaneWorkspace(
                                 }
                                 Column {
                                     Text(
-                                        text = "測量詳情與分享",
+                                        text = tr("hist_detail_title"),
                                         style = MaterialTheme.typography.titleMedium,
                                         fontFamily = GoogleSansRounded,
                                         fontWeight = FontWeight.Bold
                                     )
                                     Text(
-                                        text = "即時預覽現場影像、編輯備註並匯出報告",
+                                        text = tr("hist_detail_subtitle"),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -295,7 +301,7 @@ fun HistoryTwoPaneWorkspace(
                                     .size(48.dp)
                                     .testTag("history_two_pane_close_btn")
                             ) {
-                                Icon(Icons.Rounded.Close, contentDescription = "關閉歷史紀錄")
+                                Icon(Icons.Rounded.Close, contentDescription = tr("hist_close_desc"))
                             }
                         }
 
@@ -340,13 +346,13 @@ fun HistoryTwoPaneWorkspace(
                             }
                         }
                         Text(
-                            text = "從左側選擇一筆測量紀錄",
+                            text = tr("hist_select_left_title"),
                             style = MaterialTheme.typography.titleMedium,
                             fontFamily = GoogleSansRounded,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "即可於此預覽照片／影片、編輯備註或匯出 PDF 與 CSV 報表",
+                            text = tr("hist_select_left_desc"),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -354,6 +360,7 @@ fun HistoryTwoPaneWorkspace(
                 }
             }
         }
+    }
     }
 }
 
@@ -366,6 +373,8 @@ fun HistorySheetContent(
     selectedRecordId: Int? = null,
     isTwoPaneMode: Boolean = false
 ) {
+    val currentLang by viewModel.currentLanguage.collectAsStateWithLifecycle()
+    CompositionLocalProvider(LocalAppLanguage provides currentLang) {
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var selectedCategory by rememberSaveable { mutableStateOf("ALL") }
     var showClearConfirm by remember { mutableStateOf(false) }
@@ -376,15 +385,15 @@ fun HistorySheetContent(
         records.filter { it.type != "RULER" && it.type != "LEVEL" }
     }
 
-    val categories = remember {
+    val categories = remember(currentLang) {
         listOf(
-            "ALL" to "全部",
-            "DISTANCE" to "距離",
-            "CIRCLE" to "圓形",
-            "AREA" to "面積",
-            "HEIGHT" to "高度",
-            "VOLUME" to "體積",
-            "ANGLE" to "角度"
+            "ALL" to TranslationManager.getString("hist_filter_all", currentLang),
+            "DISTANCE" to TranslationManager.getString("hist_filter_distance", currentLang),
+            "CIRCLE" to TranslationManager.getString("hist_filter_circle", currentLang),
+            "AREA" to TranslationManager.getString("hist_filter_area", currentLang),
+            "HEIGHT" to TranslationManager.getString("hist_filter_height", currentLang),
+            "VOLUME" to TranslationManager.getString("hist_filter_volume", currentLang),
+            "ANGLE" to TranslationManager.getString("hist_filter_angle", currentLang)
         )
     }
 
@@ -417,7 +426,7 @@ fun HistorySheetContent(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "AR 歷史測量紀錄 (${arRecords.size})",
+                text = tr("hist_header_fmt", arRecords.size),
                 style = MaterialTheme.typography.titleLarge,
                 fontFamily = GoogleSansRounded,
                 fontWeight = FontWeight.Bold,
@@ -429,12 +438,12 @@ fun HistorySheetContent(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (arRecords.isNotEmpty()) {
                     IconButton(
-                        onClick = { ShareUtility.exportAllRecordsCsv(context, arRecords) },
+                        onClick = { ShareUtility.exportAllRecordsCsv(context, arRecords, currentLang) },
                         modifier = Modifier.size(48.dp)
                     ) {
                         Icon(
                             Icons.Rounded.FileUpload,
-                            contentDescription = "匯出 CSV",
+                            contentDescription = tr("hist_export_csv"),
                             tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(22.dp)
                         )
@@ -446,7 +455,7 @@ fun HistorySheetContent(
                     ) {
                         Icon(Icons.Rounded.DeleteSweep, null, Modifier.size(18.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("全部清除")
+                        Text(tr("clear_all"))
                     }
                 }
             }
@@ -458,12 +467,12 @@ fun HistorySheetContent(
         OutlinedTextField(
             value = searchQuery,
             onValueChange = { searchQuery = it },
-            placeholder = { Text("搜尋測量紀錄與備註...") },
+            placeholder = { Text(tr("hist_search_hint")) },
             leadingIcon = { Icon(Icons.Rounded.Search, null) },
             trailingIcon = {
                 if (searchQuery.isNotEmpty()) {
                     IconButton(onClick = { searchQuery = "" }) {
-                        Icon(Icons.Rounded.Close, contentDescription = "清除搜尋")
+                        Icon(Icons.Rounded.Close, contentDescription = tr("common_clear_search"))
                     }
                 }
             },
@@ -497,18 +506,22 @@ fun HistorySheetContent(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("統計摘要", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                        Text(tr("hist_stats_title"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                         Spacer(modifier = Modifier.height(2.dp))
-                        Text("總紀錄: $totalCount 項 | 總長度: ${String.format(Locale.getDefault(), "%.2f", sumDistance)} m", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            tr("hist_stats_summary_fmt", totalCount, String.format(Locale.getDefault(), "%.2f", sumDistance)),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                     FilledTonalButton(
-                        onClick = { ShareUtility.exportRecordsAsCsvText(context, arRecords) },
+                        onClick = { ShareUtility.exportRecordsAsCsvText(context, arRecords, currentLang) },
                         shape = RoundedCornerShape(12.dp),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                     ) {
                         Icon(Icons.Rounded.Share, null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("匯出報表", fontSize = 12.sp)
+                        Text(tr("hist_export_report"), fontSize = 12.sp)
                     }
                 }
             }
@@ -612,14 +625,14 @@ fun HistorySheetContent(
                     }
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        text = if (arRecords.isEmpty()) "尚未儲存任何 AR 測量紀錄" else "找不到符合的紀錄",
+                        text = if (arRecords.isEmpty()) tr("hist_empty_title") else tr("hist_no_match_title"),
                         color = MaterialTheme.colorScheme.onSurface,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        text = if (arRecords.isEmpty()) "完成 AR 空間量測、拍照或錄影後即可儲存於此" else "嘗試切換分類或清除搜尋關鍵字",
+                        text = if (arRecords.isEmpty()) tr("hist_empty_desc") else tr("hist_no_match_desc"),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall
                     )
@@ -637,7 +650,7 @@ fun HistorySheetContent(
                         ) {
                             Icon(Icons.Rounded.RestartAlt, null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("重設篩選條件", fontWeight = FontWeight.Bold)
+                            Text(tr("hist_reset_filters"), fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -702,7 +715,7 @@ fun HistorySheetContent(
                                     imageFile != null -> {
                                         AsyncImage(
                                             model = imageFile,
-                                            contentDescription = if (isVideo) "AR 測量影片縮圖" else "AR 測量照片",
+                                            contentDescription = if (isVideo) tr("hist_thumb_video") else tr("hist_thumb_photo"),
                                             modifier = Modifier.fillMaxSize(),
                                             contentScale = ContentScale.Crop
                                         )
@@ -711,7 +724,7 @@ fun HistorySheetContent(
                                         val thumbImageBitmap = remember(videoFrameThumb) { videoFrameThumb.asImageBitmap() }
                                         Image(
                                             bitmap = thumbImageBitmap,
-                                            contentDescription = "AR 測量影片縮圖",
+                                            contentDescription = tr("hist_thumb_video"),
                                             modifier = Modifier.fillMaxSize(),
                                             contentScale = ContentScale.Crop
                                         )
@@ -744,7 +757,7 @@ fun HistorySheetContent(
                                     ) {
                                         Icon(
                                             imageVector = Icons.Rounded.PlayArrow,
-                                            contentDescription = "播放影片",
+                                            contentDescription = tr("hist_play_video"),
                                             tint = Color.White,
                                             modifier = Modifier.size(18.dp)
                                         )
@@ -757,7 +770,7 @@ fun HistorySheetContent(
                                             .padding(4.dp)
                                     ) {
                                         Text(
-                                            text = "影片",
+                                            text = tr("hist_badge_video"),
                                             color = Color.White,
                                             fontSize = 9.sp,
                                             fontWeight = FontWeight.Bold,
@@ -797,14 +810,14 @@ fun HistorySheetContent(
                                     ) {
                                         Text(
                                             text = when {
-                                                isVideo -> "影片"
-                                                record.type == "AREA" -> "面積"
-                                                record.type == "HEIGHT" -> "垂直高度"
-                                                record.type == "VOLUME" -> "3D 體積"
-                                                record.type == "CIRCLE" -> "圓形直徑"
-                                                record.type == "ANGLE" -> "空間夾角"
-                                                record.value == 0.0 && imageFile != null -> "照片"
-                                                else -> "距離"
+                                                isVideo -> tr("hist_badge_video")
+                                                record.type == "AREA" -> tr("hist_badge_area")
+                                                record.type == "HEIGHT" -> tr("hist_badge_height")
+                                                record.type == "VOLUME" -> tr("hist_badge_volume")
+                                                record.type == "CIRCLE" -> tr("hist_badge_circle")
+                                                record.type == "ANGLE" -> tr("hist_badge_angle")
+                                                record.value == 0.0 && imageFile != null -> tr("hist_badge_photo")
+                                                else -> tr("hist_badge_distance")
                                             },
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
@@ -824,8 +837,8 @@ fun HistorySheetContent(
                                 Spacer(modifier = Modifier.height(2.dp))
 
                                 val formattedVal = when {
-                                    record.value == 0.0 && isVideo -> "AR 實境測量錄影"
-                                    record.value == 0.0 && imageFile != null -> "AR 實境現場照片"
+                                    record.value == 0.0 && isVideo -> tr("hist_title_video")
+                                    record.value == 0.0 && imageFile != null -> tr("hist_title_photo")
                                     record.type == "AREA" -> viewModel.formatArea(record.value, record.unit)
                                     record.type == "VOLUME" -> viewModel.formatVolume(record.value, record.unit)
                                     record.type == "ANGLE" -> "${Math.round(record.value)}°"
@@ -862,26 +875,28 @@ fun HistorySheetContent(
                             ) {
                                 IconButton(
                                     onClick = {
-                                        ShareUtility.copyToClipboard(context, record)
-                                        viewModel.showToast("已複製「${record.title}」到剪貼簿")
+                                        ShareUtility.copyToClipboard(context, record, currentLang)
+                                        viewModel.showToast(
+                                            TranslationManager.formatString("hist_copied_title_fmt", currentLang, record.title)
+                                        )
                                     },
                                     modifier = Modifier.size(48.dp)
                                 ) {
                                     Icon(
                                         Icons.Rounded.ContentCopy,
-                                        contentDescription = "複製文字",
+                                        contentDescription = tr("hist_copy_text"),
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.size(18.dp)
                                     )
                                 }
 
                                 IconButton(
-                                    onClick = { ShareUtility.shareRecord(context, record) },
+                                    onClick = { ShareUtility.shareRecord(context, record, currentLang) },
                                     modifier = Modifier.size(48.dp)
                                 ) {
                                     Icon(
                                         Icons.Rounded.Share,
-                                        contentDescription = "分享",
+                                        contentDescription = tr("common_share"),
                                         tint = MaterialTheme.colorScheme.primary,
                                         modifier = Modifier.size(18.dp)
                                     )
@@ -893,7 +908,7 @@ fun HistorySheetContent(
                                 ) {
                                     Icon(
                                         Icons.Rounded.DeleteOutline,
-                                        contentDescription = "刪除",
+                                        contentDescription = tr("common_delete"),
                                         tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
                                         modifier = Modifier.size(18.dp)
                                     )
@@ -912,8 +927,8 @@ fun HistorySheetContent(
     if (showClearConfirm) {
         AlertDialog(
             onDismissRequest = { showClearConfirm = false },
-            title = { Text("確定清除所有紀錄？", fontWeight = FontWeight.Bold) },
-            text = { Text("此動作將永久刪除所有的歷史測量紀錄，無法復原。") },
+            title = { Text(tr("hist_clear_title"), fontWeight = FontWeight.Bold) },
+            text = { Text(tr("hist_clear_msg")) },
             confirmButton = {
                 Button(
                     onClick = {
@@ -922,15 +937,16 @@ fun HistorySheetContent(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                 ) {
-                    Text("確認清除")
+                    Text(tr("hist_clear_confirm_btn"))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showClearConfirm = false }) {
-                    Text("取消")
+                    Text(tr("cancel"))
                 }
             }
         )
+    }
     }
 }
 
@@ -940,6 +956,8 @@ fun RecordDetailDialog(
     viewModel: MeasureViewModel,
     onDismiss: () -> Unit
 ) {
+    val currentLang by viewModel.currentLanguage.collectAsStateWithLifecycle()
+    CompositionLocalProvider(LocalAppLanguage provides currentLang) {
     AlertDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.widthIn(max = 560.dp),
@@ -961,13 +979,13 @@ fun RecordDetailDialog(
                         tint = MaterialTheme.colorScheme.primary
                     )
                     Text(
-                        text = "測量詳情與分享",
+                        text = tr("hist_detail_title"),
                         fontWeight = FontWeight.Bold,
                         style = MaterialTheme.typography.titleMedium
                     )
                 }
                 IconButton(onClick = onDismiss, modifier = Modifier.size(48.dp)) {
-                    Icon(Icons.Rounded.Close, contentDescription = "關閉")
+                    Icon(Icons.Rounded.Close, contentDescription = tr("common_close"))
                 }
             }
         },
@@ -981,10 +999,11 @@ fun RecordDetailDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("完成")
+                Text(tr("common_done"))
             }
         }
     )
+    }
 }
 
 @Composable
@@ -995,6 +1014,7 @@ fun RecordDetailPaneContent(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val lang = LocalAppLanguage.current
     var notesText by remember(record.id, record.notes) { mutableStateOf(record.notes ?: "") }
     var isEditingNotes by remember(record.id) { mutableStateOf(false) }
     var showFullscreenPhoto by remember { mutableStateOf(false) }
@@ -1056,7 +1076,7 @@ fun RecordDetailPaneContent(
                                 )
                                 Spacer(Modifier.height(8.dp))
                                 Text(
-                                    text = "無法於預覽視窗播放，請點擊「全螢幕播放」",
+                                    text = tr("hist_video_preview_err"),
                                     color = Color.White.copy(alpha = 0.85f),
                                     style = MaterialTheme.typography.bodySmall
                                 )
@@ -1120,7 +1140,7 @@ fun RecordDetailPaneContent(
                                 ) {
                                     Icon(
                                         if (isVideoPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                                        contentDescription = if (isVideoPlaying) "暫停影片" else "播放影片"
+                                        contentDescription = if (isVideoPlaying) tr("hist_pause_video") else tr("hist_play_video")
                                     )
                                 }
                                 FilledTonalIconButton(
@@ -1135,7 +1155,7 @@ fun RecordDetailPaneContent(
                                     },
                                     modifier = Modifier.size(48.dp)
                                 ) {
-                                    Icon(Icons.Rounded.Replay, contentDescription = "重頭播放")
+                                    Icon(Icons.Rounded.Replay, contentDescription = tr("hist_replay_video"))
                                 }
                             }
 
@@ -1155,14 +1175,14 @@ fun RecordDetailPaneContent(
                                         }
                                         context.startActivity(viewIntent)
                                     } catch (_: Throwable) {
-                                        viewModel.showToast("找不到可播放影片的應用程式")
+                                        viewModel.showToast(TranslationManager.getString("hist_no_video_player", lang))
                                     }
                                 },
                                 colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
                             ) {
                                 Icon(Icons.AutoMirrored.Rounded.OpenInNew, null, Modifier.size(16.dp))
                                 Spacer(Modifier.width(4.dp))
-                                Text("全螢幕播放", fontSize = 12.sp)
+                                Text(tr("hist_fullscreen_play"), fontSize = 12.sp)
                             }
                         }
                     }
@@ -1182,7 +1202,7 @@ fun RecordDetailPaneContent(
                 Box(modifier = Modifier.fillMaxSize()) {
                     AsyncImage(
                         model = imageFile,
-                        contentDescription = "測量現場照片",
+                        contentDescription = tr("hist_photo_desc"),
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )
@@ -1199,7 +1219,7 @@ fun RecordDetailPaneContent(
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             Icon(Icons.Rounded.ZoomIn, null, tint = Color.White, modifier = Modifier.size(14.dp))
-                            Text("點擊檢視大圖", color = Color.White, fontSize = 11.sp)
+                            Text(tr("hist_tap_enlarge"), color = Color.White, fontSize = 11.sp)
                         }
                     }
                 }
@@ -1223,8 +1243,8 @@ fun RecordDetailPaneContent(
                 )
 
                 val formattedVal = when {
-                    record.value == 0.0 && videoUri != null -> "AR 實境測量錄影"
-                    record.value == 0.0 && imageFile != null -> "AR 實境現場照片"
+                    record.value == 0.0 && videoUri != null -> tr("hist_title_video")
+                    record.value == 0.0 && imageFile != null -> tr("hist_title_photo")
                     record.type == "AREA" -> viewModel.formatArea(record.value, record.unit)
                     record.type == "VOLUME" -> viewModel.formatVolume(record.value, record.unit)
                     record.type == "ANGLE" -> "${Math.round(record.value)}°"
@@ -1238,7 +1258,7 @@ fun RecordDetailPaneContent(
                 )
 
                 Text(
-                    text = "⏱️ 時間: ${dateFormat.format(Date(record.timestamp))}",
+                    text = tr("hist_time_fmt", dateFormat.format(Date(record.timestamp))),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1253,7 +1273,7 @@ fun RecordDetailPaneContent(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "📝 備註資訊",
+                    text = tr("hist_notes_header"),
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Bold
                 )
@@ -1262,7 +1282,7 @@ fun RecordDetailPaneContent(
                         onClick = { isEditingNotes = true },
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                     ) {
-                        Text("編輯")
+                        Text(tr("common_edit"))
                     }
                 }
             }
@@ -1271,7 +1291,7 @@ fun RecordDetailPaneContent(
                 OutlinedTextField(
                     value = notesText,
                     onValueChange = { notesText = it },
-                    placeholder = { Text("新增備註 (如：客廳沙發、餐桌長度)...") },
+                    placeholder = { Text(tr("hist_notes_placeholder")) },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp)
                 )
@@ -1281,7 +1301,7 @@ fun RecordDetailPaneContent(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     TextButton(onClick = { isEditingNotes = false }) {
-                        Text("取消")
+                        Text(tr("cancel"))
                     }
                     Button(
                         onClick = {
@@ -1290,12 +1310,12 @@ fun RecordDetailPaneContent(
                         },
                         shape = RoundedCornerShape(10.dp)
                     ) {
-                        Text("儲存備註")
+                        Text(tr("hist_save_notes"))
                     }
                 }
             } else {
                 Text(
-                    text = if (notesText.isNotBlank()) notesText else "無備註內容",
+                    text = if (notesText.isNotBlank()) notesText else tr("hist_no_notes"),
                     style = MaterialTheme.typography.bodyMedium,
                     color = if (notesText.isNotBlank()) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                 )
@@ -1306,13 +1326,13 @@ fun RecordDetailPaneContent(
 
         // Share Buttons Section
         Text(
-            text = "📤 分享與匯出",
+            text = tr("hist_share_header"),
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.Bold
         )
 
         Button(
-            onClick = { ShareUtility.shareRecord(context, record) },
+            onClick = { ShareUtility.shareRecord(context, record, lang) },
             shape = RoundedCornerShape(14.dp),
             modifier = Modifier
                 .fillMaxWidth()
@@ -1320,7 +1340,7 @@ fun RecordDetailPaneContent(
         ) {
             Icon(Icons.Rounded.Share, null, Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
-            Text(if (videoUri != null) "分享影片與測量數據" else "分享照片 / 測量報告", fontWeight = FontWeight.Bold)
+            Text(if (videoUri != null) tr("hist_share_video_data") else tr("hist_share_photo_report"), fontWeight = FontWeight.Bold)
         }
 
         // Secondary Row: Email & PDF Report
@@ -1329,7 +1349,7 @@ fun RecordDetailPaneContent(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             FilledTonalButton(
-                onClick = { ShareUtility.shareViaEmail(context, record) },
+                onClick = { ShareUtility.shareViaEmail(context, record, lang) },
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier
                     .weight(1f)
@@ -1337,11 +1357,11 @@ fun RecordDetailPaneContent(
             ) {
                 Icon(Icons.Rounded.Mail, null, Modifier.size(16.dp))
                 Spacer(Modifier.width(4.dp))
-                Text("電子郵件", fontSize = 13.sp)
+                Text(tr("hist_email"), fontSize = 13.sp)
             }
 
             FilledTonalButton(
-                onClick = { ShareUtility.sharePdfReport(context, record) },
+                onClick = { ShareUtility.sharePdfReport(context, record, lang) },
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier
                     .weight(1f)
@@ -1349,7 +1369,7 @@ fun RecordDetailPaneContent(
             ) {
                 Icon(Icons.Rounded.PictureAsPdf, null, Modifier.size(16.dp))
                 Spacer(Modifier.width(4.dp))
-                Text("PDF 報告", fontSize = 13.sp)
+                Text(tr("hist_pdf_report"), fontSize = 13.sp)
             }
         }
 
@@ -1360,8 +1380,8 @@ fun RecordDetailPaneContent(
         ) {
             OutlinedButton(
                 onClick = {
-                    ShareUtility.copyToClipboard(context, record)
-                    viewModel.showToast("已複製測量文字到剪貼簿")
+                    ShareUtility.copyToClipboard(context, record, lang)
+                    viewModel.showToast(TranslationManager.getString("hist_copied_text_toast", lang))
                 },
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier
@@ -1370,7 +1390,7 @@ fun RecordDetailPaneContent(
             ) {
                 Icon(Icons.Rounded.ContentCopy, null, Modifier.size(16.dp))
                 Spacer(Modifier.width(4.dp))
-                Text("複製文字", fontSize = 13.sp)
+                Text(tr("hist_copy_text"), fontSize = 13.sp)
             }
 
             OutlinedButton(
@@ -1386,7 +1406,7 @@ fun RecordDetailPaneContent(
             ) {
                 Icon(Icons.Rounded.Delete, null, Modifier.size(16.dp))
                 Spacer(Modifier.width(4.dp))
-                Text("刪除紀錄", fontSize = 13.sp)
+                Text(tr("hist_delete_record"), fontSize = 13.sp)
             }
         }
     }
@@ -1404,7 +1424,7 @@ fun RecordDetailPaneContent(
             ) {
                 AsyncImage(
                     model = imageFile,
-                    contentDescription = "測量照片全螢幕預覽",
+                    contentDescription = tr("hist_fullscreen_photo_desc"),
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(16.dp),
@@ -1418,7 +1438,7 @@ fun RecordDetailPaneContent(
                         .padding(16.dp)
                         .size(48.dp)
                 ) {
-                    Icon(Icons.Rounded.Close, contentDescription = "關閉大圖")
+                    Icon(Icons.Rounded.Close, contentDescription = tr("hist_close_fullscreen_desc"))
                 }
             }
         }

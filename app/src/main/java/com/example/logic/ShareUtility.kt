@@ -57,6 +57,7 @@ object ShareUtility {
         aspectRatio: String = "4_3",
         useDisplayP3: Boolean = true,
         primaryMeasurement: String? = null,
+        langCode: String = "zh-TW",
         onComplete: (String?) -> Unit
     ) {
         if (view.width <= 0 || view.height <= 0) {
@@ -110,7 +111,7 @@ object ShareUtility {
 
         // 3. Draw Watermark Tag (Bottom Left)
         try {
-            drawArMeasurementWatermark(view.context, canvas, width, height, primaryMeasurement)
+            drawArMeasurementWatermark(view.context, canvas, width, height, primaryMeasurement, langCode)
         } catch (e: Exception) {
             android.util.Log.w("ShareUtility", "Watermark drawing error", e)
         }
@@ -132,7 +133,8 @@ object ShareUtility {
         canvas: Canvas,
         width: Int,
         height: Int,
-        primaryMeasurement: String?
+        primaryMeasurement: String?,
+        langCode: String = "zh-TW"
     ) {
         val padX = 36f
         val padY = height - 44f
@@ -163,7 +165,7 @@ object ShareUtility {
 
         val dateFormat = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault())
         val timeStr = dateFormat.format(Date())
-        val badgeTitle = "📐 AR 實境精準測量"
+        val badgeTitle = TranslationManager.getString("share_badge_title", langCode)
         val measurementStr = if (!primaryMeasurement.isNullOrBlank() && primaryMeasurement != "0.0 cm" && primaryMeasurement != "0.00 m") {
             " · $primaryMeasurement"
         } else ""
@@ -309,8 +311,8 @@ object ShareUtility {
 
     fun shareRecord(context: Context, record: MeasureRecord, langCode: String = "zh-TW") {
         try {
-            val textReport = formatTextReport(record)
-            val subject = "【AR 測量紀錄】${record.title}"
+            val textReport = formatTextReport(record, langCode)
+            val subject = TranslationManager.formatString("share_subject_record_fmt", langCode, record.title)
 
             val videoUri = resolveShareMediaUri(context, record.videoPath)
             var imageUri: Uri? = if (videoUri == null) resolveShareMediaUri(context, record.imagePath) else null
@@ -319,7 +321,7 @@ object ShareUtility {
             if (videoUri == null && imageUri == null) {
                 var bitmap: Bitmap? = null
                 try {
-                    bitmap = generateMeasurementBitmap(record, context)
+                    bitmap = generateMeasurementBitmap(record, context, langCode)
                     val cacheFile = File(context.cacheDir, "measure_share_${record.id}.jpg")
                     FileOutputStream(cacheFile).use { out ->
                         bitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
@@ -358,7 +360,7 @@ object ShareUtility {
                 }
             }
 
-            val chooser = Intent.createChooser(intent, "分享測量紀錄至...")
+            val chooser = Intent.createChooser(intent, TranslationManager.getString("share_chooser_record", langCode))
             chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(chooser)
         } catch (e: Exception) {
@@ -369,10 +371,10 @@ object ShareUtility {
     /**
      * Dedicated Email Share Handler: Pre-fills subject, message body, and screenshot attachment.
      */
-    fun shareViaEmail(context: Context, record: MeasureRecord) {
+    fun shareViaEmail(context: Context, record: MeasureRecord, langCode: String = "zh-TW") {
         try {
-            val textReport = formatTextReport(record)
-            val subject = "【AR 測量報告】${record.title}"
+            val textReport = formatTextReport(record, langCode)
+            val subject = TranslationManager.formatString("share_subject_report_fmt", langCode, record.title)
 
             val mediaUri = resolveShareMediaUri(context, record.videoPath)
                 ?: resolveShareMediaUri(context, record.imagePath)
@@ -387,21 +389,24 @@ object ShareUtility {
                 }
             }
 
-            val chooser = Intent.createChooser(intent, "透過電子郵件發送報告")
+            val chooser = Intent.createChooser(intent, TranslationManager.getString("share_chooser_email", langCode))
             chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(chooser)
         } catch (e: Exception) {
-            shareRecord(context, record)
+            shareRecord(context, record, langCode)
         }
     }
 
     /**
      * Copies measurement text report directly to system clipboard.
      */
-    fun copyToClipboard(context: Context, record: MeasureRecord) {
+    fun copyToClipboard(context: Context, record: MeasureRecord, langCode: String = "zh-TW") {
         try {
             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
-            val clip = ClipData.newPlainText("AR 測量紀錄", formatTextReport(record))
+            val clip = ClipData.newPlainText(
+                TranslationManager.getString("share_clip_label", langCode),
+                formatTextReport(record, langCode)
+            )
             clipboard.setPrimaryClip(clip)
         } catch (_: Exception) {}
     }
@@ -409,7 +414,7 @@ object ShareUtility {
     /**
      * Exports all measurement records as a professional CSV file and opens the system share sheet.
      */
-    fun exportAllRecordsCsv(context: Context, records: List<MeasureRecord>) {
+    fun exportAllRecordsCsv(context: Context, records: List<MeasureRecord>, langCode: String = "zh-TW") {
         if (records.isEmpty()) {
             return
         }
@@ -443,13 +448,13 @@ object ShareUtility {
 
             val intent = Intent(Intent.ACTION_SEND).apply {
                 type = "text/csv"
-                putExtra(Intent.EXTRA_SUBJECT, "【AR 測量彙整報表】共 ${records.size} 筆紀錄")
-                putExtra(Intent.EXTRA_TEXT, "隨信附上包含 ${records.size} 筆 AR 測量數據的 CSV 報表檔。")
+                putExtra(Intent.EXTRA_SUBJECT, TranslationManager.formatString("share_csv_subject_fmt", langCode, records.size))
+                putExtra(Intent.EXTRA_TEXT, TranslationManager.formatString("share_csv_text_fmt", langCode, records.size))
                 putExtra(Intent.EXTRA_STREAM, csvUri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
 
-            val chooser = Intent.createChooser(intent, "匯出 CSV 測量報表至...")
+            val chooser = Intent.createChooser(intent, TranslationManager.getString("share_csv_chooser", langCode))
             chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(chooser)
         } catch (e: Exception) {
@@ -602,13 +607,13 @@ object ShareUtility {
         }
     }
 
-    internal fun formatRecordPrimaryValue(record: MeasureRecord): String {
+    internal fun formatRecordPrimaryValue(record: MeasureRecord, langCode: String = "zh-TW"): String {
         return when (record.type) {
             "RULER" -> {
                 val cm = record.value * 100.0
                 "${String.format(Locale.US, "%.2f", cm)} cm (${String.format(Locale.US, "%.1f", cm * 10.0)} mm)"
             }
-            "LEVEL" -> String.format(Locale.US, "%.1f° (傾角偏差)", record.value)
+            "LEVEL" -> TranslationManager.formatString("share_level_tilt_fmt", langCode, record.value)
             "AREA" -> formatAreaValueForUnit(record.value, record.unit)
             "VOLUME" -> formatVolumeValueForUnit(record.value, record.unit)
             "ANGLE" -> "${Math.round(record.value)}°"
@@ -616,52 +621,62 @@ object ShareUtility {
         }
     }
 
+    private fun resolveModeLabel(type: String, langCode: String): String {
+        val key = when (type) {
+            "CAM", "DISTANCE" -> "share_mode_distance"
+            "AREA" -> "share_mode_area"
+            "HEIGHT" -> "share_mode_height"
+            "VOLUME" -> "share_mode_vol"
+            "CIRCLE" -> "share_mode_circle"
+            "ANGLE" -> "share_mode_angle"
+            "RULER" -> "share_mode_ruler"
+            "LEVEL" -> "share_mode_level"
+            else -> "share_mode_other"
+        }
+        return TranslationManager.getString(key, langCode)
+    }
+
     /**
      * Formats a clean structural text report of the measurement
      */
-    fun formatTextReport(record: MeasureRecord): String {
+    fun formatTextReport(record: MeasureRecord, langCode: String = "zh-TW"): String {
         val sdf = SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.getDefault())
         val dateStr = sdf.format(Date(record.timestamp))
-        val modeStr = when (record.type) {
-            "CAM", "DISTANCE" -> "相機 AR 距離測量"
-            "AREA" -> "相機 AR 面積測量"
-            "HEIGHT" -> "相機 AR 垂直高度測量"
-            "VOLUME" -> "相機 AR 3D 體積測量"
-            "CIRCLE" -> "相機 AR 圓形直徑測量"
-            "ANGLE" -> "相機 AR 空間夾角測量"
-            "RULER" -> "螢幕卡鉗直尺"
-            "LEVEL" -> "高精數位水準儀"
-            else -> "數位測量"
-        }
+        val modeStr = resolveModeLabel(record.type, langCode)
 
         val sb = StringBuilder()
         sb.append("===============================\n")
-        sb.append("        數位 AR 測量報告        \n")
+        sb.append("${TranslationManager.getString("share_rpt_header", langCode)}\n")
         sb.append("===============================\n")
-        sb.append("✍️ 測量名稱 : ${record.title}\n")
-        sb.append("⏱️ 測量時間 : $dateStr\n")
-        sb.append("🔧 測量模式 : $modeStr\n")
-        sb.append("📐 測量數值 : ${formatRecordPrimaryValue(record)}\n")
+        sb.append("${TranslationManager.formatString("share_rpt_name_fmt", langCode, record.title)}\n")
+        sb.append("${TranslationManager.formatString("share_rpt_time_fmt", langCode, dateStr)}\n")
+        sb.append("${TranslationManager.formatString("share_rpt_mode_fmt", langCode, modeStr)}\n")
+        sb.append("${TranslationManager.formatString("share_rpt_val_fmt", langCode, formatRecordPrimaryValue(record, langCode))}\n")
 
         if (!record.notes.isNullOrBlank()) {
-            sb.append("📝 備註事項 : ${record.notes}\n")
+            sb.append("${TranslationManager.formatString("share_rpt_notes_fmt", langCode, record.notes)}\n")
         }
 
         if (isArSpatialRecordType(record.type) && !record.pointsData.isNullOrBlank()) {
             val points = record.pointsData.deserializePoints()
             if (points.isNotEmpty()) {
-                sb.append("\n📍 [AR 空間標註點紀錄] :\n")
+                sb.append("\n${TranslationManager.getString("share_rpt_pts_header", langCode)}\n")
                 points.forEachIndexed { index, p ->
                     val lbl = if (!p.label.isNullOrBlank()) " - \"${p.label}\"" else ""
-                    sb.append(
-                        "   - 標註點 #${index + 1}: (X:${String.format(Locale.US, "%.2f", p.x)}, " +
-                            "Y:${String.format(Locale.US, "%.2f", p.y)}, " +
-                            "Z:${String.format(Locale.US, "%.2f", p.z)})$lbl\n"
+                    val line = TranslationManager.formatString(
+                        "share_rpt_pt_fmt",
+                        langCode,
+                        index + 1,
+                        String.format(Locale.US, "%.2f", p.x),
+                        String.format(Locale.US, "%.2f", p.y),
+                        String.format(Locale.US, "%.2f", p.z),
+                        lbl
                     )
+                    sb.append("$line\n")
                 }
 
                 if (points.size >= 2) {
-                    sb.append("\n📐 [分段長度分析] :\n")
+                    sb.append("\n${TranslationManager.getString("share_rpt_segs_header", langCode)}\n")
                     val step = if (record.type == "AREA" || record.type == "ANGLE") 1 else 2
                     for (i in 0 until points.size - 1 step step) {
                         val p1 = points[i]
@@ -676,22 +691,22 @@ object ShareUtility {
             }
         }
         sb.append("===============================\n")
-        sb.append("產生自 Google AI Studio 高精測量 App")
+        sb.append(TranslationManager.getString("share_rpt_footer", langCode))
         return sb.toString()
     }
 
     /**
      * Shares formatted text report via plain intent
      */
-    fun shareTextReport(context: Context, record: MeasureRecord) {
+    fun shareTextReport(context: Context, record: MeasureRecord, langCode: String = "zh-TW") {
         try {
-            val report = formatTextReport(record)
+            val report = formatTextReport(record, langCode)
             val intent = Intent(Intent.ACTION_SEND).apply {
                 type = "text/plain"
-                putExtra(Intent.EXTRA_SUBJECT, "AR測量結果: ${record.title}")
+                putExtra(Intent.EXTRA_SUBJECT, TranslationManager.formatString("share_text_subject_fmt", langCode, record.title))
                 putExtra(Intent.EXTRA_TEXT, report)
             }
-            val chooser = Intent.createChooser(intent, "分享測量文字報告").apply {
+            val chooser = Intent.createChooser(intent, TranslationManager.getString("share_text_chooser", langCode)).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(chooser)
@@ -703,7 +718,7 @@ object ShareUtility {
     /**
      * Generates a structural bitmap image representing this measurement card
      */
-    fun generateMeasurementBitmap(record: MeasureRecord, context: Context? = null): Bitmap {
+    fun generateMeasurementBitmap(record: MeasureRecord, context: Context? = null, langCode: String = "zh-TW"): Bitmap {
         val width = 800
         val height = 1000
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
@@ -773,17 +788,7 @@ object ShareUtility {
         }
         val sdf = SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault())
         val dateStr = sdf.format(Date(record.timestamp))
-        val modeStr = when (record.type) {
-            "CAM", "DISTANCE" -> "相機 AR 距離測量"
-            "AREA" -> "相機 AR 面積測量"
-            "HEIGHT" -> "相機 AR 高度測量"
-            "VOLUME" -> "相機 AR 體積測量"
-            "CIRCLE" -> "相機 AR 圓形測量"
-            "ANGLE" -> "相機 AR 角度測量"
-            "RULER" -> "螢幕卡鉗直尺模式"
-            "LEVEL" -> "高精數位水準儀模式"
-            else -> "數位測量模式"
-        }
+        val modeStr = resolveModeLabel(record.type, langCode)
         canvas.drawText("$modeStr | $dateStr", 80f, 210f, metaPaint)
         
         // Notes if any
@@ -801,7 +806,7 @@ object ShareUtility {
                 typeface = Typeface.create(Typeface.DEFAULT, Typeface.ITALIC)
                 isAntiAlias = true
             }
-            canvas.drawText("備註: ${record.notes}", 60f, 295f, notesPaint)
+            canvas.drawText(TranslationManager.formatString("share_bp_notes_fmt", langCode, record.notes), 60f, 295f, notesPaint)
             currentY = 380f
         }
         
@@ -831,7 +836,7 @@ object ShareUtility {
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
             isAntiAlias = true
         }
-        canvas.drawText("⚡ 3D 空間投影佈線圖", 60f, drawTop + 40f, bpLabelPaint)
+        canvas.drawText(TranslationManager.getString("share_bp_title", langCode), 60f, drawTop + 40f, bpLabelPaint)
         
         // Map points and draw the graph
         if (isArSpatialRecordType(record.type) && !record.pointsData.isNullOrBlank()) {
@@ -944,7 +949,11 @@ object ShareUtility {
                     
                     // Label text on screen
                     val pLabel = points[i].label
-                    val visualLabel = if (!pLabel.isNullOrBlank()) "點${i+1}: $pLabel" else "標記點 ${i+1}"
+                    val visualLabel = if (!pLabel.isNullOrBlank()) {
+                        TranslationManager.formatString("share_bp_pt_named_fmt", langCode, i + 1, pLabel)
+                    } else {
+                        TranslationManager.formatString("share_bp_pt_fmt", langCode, i + 1)
+                    }
                     canvas.drawText(visualLabel, offset.x + 24f, offset.y + 6f, textAnnoLabelPaint)
                 }
             }
@@ -971,7 +980,7 @@ object ShareUtility {
                 typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
                 isAntiAlias = true
             }
-            canvas.drawText("螢幕卡鉗測量精準對接線", cx, cy - 60f, rulerTextLabelPaint)
+            canvas.drawText(TranslationManager.getString("share_bp_ruler_line", langCode), cx, cy - 60f, rulerTextLabelPaint)
         }
         
         // Draw Footer Branding
@@ -982,7 +991,7 @@ object ShareUtility {
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
             isAntiAlias = true
         }
-        canvas.drawText("© 智慧型 AI 3D 測量儀與標誌分享工具 報告自動生成器", width / 2f, height - 40f, footerPaint)
+        canvas.drawText(TranslationManager.getString("share_bp_footer", langCode), width / 2f, height - 40f, footerPaint)
         
         return bitmap
     }
@@ -990,7 +999,7 @@ object ShareUtility {
     /**
      * Generates a fully compliant PDF file and launches share sheet
      */
-    fun sharePdfReport(context: Context, record: MeasureRecord) {
+    fun sharePdfReport(context: Context, record: MeasureRecord, langCode: String = "zh-TW") {
         var pdfDocument: PdfDocument? = null
         var bitmap: Bitmap? = null
         try {
@@ -1000,7 +1009,7 @@ object ShareUtility {
             val canvas = page.canvas
 
             // Draw a styled card onto the PDF using a scaled version of our bitmap
-            bitmap = generateMeasurementBitmap(record, context)
+            bitmap = generateMeasurementBitmap(record, context, langCode)
             val srcRect = Rect(0, 0, bitmap.width, bitmap.height)
             val dstRect = Rect(20, 20, 575, 822) // padding elements
 
@@ -1024,11 +1033,11 @@ object ShareUtility {
 
             val shareIntent = Intent(Intent.ACTION_SEND).apply {
                 type = "application/pdf"
-                putExtra(Intent.EXTRA_SUBJECT, "高精公分測量報告: ${record.title}")
+                putExtra(Intent.EXTRA_SUBJECT, TranslationManager.formatString("share_pdf_subj_fmt", langCode, record.title))
                 putExtra(Intent.EXTRA_STREAM, fileUri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            val chooser = Intent.createChooser(shareIntent, "分享 PDF 測量報告").apply {
+            val chooser = Intent.createChooser(shareIntent, TranslationManager.getString("share_pdf_chooser", langCode)).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(chooser)
@@ -1047,10 +1056,10 @@ object ShareUtility {
     /**
      * Generates a high quality JPEG/PNG and saves to public downloads as well as launch share sheet
      */
-    fun shareImageReport(context: Context, record: MeasureRecord) {
+    fun shareImageReport(context: Context, record: MeasureRecord, langCode: String = "zh-TW") {
         var bitmap: Bitmap? = null
         try {
-            bitmap = generateMeasurementBitmap(record, context)
+            bitmap = generateMeasurementBitmap(record, context, langCode)
 
             // Save to local cache first
             val outputDir = context.cacheDir
@@ -1084,11 +1093,11 @@ object ShareUtility {
 
             val shareIntent = Intent(Intent.ACTION_SEND).apply {
                 type = "image/jpeg"
-                putExtra(Intent.EXTRA_SUBJECT, "空間 3D 圖案佈局報告: ${record.title}")
+                putExtra(Intent.EXTRA_SUBJECT, TranslationManager.formatString("share_img_subj_fmt", langCode, record.title))
                 putExtra(Intent.EXTRA_STREAM, fileUri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            val chooser = Intent.createChooser(shareIntent, "分享圖案佈置報告").apply {
+            val chooser = Intent.createChooser(shareIntent, TranslationManager.getString("share_img_chooser", langCode)).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(chooser)
@@ -1106,7 +1115,11 @@ object ShareUtility {
     /**
      * Shares arbitrary formatted text using standard Android Share Sheet
      */
-    fun shareText(context: Context, text: String, title: String = "分享資訊") {
+    fun shareText(
+        context: Context,
+        text: String,
+        title: String = TranslationManager.getString("share_text_default_title", "zh-TW")
+    ) {
         try {
             val shareIntent = Intent(Intent.ACTION_SEND).apply {
                 type = "text/plain"
@@ -1127,28 +1140,34 @@ object ShareUtility {
      */
     fun sendFeedbackEmail(
         context: Context,
-        targetEmail: String = "jeremy1030623@gmail.com"
+        targetEmail: String = "jeremy1030623@gmail.com",
+        langCode: String = "zh-TW"
     ) {
-        val appInfo = """
-            
-            -------------------------
-            【系統偵錯資訊 (請保留)】
-            應用程式：AR 尺子與空間測量
-            系統版本：Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})
-            裝置型號：${Build.MANUFACTURER} ${Build.MODEL}
-            硬體核心：${Build.HARDWARE}
-            時間：${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}
-            -------------------------
-        """.trimIndent()
+        val nowStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+        val appInfo = buildString {
+            appendLine()
+            appendLine("-------------------------")
+            appendLine(TranslationManager.getString("share_fb_debug_header", langCode))
+            appendLine(TranslationManager.formatString("share_fb_app_label", langCode, TranslationManager.getString("share_fb_app_name", langCode)))
+            appendLine(TranslationManager.formatString("share_fb_os_label", langCode, Build.VERSION.RELEASE, Build.VERSION.SDK_INT))
+            appendLine(TranslationManager.formatString("share_fb_device_label", langCode, Build.MANUFACTURER, Build.MODEL))
+            appendLine(TranslationManager.formatString("share_fb_hw_label", langCode, Build.HARDWARE))
+            appendLine(TranslationManager.formatString("share_fb_time_label", langCode, nowStr))
+            append("-------------------------")
+        }
+
+        val subj = TranslationManager.getString("share_email_feedback_subj", langCode)
+        val body = "${TranslationManager.getString("share_email_feedback_prompt", langCode)}\n\n\n$appInfo"
+        val chooserTitle = TranslationManager.getString("share_email_feedback_chooser", langCode)
 
         try {
             val emailIntent = Intent(Intent.ACTION_SENDTO).apply {
                 data = Uri.parse("mailto:$targetEmail")
                 putExtra(Intent.EXTRA_EMAIL, arrayOf(targetEmail))
-                putExtra(Intent.EXTRA_SUBJECT, "【AR 測量工具】問題回饋與功能建議")
-                putExtra(Intent.EXTRA_TEXT, "請在此填寫您遇到的問題或建議：\n\n\n$appInfo")
+                putExtra(Intent.EXTRA_SUBJECT, subj)
+                putExtra(Intent.EXTRA_TEXT, body)
             }
-            val chooser = Intent.createChooser(emailIntent, "發送問題回饋").apply {
+            val chooser = Intent.createChooser(emailIntent, chooserTitle).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(chooser)
@@ -1157,15 +1176,19 @@ object ShareUtility {
                 val fallbackIntent = Intent(Intent.ACTION_SEND).apply {
                     type = "message/rfc822"
                     putExtra(Intent.EXTRA_EMAIL, arrayOf(targetEmail))
-                    putExtra(Intent.EXTRA_SUBJECT, "【AR 測量工具】問題回饋與功能建議")
-                    putExtra(Intent.EXTRA_TEXT, "請在此填寫您遇到的問題或建議：\n\n\n$appInfo")
+                    putExtra(Intent.EXTRA_SUBJECT, subj)
+                    putExtra(Intent.EXTRA_TEXT, body)
                 }
-                val chooser = Intent.createChooser(fallbackIntent, "發送問題回饋").apply {
+                val chooser = Intent.createChooser(fallbackIntent, chooserTitle).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
                 context.startActivity(chooser)
             } catch (err: Exception) {
-                copyToClipboard(context, targetEmail, "已複製回饋電子信箱：$targetEmail")
+                copyToClipboard(
+                    context,
+                    targetEmail,
+                    TranslationManager.formatString("share_email_copied_fmt", langCode, targetEmail)
+                )
             }
         }
     }
@@ -1173,21 +1196,27 @@ object ShareUtility {
     /**
      * Exports all measurement records as a structured CSV/Text summary for easy sharing.
      */
-    fun exportRecordsAsCsvText(context: Context, records: List<MeasureRecord>) {
+    fun exportRecordsAsCsvText(context: Context, records: List<MeasureRecord>, langCode: String = "zh-TW") {
         if (records.isEmpty()) {
-            android.widget.Toast.makeText(context, "目前尚無測量紀錄可匯出", android.widget.Toast.LENGTH_SHORT).show()
+            android.widget.Toast.makeText(
+                context,
+                TranslationManager.getString("share_export_empty_toast", langCode),
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
             return
         }
         val sb = StringBuilder()
-        sb.append("=== AR 空間測量紀錄報表 ===\n")
-        sb.append("匯出時間: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}\n\n")
+        sb.append("${TranslationManager.getString("share_csv_txt_header", langCode)}\n")
+        val exportedAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+        sb.append("${TranslationManager.formatString("share_csv_txt_time_fmt", langCode, exportedAt)}\n\n")
         for ((idx, rec) in records.withIndex()) {
-            sb.append("紀錄 #${idx + 1}\n")
-            sb.append("類型: ${rec.type}\n")
-            sb.append("數值: ${rec.value} ${rec.unit}\n")
-            sb.append("日期: ${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(rec.timestamp))}\n")
+            sb.append("${TranslationManager.formatString("share_csv_txt_idx_fmt", langCode, idx + 1)}\n")
+            sb.append("${TranslationManager.formatString("share_csv_txt_type_fmt", langCode, rec.type)}\n")
+            sb.append("${TranslationManager.formatString("share_csv_txt_val_fmt", langCode, rec.value.toString(), rec.unit)}\n")
+            val recDate = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(rec.timestamp))
+            sb.append("${TranslationManager.formatString("share_csv_txt_date_fmt", langCode, recDate)}\n")
             if (!rec.notes.isNullOrBlank()) {
-                sb.append("備註: ${rec.notes}\n")
+                sb.append("${TranslationManager.formatString("share_csv_txt_notes_fmt", langCode, rec.notes)}\n")
             }
             sb.append("------------------------------------\n")
         }
@@ -1195,22 +1224,26 @@ object ShareUtility {
         try {
             val shareIntent = Intent(Intent.ACTION_SEND).apply {
                 type = "text/plain"
-                putExtra(Intent.EXTRA_SUBJECT, "AR 空間測量紀錄報表")
+                putExtra(Intent.EXTRA_SUBJECT, TranslationManager.getString("share_csv_txt_subj", langCode))
                 putExtra(Intent.EXTRA_TEXT, text)
             }
-            val chooser = Intent.createChooser(shareIntent, "匯出測量報表").apply {
+            val chooser = Intent.createChooser(shareIntent, TranslationManager.getString("share_csv_txt_chooser", langCode)).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(chooser)
         } catch (e: Exception) {
-            copyToClipboard(context, text, "已複製測量報表至剪貼簿")
+            copyToClipboard(context, text, TranslationManager.getString("share_copied_report_toast", langCode))
         }
     }
 
     /**
      * Copies text to system clipboard with Toast prompt
      */
-    fun copyToClipboard(context: Context, text: String, toastMsg: String = "已複製至剪貼簿") {
+    fun copyToClipboard(
+        context: Context,
+        text: String,
+        toastMsg: String = TranslationManager.getString("share_copied_default_toast", "zh-TW")
+    ) {
         try {
             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
             val clip = ClipData.newPlainText("text", text)

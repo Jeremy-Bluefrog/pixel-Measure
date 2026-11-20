@@ -2,7 +2,10 @@ package com.example.logic
 
 import android.content.Context
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import android.view.Window
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,19 +24,24 @@ data class PixelThermalPolicy(
     val targetFps: Int = 60,
     val allowDepth: Boolean = true,
     val allowHighRes: Boolean = true,
-    val forceDisableTorch: Boolean = false
+    val forceDisableTorch: Boolean = false,
+    val predictedHeadroom: Float = Float.NaN
 )
 
 /**
  * Google Pixel & Android Thermal / Sustained Performance Monitor.
- * Uses Android Thermal API (API 29+) and Sustained Performance Mode to keep
- * Tensor SoCs cool and maintain consistent ARCore + Camera2 + Vulkan frame pacing
- * without sudden thermal throttling drops.
+ * Combines Android Thermal Status API (API 29+) with rate-limited predictive
+ * [PowerManager.getThermalHeadroom] forecasts (API 30+) and Sustained Performance Mode
+ * so Tensor SoCs step down gracefully before hitting severe thermal throttling.
  */
 class PixelPerformanceMonitor(context: Context) {
 
     companion object {
         private const val TAG = "PixelPerfMonitor"
+        internal const val MIN_HEADROOM_POLL_INTERVAL_MS = 10_500L
+        internal const val HEADROOM_FORECAST_SECONDS = 5
+        internal const val HEADROOM_WARM_THRESHOLD = 0.85f
+        internal const val HEADROOM_THROTTLED_THRESHOLD = 1.00f
 
         fun isGooglePixelDevice(): Boolean {
             return Build.MANUFACTURER.equals("Google", ignoreCase = true) ||
@@ -48,23 +56,47 @@ class PixelPerformanceMonitor(context: Context) {
             userHighFps: Boolean,
             userHighDef: Boolean,
             targetRefreshRate: Int = 60
+        ): PixelThermalPolicy = evaluateThermalPolicyWithHeadroom(
+            thermalStatus = thermalStatus,
+            thermalHeadroom = Float.NaN,
+            userHighFps = userHighFps,
+            userHighDef = userHighDef,
+            targetRefreshRate = targetRefreshRate
+        )
+
+        /**
+         * Pure evaluation combining OS thermal status with ADPF [PowerManager.getThermalHeadroom]
+         * forecast heuristics so Pixel Tensor SoCs adapt proactively ahead of severe throttling.
+         */
+        fun evaluateThermalPolicyWithHeadroom(
+            thermalStatus: Int,
+            thermalHeadroom: Float,
+            userHighFps: Boolean,
+            userHighDef: Boolean,
+            targetRefreshRate: Int = 60
         ): PixelThermalPolicy {
+            val validHeadroom = thermalHeadroom.isFinite() && thermalHeadroom > 0f
+            val throttledByHeadroom = validHeadroom && thermalHeadroom >= HEADROOM_THROTTLED_THRESHOLD
+            val warmByHeadroom = validHeadroom && thermalHeadroom >= HEADROOM_WARM_THRESHOLD
+
             return when {
-                thermalStatus >= PowerManager.THERMAL_STATUS_SEVERE -> PixelThermalPolicy(
+                thermalStatus >= PowerManager.THERMAL_STATUS_SEVERE || throttledByHeadroom -> PixelThermalPolicy(
                     thermalStatus = thermalStatus,
                     tier = ThermalTier.THROTTLED,
                     targetFps = 30,
                     allowDepth = false,
                     allowHighRes = false,
-                    forceDisableTorch = true
+                    forceDisableTorch = true,
+                    predictedHeadroom = if (validHeadroom) thermalHeadroom else Float.NaN
                 )
-                thermalStatus >= PowerManager.THERMAL_STATUS_MODERATE -> PixelThermalPolicy(
+                thermalStatus >= PowerManager.THERMAL_STATUS_MODERATE || warmByHeadroom -> PixelThermalPolicy(
                     thermalStatus = thermalStatus,
                     tier = ThermalTier.WARM,
                     targetFps = if (targetRefreshRate >= 120 && userHighFps) 60 else 30,
                     allowDepth = true,
                     allowHighRes = false,
-                    forceDisableTorch = false
+                    forceDisableTorch = false,
+                    predictedHeadroom = if (validHeadroom) thermalHeadroom else Float.NaN
                 )
                 else -> PixelThermalPolicy(
                     thermalStatus = thermalStatus,
@@ -72,7 +104,8 @@ class PixelPerformanceMonitor(context: Context) {
                     targetFps = if (userHighFps) targetRefreshRate else 30,
                     allowDepth = true,
                     allowHighRes = userHighDef,
-                    forceDisableTorch = false
+                    forceDisableTorch = false,
+                    predictedHeadroom = if (validHeadroom) thermalHeadroom else Float.NaN
                 )
             }
         }
@@ -88,11 +121,23 @@ class PixelPerformanceMonitor(context: Context) {
     @Volatile
     private var preferHighDef: Boolean = true
 
+    private val monitorLock = Any()
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     private var lastThermalStatus: Int = try {
         powerManager?.currentThermalStatus ?: PowerManager.THERMAL_STATUS_NONE
     } catch (_: Throwable) {
         PowerManager.THERMAL_STATUS_NONE
     }
+
+    @Volatile
+    private var lastThermalHeadroom: Float = Float.NaN
+
+    @Volatile
+    private var lastHeadroomQueryElapsedMs: Long = -MIN_HEADROOM_POLL_INTERVAL_MS
+
+    @Volatile
+    private var isThermalHeadroomSupported: Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && powerManager != null
 
     private val _policy = MutableStateFlow(
         evaluateThermalPolicy(lastThermalStatus, preferHighFps, preferHighDef)
@@ -106,7 +151,51 @@ class PixelPerformanceMonitor(context: Context) {
         recomputePolicy()
     }
 
+    private val headroomPollRunnable = object : Runnable {
+        override fun run() {
+            if (!isRegistered || !isThermalHeadroomSupported) return
+            pollThermalHeadroomIfDue()
+            if (isRegistered && isThermalHeadroomSupported) {
+                mainHandler.postDelayed(this, MIN_HEADROOM_POLL_INTERVAL_MS)
+            }
+        }
+    }
+
+    @Volatile
     private var isRegistered = false
+
+    /**
+     * Queries [PowerManager.getThermalHeadroom] strictly honoring the >= 10s rate limit
+     * and single-caller serialization required by Android ADPF to prevent NaN responses.
+     */
+    fun pollThermalHeadroomIfDue(nowElapsedMs: Long = SystemClock.elapsedRealtime()): Float {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || !isThermalHeadroomSupported) {
+            return lastThermalHeadroom
+        }
+        val pm = powerManager ?: return Float.NaN
+        synchronized(monitorLock) {
+            if (!isThermalHeadroomSupported) return lastThermalHeadroom
+            if (nowElapsedMs - lastHeadroomQueryElapsedMs < MIN_HEADROOM_POLL_INTERVAL_MS) {
+                return lastThermalHeadroom
+            }
+            lastHeadroomQueryElapsedMs = nowElapsedMs
+            val reading = try {
+                pm.getThermalHeadroom(HEADROOM_FORECAST_SECONDS)
+            } catch (_: Throwable) {
+                Float.NaN
+            }
+            if (!reading.isFinite() || reading <= 0f) {
+                if (!lastThermalHeadroom.isFinite()) {
+                    // Initial probe returned NaN/0 -> unsupported on this device/emulator
+                    isThermalHeadroomSupported = false
+                }
+                return lastThermalHeadroom
+            }
+            lastThermalHeadroom = reading
+        }
+        recomputePolicy()
+        return lastThermalHeadroom
+    }
 
     fun startMonitoring() {
         if (isRegistered) return
@@ -115,10 +204,17 @@ class PixelPerformanceMonitor(context: Context) {
                 lastThermalStatus = pm.currentThermalStatus
                 pm.addThermalStatusListener(thermalListener)
                 isRegistered = true
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && isThermalHeadroomSupported) {
+                    pollThermalHeadroomIfDue()
+                    if (isThermalHeadroomSupported) {
+                        mainHandler.removeCallbacks(headroomPollRunnable)
+                        mainHandler.postDelayed(headroomPollRunnable, MIN_HEADROOM_POLL_INTERVAL_MS)
+                    }
+                }
                 recomputePolicy()
                 Log.i(
                     TAG,
-                    "Thermal monitor active (pixel=$isPixelDevice, sustainedPerf=$isSustainedPerformanceSupported, status=$lastThermalStatus)"
+                    "Thermal monitor active (pixel=$isPixelDevice, sustainedPerf=$isSustainedPerformanceSupported, headroomSupported=$isThermalHeadroomSupported, status=$lastThermalStatus)"
                 )
             }
         } catch (t: Throwable) {
@@ -127,6 +223,7 @@ class PixelPerformanceMonitor(context: Context) {
     }
 
     fun stopMonitoring() {
+        mainHandler.removeCallbacks(headroomPollRunnable)
         if (!isRegistered) return
         isRegistered = false
         try {
@@ -146,7 +243,13 @@ class PixelPerformanceMonitor(context: Context) {
     }
 
     private fun recomputePolicy() {
-        val next = evaluateThermalPolicy(lastThermalStatus, preferHighFps, preferHighDef, targetRefreshRate)
+        val next = evaluateThermalPolicyWithHeadroom(
+            thermalStatus = lastThermalStatus,
+            thermalHeadroom = lastThermalHeadroom,
+            userHighFps = preferHighFps,
+            userHighDef = preferHighDef,
+            targetRefreshRate = targetRefreshRate
+        )
         if (next != _policy.value) {
             _policy.value = next
             onPolicyChanged?.invoke(next)

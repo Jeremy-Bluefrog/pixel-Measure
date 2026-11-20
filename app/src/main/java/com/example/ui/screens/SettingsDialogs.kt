@@ -35,6 +35,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.logic.ShareUtility
+import com.example.logic.TranslationManager
 import com.example.ui.components.EnableWindowBlur
 import com.example.ui.components.ExpressiveButtonOption
 import com.example.ui.components.ExpressiveConnectedButtonGroup
@@ -42,6 +43,8 @@ import com.example.ui.components.GradientBlurTopBar
 import com.example.ui.components.RulerEditBodyContent
 import com.example.ui.components.gradientBlurSource
 import com.example.ui.components.rememberGradientBlurBackdropState
+import com.example.ui.i18n.LocalAppLanguage
+import com.example.ui.i18n.tr
 import com.example.ui.theme.ExpressiveCookie8Shape
 import com.example.ui.theme.ExpressiveTypography
 import com.example.ui.theme.GoogleSansRounded
@@ -101,7 +104,7 @@ fun SettingsSubPageScaffold(
                             ) {
                                 Icon(
                                     imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                                    contentDescription = "返回設定"
+                                    contentDescription = tr("common_back_settings")
                                 )
                             }
                         }
@@ -186,7 +189,7 @@ fun SettingsSubPageScaffold(
                             .testTag("settings_subpage_done_btn")
                     ) {
                         Text(
-                            text = "完成",
+                            text = tr("common_done"),
                             fontFamily = GoogleSansRounded,
                             fontWeight = FontWeight.Bold
                         )
@@ -203,17 +206,18 @@ fun ThemeAndAppearancePage(
     onSelectTheme: (String) -> Unit,
     onNavigateBack: () -> Unit
 ) {
-    val options = remember {
+    val lang = LocalAppLanguage.current
+    val options = remember(lang) {
         listOf(
-            ExpressiveButtonOption("SYSTEM", "跟隨系統", testTag = "theme_option_system"),
-            ExpressiveButtonOption("LIGHT", "日間", testTag = "theme_option_light"),
-            ExpressiveButtonOption("DARK", "夜間", testTag = "theme_option_dark")
+            ExpressiveButtonOption("SYSTEM", TranslationManager.getString("set_theme_chip_system", lang), testTag = "theme_option_system"),
+            ExpressiveButtonOption("LIGHT", TranslationManager.getString("set_theme_chip_light", lang), testTag = "theme_option_light"),
+            ExpressiveButtonOption("DARK", TranslationManager.getString("set_theme_chip_dark", lang), testTag = "theme_option_dark")
         )
     }
 
     SettingsSubPageScaffold(
-        title = "外觀與深淺色模式",
-        subtitle = "自訂日間明亮與夜間護眼主題",
+        title = tr("set_sub_theme_title"),
+        subtitle = tr("set_sub_theme_sub"),
         icon = Icons.Rounded.DarkMode,
         testTag = "settings_theme_page",
         onNavigateBack = onNavigateBack
@@ -246,16 +250,16 @@ fun ThemeAndAppearancePage(
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
                         text = when (themeMode) {
-                            "LIGHT" -> "已啟用日間模式"
-                            "DARK" -> "已啟用夜間模式"
-                            else -> "跟隨系統外觀設定"
+                            "LIGHT" -> tr("set_sub_theme_active_light")
+                            "DARK" -> tr("set_sub_theme_active_dark")
+                            else -> tr("set_sub_theme_active_sys")
                         },
                         fontFamily = GoogleSansRounded,
                         fontWeight = FontWeight.Bold,
                         color = if (isPreviewDark) Color(0xFFE2E8F0) else Color(0xFF0F172A)
                     )
                     Text(
-                        text = "所有尺規、浮動工具列與視窗同步套用",
+                        text = tr("set_sub_theme_sync_note"),
                         fontFamily = GoogleSansRounded,
                         style = MaterialTheme.typography.bodySmall,
                         color = if (isPreviewDark) Color(0xFF94A3B8) else Color(0xFF475569)
@@ -283,19 +287,20 @@ fun DefaultUnitPage(
     onSelectUnit: (String) -> Unit,
     onNavigateBack: () -> Unit
 ) {
-    val unitOptions = remember {
+    val lang = LocalAppLanguage.current
+    val unitOptions = remember(lang) {
         listOf(
-            ExpressiveButtonOption("mm", "公釐", testTag = "unit_chip_mm"),
-            ExpressiveButtonOption("cm", "公分", testTag = "unit_chip_cm"),
-            ExpressiveButtonOption("m", "公尺", testTag = "unit_chip_m"),
-            ExpressiveButtonOption("in", "英吋", testTag = "unit_chip_in"),
-            ExpressiveButtonOption("ft", "英呎", testTag = "unit_chip_ft")
+            ExpressiveButtonOption("mm", TranslationManager.getString("unit_short_mm", lang), testTag = "unit_chip_mm"),
+            ExpressiveButtonOption("cm", TranslationManager.getString("unit_short_cm", lang), testTag = "unit_chip_cm"),
+            ExpressiveButtonOption("m", TranslationManager.getString("unit_short_m", lang), testTag = "unit_chip_m"),
+            ExpressiveButtonOption("in", TranslationManager.getString("unit_short_in", lang), testTag = "unit_chip_in"),
+            ExpressiveButtonOption("ft", TranslationManager.getString("unit_short_ft", lang), testTag = "unit_chip_ft")
         )
     }
 
     SettingsSubPageScaffold(
-        title = "預設測量單位",
-        subtitle = "套用於 AR 空間量測與歷史紀錄換算",
+        title = tr("set_sub_unit_title"),
+        subtitle = tr("set_sub_unit_sub"),
         icon = Icons.Rounded.Straighten,
         testTag = "settings_unit_page",
         onNavigateBack = onNavigateBack
@@ -318,7 +323,7 @@ fun DefaultUnitPage(
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text(
-                    text = "即時換算對照 (以 1 公尺為基準)",
+                    text = tr("set_sub_unit_ref_header"),
                     style = MaterialTheme.typography.labelLarge,
                     fontFamily = GoogleSansRounded,
                     fontWeight = FontWeight.Bold,
@@ -326,12 +331,12 @@ fun DefaultUnitPage(
                 )
                 Text(
                     text = when (selectedUnit) {
-                        "mm" -> "1000 mm  ·  適合精密零件與極微距離量測"
-                        "m" -> "1.00 m  ·  適合房間長寬與家具尺寸"
-                        "in" -> "39.37 in  ·  適合螢幕與家電規格"
-                        "ft" -> "3.28 ft  ·  適合室內設計與空間規劃"
-                        "yd" -> "1.09 yd  ·  適合長距離與場地規劃"
-                        else -> "100.0 cm  ·  適合日常物件與桌面量測"
+                        "mm" -> tr("set_sub_unit_ref_mm")
+                        "m" -> tr("set_sub_unit_ref_m")
+                        "in" -> tr("set_sub_unit_ref_in")
+                        "ft" -> tr("set_sub_unit_ref_ft")
+                        "yd" -> tr("set_sub_unit_ref_yd")
+                        else -> tr("set_sub_unit_ref_cm")
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     fontFamily = GoogleSansRounded,
@@ -358,42 +363,43 @@ fun ArVisualStylePage(
     onGridOverlayStyleChange: (String) -> Unit,
     onNavigateBack: () -> Unit
 ) {
-    val reticleOptions = remember {
+    val lang = LocalAppLanguage.current
+    val reticleOptions = remember(lang) {
         listOf(
-            ExpressiveButtonOption("DOUBLE_RING", "雙環", testTag = "reticle_option_double_ring"),
-            ExpressiveButtonOption("PRECISION_CROSSHAIR", "十字", testTag = "reticle_option_crosshair"),
-            ExpressiveButtonOption("MINIMAL_DOT", "圓點", testTag = "reticle_option_dot"),
-            ExpressiveButtonOption("HOLOGRAPHIC_RADAR", "雷達", testTag = "reticle_option_radar")
+            ExpressiveButtonOption("DOUBLE_RING", TranslationManager.getString("set_reticle_double", lang), testTag = "reticle_option_double_ring"),
+            ExpressiveButtonOption("PRECISION_CROSSHAIR", TranslationManager.getString("set_reticle_crosshair", lang), testTag = "reticle_option_crosshair"),
+            ExpressiveButtonOption("MINIMAL_DOT", TranslationManager.getString("set_reticle_dot", lang), testTag = "reticle_option_dot"),
+            ExpressiveButtonOption("HOLOGRAPHIC_RADAR", TranslationManager.getString("set_reticle_radar", lang), testTag = "reticle_option_radar")
         )
     }
-    val paletteSwatches = remember {
+    val paletteSwatches = remember(lang) {
         listOf(
-            Triple("DYNAMIC", "動態色", Color.Unspecified),
-            Triple("PIXEL_BLUE", "Pixel 藍", Color(0xFF4C8DF6)),
-            Triple("NEON_LIME", "螢光綠", Color(0xFF22C55E)),
-            Triple("AMBER_GOLD", "金橘", Color(0xFFF59E0B)),
-            Triple("CORAL_ROSE", "珊瑚紅", Color(0xFFF43F5E))
+            Triple("DYNAMIC", TranslationManager.getString("set_palette_dynamic", lang), Color.Unspecified),
+            Triple("PIXEL_BLUE", TranslationManager.getString("set_palette_pixel_blue", lang), Color(0xFF4C8DF6)),
+            Triple("NEON_LIME", TranslationManager.getString("set_palette_neon_lime", lang), Color(0xFF22C55E)),
+            Triple("AMBER_GOLD", TranslationManager.getString("set_palette_amber_gold", lang), Color(0xFFF59E0B)),
+            Triple("CORAL_ROSE", TranslationManager.getString("set_palette_coral_rose", lang), Color(0xFFF43F5E))
         )
     }
-    val fontOptions = remember {
+    val fontOptions = remember(lang) {
         listOf(
-            ExpressiveButtonOption("COMPACT", "精簡"),
-            ExpressiveButtonOption("STANDARD", "標準"),
-            ExpressiveButtonOption("LARGE", "放大")
+            ExpressiveButtonOption("COMPACT", TranslationManager.getString("set_font_compact", lang)),
+            ExpressiveButtonOption("STANDARD", TranslationManager.getString("ruler_font_std", lang)),
+            ExpressiveButtonOption("LARGE", TranslationManager.getString("ruler_font_large", lang))
         )
     }
-    val badgeOptions = remember {
+    val badgeOptions = remember(lang) {
         listOf(
-            ExpressiveButtonOption("SOLID", "高顯色"),
-            ExpressiveButtonOption("GLASS", "柔和玻璃"),
-            ExpressiveButtonOption("CLEAR", "極簡透明")
+            ExpressiveButtonOption("SOLID", TranslationManager.getString("set_opacity_solid", lang)),
+            ExpressiveButtonOption("GLASS", TranslationManager.getString("set_opacity_glass", lang)),
+            ExpressiveButtonOption("CLEAR", TranslationManager.getString("set_opacity_clear", lang))
         )
     }
-    val gridOptions = remember {
+    val gridOptions = remember(lang) {
         listOf(
-            ExpressiveButtonOption("OFF", "關閉", testTag = "grid_option_off"),
-            ExpressiveButtonOption("PERSPECTIVE_GRID", "透視網格", testTag = "grid_option_perspective"),
-            ExpressiveButtonOption("DOT_MATRIX", "幾何點陣", testTag = "grid_option_dot_matrix")
+            ExpressiveButtonOption("OFF", TranslationManager.getString("set_grid_off", lang), testTag = "grid_option_off"),
+            ExpressiveButtonOption("PERSPECTIVE_GRID", TranslationManager.getString("set_grid_perspective", lang), testTag = "grid_option_perspective"),
+            ExpressiveButtonOption("DOT_MATRIX", TranslationManager.getString("set_grid_dot_matrix", lang), testTag = "grid_option_dot_matrix")
         )
     }
     val themePrimary = MaterialTheme.colorScheme.primary
@@ -414,8 +420,8 @@ fun ArVisualStylePage(
     }
 
     SettingsSubPageScaffold(
-        title = "AR 準心、色彩與線條樣式",
-        subtitle = "自訂 3D 準心外觀、主題色調、線條粗細與輔助網格",
+        title = tr("set_sub_visual_title"),
+        subtitle = tr("set_sub_visual_sub"),
         icon = Icons.Rounded.Palette,
         testTag = "settings_visual_style_page",
         onNavigateBack = onNavigateBack
@@ -538,7 +544,7 @@ fun ArVisualStylePage(
 
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(
-                text = "3D 瞄準準心樣式",
+                text = tr("set_visual_reticle_sec"),
                 style = MaterialTheme.typography.titleSmall,
                 fontFamily = GoogleSansRounded,
                 fontWeight = FontWeight.Bold
@@ -554,7 +560,7 @@ fun ArVisualStylePage(
 
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
-                text = "AR 線條與標註強調色",
+                text = tr("set_visual_accent_sec"),
                 style = MaterialTheme.typography.titleSmall,
                 fontFamily = GoogleSansRounded,
                 fontWeight = FontWeight.Bold
@@ -611,7 +617,7 @@ fun ArVisualStylePage(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "測量線條粗細",
+                    text = tr("set_visual_thickness_sec"),
                     style = MaterialTheme.typography.titleSmall,
                     fontFamily = GoogleSansRounded,
                     fontWeight = FontWeight.Bold
@@ -632,7 +638,7 @@ fun ArVisualStylePage(
 
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(
-                text = "AR 數值標籤大小",
+                text = tr("set_visual_font_sec"),
                 style = MaterialTheme.typography.titleSmall,
                 fontFamily = GoogleSansRounded,
                 fontWeight = FontWeight.Bold
@@ -648,7 +654,7 @@ fun ArVisualStylePage(
 
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(
-                text = "標籤底框透明度",
+                text = tr("set_visual_opacity_sec"),
                 style = MaterialTheme.typography.titleSmall,
                 fontFamily = GoogleSansRounded,
                 fontWeight = FontWeight.Bold
@@ -664,7 +670,7 @@ fun ArVisualStylePage(
 
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(
-                text = "3D 空間輔助網格",
+                text = tr("set_visual_grid_sec"),
                 style = MaterialTheme.typography.titleSmall,
                 fontFamily = GoogleSansRounded,
                 fontWeight = FontWeight.Bold
@@ -698,62 +704,63 @@ fun SmartAssistPage(
     onScaleCalibrationChange: (Float) -> Unit,
     onNavigateBack: () -> Unit
 ) {
+    val lang = LocalAppLanguage.current
     val snapSelectedKey = when {
         vertexSnapThresholdCm <= 0.1f -> "OFF"
         vertexSnapThresholdCm >= 4.0f -> "STRONG"
         else -> "PRECISION"
     }
-    val snapOptions = remember {
+    val snapOptions = remember(lang) {
         listOf(
-            ExpressiveButtonOption("OFF", "關閉吸附", testTag = "snap_option_off"),
-            ExpressiveButtonOption("PRECISION", "精準 2.5cm", testTag = "snap_option_precision"),
-            ExpressiveButtonOption("STRONG", "強效 5.0cm", testTag = "snap_option_strong")
+            ExpressiveButtonOption("OFF", TranslationManager.getString("set_snap_off", lang), testTag = "snap_option_off"),
+            ExpressiveButtonOption("PRECISION", TranslationManager.getString("set_snap_precision", lang), testTag = "snap_option_precision"),
+            ExpressiveButtonOption("STRONG", TranslationManager.getString("set_snap_strong", lang), testTag = "snap_option_strong")
         )
     }
 
     SettingsSubPageScaffold(
-        title = "智慧對齊與觸覺輔助",
-        subtitle = "讓手持量測更平穩、自訂端點磁吸與尺度微調",
+        title = tr("set_sub_assist_title"),
+        subtitle = tr("set_sub_assist_sub"),
         icon = Icons.Rounded.AutoFixHigh,
         testTag = "settings_smart_assist_page",
         onNavigateBack = onNavigateBack
     ) {
         DialogSwitchRow(
             icon = Icons.Rounded.Vibration,
-            title = "觸覺微震動回饋",
-            subtitle = "落點、吸附角度與按鍵操作時震動提示",
+            title = tr("set_assist_vibrate_title"),
+            subtitle = tr("set_assist_vibrate_sub"),
             checked = vibrateOnAlign,
             onCheckedChange = onVibrateChange,
             testTag = "switch_vibrate"
         )
         DialogSwitchRow(
             icon = Icons.Rounded.Sensors,
-            title = "防手震穩定平滑",
-            subtitle = "抑制手部晃動帶來的游標微幅漂移",
+            title = tr("set_assist_antijitter_title"),
+            subtitle = tr("set_assist_antijitter_sub"),
             checked = antiJitterEnabled,
             onCheckedChange = onAntiJitterChange,
             testTag = "switch_sensor_fusion_master"
         )
         DialogSwitchRow(
             icon = Icons.Rounded.Architecture,
-            title = "90° / 180° 直角自動吸附",
-            subtitle = "接近水平或垂直軸線時自動貼合對齊",
+            title = tr("set_assist_ortho_title"),
+            subtitle = tr("set_assist_ortho_sub"),
             checked = orthogonalSnapEnabled,
             onCheckedChange = onOrthogonalSnapChange,
             testTag = "switch_orthogonal_snap"
         )
         DialogSwitchRow(
             icon = Icons.Rounded.VerticalAlignBottom,
-            title = "牆面高度垂直校正",
-            subtitle = "測量物品高度時對齊重力垂直方向",
+            title = tr("set_assist_gravity_title"),
+            subtitle = tr("set_assist_gravity_sub"),
             checked = gravityAlignmentEnabled,
             onCheckedChange = onGravityAlignmentChange,
             testTag = "switch_gravity_alignment"
         )
         DialogSwitchRow(
             icon = Icons.Rounded.Grain,
-            title = "顯示空間深度特徵點",
-            subtitle = "於平面掃描時顯示偵測到的深度參考點",
+            title = tr("set_assist_pointcloud_title"),
+            subtitle = tr("set_assist_pointcloud_sub"),
             checked = showPointCloud,
             onCheckedChange = onShowPointCloudChange,
             testTag = "switch_point_cloud"
@@ -769,7 +776,7 @@ fun SmartAssistPage(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text(
-                    text = "端點與邊線磁吸靈敏度",
+                    text = tr("set_assist_snap_sec"),
                     style = MaterialTheme.typography.titleSmall,
                     fontFamily = GoogleSansRounded,
                     fontWeight = FontWeight.Bold
@@ -807,13 +814,13 @@ fun SmartAssistPage(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "AR 空間尺度微調校準",
+                            text = tr("set_assist_scale_title"),
                             style = MaterialTheme.typography.titleSmall,
                             fontFamily = GoogleSansRounded,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "對照實體捲尺微調比例係數",
+                            text = tr("set_assist_scale_sub"),
                             style = MaterialTheme.typography.bodySmall,
                             fontFamily = GoogleSansRounded,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -834,7 +841,7 @@ fun SmartAssistPage(
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                                 modifier = Modifier.heightIn(min = 36.dp)
                             ) {
-                                Text("重設", fontSize = 12.sp, fontFamily = GoogleSansRounded)
+                                Text(tr("common_reset"), fontSize = 12.sp, fontFamily = GoogleSansRounded)
                             }
                         }
                     }
@@ -870,25 +877,26 @@ fun CameraQualityPage(
     onRefreshRateChange: (String) -> Unit,
     onNavigateBack: () -> Unit
 ) {
-    val ratioOptions = remember {
+    val lang = LocalAppLanguage.current
+    val ratioOptions = remember(lang) {
         listOf(
-            ExpressiveButtonOption("FULL", "全螢幕"),
+            ExpressiveButtonOption("FULL", TranslationManager.getString("set_ratio_full", lang)),
             ExpressiveButtonOption("16_9", "16:9"),
             ExpressiveButtonOption("4_3", "4:3"),
             ExpressiveButtonOption("1_1", "1:1")
         )
     }
-    val refreshRateOptions = remember {
+    val refreshRateOptions = remember(lang) {
         listOf(
-            ExpressiveButtonOption("120Hz", "120Hz 極速", testTag = "refresh_rate_120hz"),
-            ExpressiveButtonOption("60Hz", "60Hz 標準", testTag = "refresh_rate_60hz"),
-            ExpressiveButtonOption("30Hz", "30Hz 省電", testTag = "refresh_rate_30hz")
+            ExpressiveButtonOption("120Hz", TranslationManager.getString("set_cam_120hz", lang), testTag = "refresh_rate_120hz"),
+            ExpressiveButtonOption("60Hz", TranslationManager.getString("set_cam_60hz", lang), testTag = "refresh_rate_60hz"),
+            ExpressiveButtonOption("30Hz", TranslationManager.getString("set_cam_30hz", lang), testTag = "refresh_rate_30hz")
         )
     }
 
     SettingsSubPageScaffold(
-        title = "相機畫質、色彩與補光",
-        subtitle = "控制取景比例、120Hz 流暢度、廣色域與手電筒預設亮度",
+        title = tr("set_sub_cam_title"),
+        subtitle = tr("set_sub_cam_sub"),
         icon = Icons.Rounded.CameraAlt,
         testTag = "settings_camera_quality_page",
         onNavigateBack = onNavigateBack
@@ -918,7 +926,7 @@ fun CameraQualityPage(
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Text(
-                            text = if (cameraAspectRatio == "FULL") "全螢幕視野" else cameraAspectRatio.replace("_", ":"),
+                            text = if (cameraAspectRatio == "FULL") tr("set_cam_ratio_full") else cameraAspectRatio.replace("_", ":"),
                             style = MaterialTheme.typography.labelLarge,
                             fontFamily = GoogleSansRounded,
                             fontWeight = FontWeight.Bold,
@@ -939,7 +947,7 @@ fun CameraQualityPage(
 
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(
-                text = "畫面更新率與 120Hz Pro 暢順顯示",
+                text = tr("set_cam_refresh_sec"),
                 style = MaterialTheme.typography.titleSmall,
                 fontFamily = GoogleSansRounded,
                 fontWeight = FontWeight.Bold
@@ -955,8 +963,8 @@ fun CameraQualityPage(
 
         DialogSwitchRow(
             icon = Icons.Rounded.Speed,
-            title = "60 FPS 高流暢預覽",
-            subtitle = "鏡頭移動時保持高更新率與即時準心追蹤",
+            title = tr("set_cam_60fps_title"),
+            subtitle = tr("set_cam_60fps_sub"),
             checked = highFpsModeEnabled,
             onCheckedChange = onHighFpsChange,
             testTag = "switch_high_fps"
@@ -964,8 +972,8 @@ fun CameraQualityPage(
 
         DialogSwitchRow(
             icon = Icons.Rounded.Hd,
-            title = "高清晰度成像 (Ultra HD)",
-            subtitle = "提升遠距表面紋理辨識與拍照清晰度",
+            title = tr("set_cam_uhd_title"),
+            subtitle = tr("set_cam_uhd_sub"),
             checked = highDefinitionQualityEnabled,
             onCheckedChange = onHighDefinitionChange,
             testTag = "switch_high_definition"
@@ -973,8 +981,8 @@ fun CameraQualityPage(
 
         DialogSwitchRow(
             icon = Icons.Rounded.ColorLens,
-            title = "Display P3 廣色域相片",
-            subtitle = "儲存測量照片時保留 Pixel 寬廣色彩表現",
+            title = tr("set_cam_p3_title"),
+            subtitle = tr("set_cam_p3_sub"),
             checked = useDisplayP3ColorSpace,
             onCheckedChange = onDisplayP3Change,
             testTag = "switch_display_p3"
@@ -982,8 +990,8 @@ fun CameraQualityPage(
 
         DialogSwitchRow(
             icon = Icons.Rounded.CleaningServices,
-            title = "鏡頭髒污與指紋提醒",
-            subtitle = "偵測畫面霧化時貼心提示清潔鏡頭提升準度",
+            title = tr("set_cam_dirt_title"),
+            subtitle = tr("set_cam_dirt_sub"),
             checked = isLensDirtWarningEnabled,
             onCheckedChange = onLensDirtWarningChange,
             testTag = "switch_lens_dirt_warning"
@@ -1004,7 +1012,7 @@ fun CameraQualityPage(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "手電筒預設補光亮度",
+                        text = tr("set_cam_torch_sec"),
                         style = MaterialTheme.typography.titleSmall,
                         fontFamily = GoogleSansRounded,
                         fontWeight = FontWeight.Bold
@@ -1059,24 +1067,25 @@ fun InterfaceCustomizationPage(
     onAutoCopyOnCompleteChange: (Boolean) -> Unit,
     onNavigateBack: () -> Unit
 ) {
+    val lang = LocalAppLanguage.current
     val scaleSelectedKey = when {
         uiButtonScale <= 0.90f -> "0.85"
         uiButtonScale <= 1.07f -> "1.0"
         uiButtonScale <= 1.22f -> "1.15"
         else -> "1.30"
     }
-    val scaleOptions = remember {
+    val scaleOptions = remember(lang) {
         listOf(
-            ExpressiveButtonOption("0.85", "緊湊", testTag = "btn_scale_085"),
-            ExpressiveButtonOption("1.0", "標準", testTag = "btn_scale_100"),
-            ExpressiveButtonOption("1.15", "放大", testTag = "btn_scale_115"),
-            ExpressiveButtonOption("1.30", "特大", testTag = "btn_scale_130")
+            ExpressiveButtonOption("0.85", TranslationManager.getString("set_btn_scale_compact", lang), testTag = "btn_scale_085"),
+            ExpressiveButtonOption("1.0", TranslationManager.getString("set_btn_scale_standard", lang), testTag = "btn_scale_100"),
+            ExpressiveButtonOption("1.15", TranslationManager.getString("set_btn_scale_large", lang), testTag = "btn_scale_115"),
+            ExpressiveButtonOption("1.30", TranslationManager.getString("set_btn_scale_xl", lang), testTag = "btn_scale_130")
         )
     }
 
     SettingsSubPageScaffold(
-        title = "操作介面與便利自訂",
-        subtitle = "調整主按鈕操作尺寸、螢幕恆亮與自動剪貼簿功能",
+        title = tr("set_sub_iface_title"),
+        subtitle = tr("set_sub_iface_sub"),
         icon = Icons.Rounded.Tune,
         testTag = "settings_interface_page",
         onNavigateBack = onNavigateBack
@@ -1096,7 +1105,7 @@ fun InterfaceCustomizationPage(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "AR 下方操作按鈕大小",
+                        text = tr("set_iface_btn_size"),
                         style = MaterialTheme.typography.titleSmall,
                         fontFamily = GoogleSansRounded,
                         fontWeight = FontWeight.Bold
@@ -1128,8 +1137,8 @@ fun InterfaceCustomizationPage(
 
         DialogSwitchRow(
             icon = Icons.Rounded.WbSunny,
-            title = "測量期間保持螢幕恆亮",
-            subtitle = "避免長時間對齊物件時螢幕自動休眠變暗",
+            title = tr("set_iface_keep_on_title"),
+            subtitle = tr("set_iface_keep_on_sub"),
             checked = keepScreenOn,
             onCheckedChange = onKeepScreenOnChange,
             testTag = "switch_keep_screen_on"
@@ -1137,8 +1146,8 @@ fun InterfaceCustomizationPage(
 
         DialogSwitchRow(
             icon = Icons.Rounded.ContentCopy,
-            title = "完成線段後自動複製結果",
-            subtitle = "完成兩點或幾何量測時自動將數值寫入剪貼簿",
+            title = tr("set_iface_autocopy_title"),
+            subtitle = tr("set_iface_autocopy_sub"),
             checked = autoCopyOnComplete,
             onCheckedChange = onAutoCopyOnCompleteChange,
             testTag = "switch_auto_copy"
@@ -1154,12 +1163,13 @@ fun ToolsCustomizationPage(
     onRulerDualUnitChange: (Boolean) -> Unit,
     onNavigateBack: () -> Unit
 ) {
-    val rulerThemeOptions = remember {
+    val lang = LocalAppLanguage.current
+    val rulerThemeOptions = remember(lang) {
         listOf(
-            ExpressiveButtonOption("MATERIAL_YOU", "動態色", testTag = "ruler_theme_material"),
-            ExpressiveButtonOption("STEEL", "鋼鐵灰", testTag = "ruler_theme_steel"),
-            ExpressiveButtonOption("NEON_CYAN", "霓光青", testTag = "ruler_theme_cyan"),
-            ExpressiveButtonOption("HIGH_CONTRAST", "工程黃", testTag = "ruler_theme_contrast")
+            ExpressiveButtonOption("MATERIAL_YOU", TranslationManager.getString("set_ruler_dynamic", lang), testTag = "ruler_theme_material"),
+            ExpressiveButtonOption("STEEL", TranslationManager.getString("set_ruler_steel", lang), testTag = "ruler_theme_steel"),
+            ExpressiveButtonOption("NEON_CYAN", TranslationManager.getString("set_ruler_cyan", lang), testTag = "ruler_theme_cyan"),
+            ExpressiveButtonOption("HIGH_CONTRAST", TranslationManager.getString("set_ruler_contrast", lang), testTag = "ruler_theme_contrast")
         )
     }
 
@@ -1171,8 +1181,8 @@ fun ToolsCustomizationPage(
     }
 
     SettingsSubPageScaffold(
-        title = "螢幕尺風格與對照個人化",
-        subtitle = "自訂螢幕尺外觀色彩與英吋雙制對照顯示",
+        title = tr("set_sub_tools_title"),
+        subtitle = tr("set_sub_tools_sub"),
         icon = Icons.Rounded.Colorize,
         testTag = "settings_tools_custom_page",
         onNavigateBack = onNavigateBack
@@ -1202,7 +1212,7 @@ fun ToolsCustomizationPage(
                     }
                 }
                 Text(
-                    text = if (rulerDualUnit) "cm / in 雙制對照預覽" else "雙側公分 (cm) 預覽",
+                    text = if (rulerDualUnit) tr("set_tools_preview_dual") else tr("set_tools_preview_cm"),
                     style = MaterialTheme.typography.labelMedium,
                     fontFamily = GoogleSansRounded,
                     fontWeight = FontWeight.Bold,
@@ -1216,7 +1226,7 @@ fun ToolsCustomizationPage(
 
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(
-                text = "螢幕尺刻度外觀主題",
+                text = tr("set_tools_theme_sec"),
                 style = MaterialTheme.typography.titleSmall,
                 fontFamily = GoogleSansRounded,
                 fontWeight = FontWeight.Bold
@@ -1232,8 +1242,8 @@ fun ToolsCustomizationPage(
 
         DialogSwitchRow(
             icon = Icons.Rounded.SwapHoriz,
-            title = "右側顯示英吋 (in) 對照刻度",
-            subtitle = "左側維持公分 (cm)，右側切換為英吋以利快速換算",
+            title = tr("set_tools_dual_title"),
+            subtitle = tr("set_tools_dual_sub"),
             checked = rulerDualUnit,
             onCheckedChange = onRulerDualUnitChange,
             testTag = "switch_ruler_dual_unit"
@@ -1251,8 +1261,8 @@ fun RulerEditPage(
     onNavigateBack: () -> Unit
 ) {
     SettingsSubPageScaffold(
-        title = "螢幕尺數字大小與校正",
-        subtitle = "調整螢幕尺刻度文字縮放倍率與實體信用卡精準比例係數",
+        title = tr("set_sub_ruler_edit_title"),
+        subtitle = tr("set_sub_ruler_edit_sub"),
         icon = Icons.Rounded.Edit,
         testTag = "settings_ruler_edit_page",
         onNavigateBack = onNavigateBack,
@@ -1261,7 +1271,7 @@ fun RulerEditPage(
                 onClick = onResetAll,
                 modifier = Modifier.heightIn(min = 48.dp)
             ) {
-                Text("全部重設", fontFamily = GoogleSansRounded, fontWeight = FontWeight.Bold)
+                Text(tr("common_reset_all"), fontFamily = GoogleSansRounded, fontWeight = FontWeight.Bold)
             }
         }
     ) {
@@ -1280,26 +1290,26 @@ fun MeasurementTutorialPage(
     onNavigateBack: () -> Unit
 ) {
     SettingsSubPageScaffold(
-        title = "AR 測量使用指南",
-        subtitle = "掌握空間測距與 3D 圓形量測訣竅",
+        title = tr("set_sub_tut_title"),
+        subtitle = tr("set_sub_tut_sub"),
         icon = Icons.Rounded.AutoAwesome,
         testTag = "settings_tutorial_page",
         onNavigateBack = onNavigateBack
     ) {
         TutorialTipCard(
             step = "1",
-            title = "掃描平面直到 3D 雙環穩定貼合",
-            desc = "在光線充足、有紋理的桌面或地面緩慢左右移動手機，讓雙環準心感應平面傾斜角度。"
+            title = tr("set_tut_tip1_title"),
+            desc = tr("set_tut_tip1_desc")
         )
         TutorialTipCard(
             step = "2",
-            title = "3D 空間圓圈與直徑量測",
-            desc = "切換至「圓形」模式後，先點選邊緣第 1 點與第 2 點預覽直徑，補上第 3 點即可精準定出空間圓心與周長。"
+            title = tr("set_tut_tip2_title"),
+            desc = tr("set_tut_tip2_desc")
         )
         TutorialTipCard(
             step = "3",
-            title = "拍照、錄影與歷史紀錄查看",
-            desc = "點擊拍照鍵可儲存含數據浮水印的照片；長按或切換錄影鍵可保存帶測量標註的影片至歷史紀錄。"
+            title = tr("set_tut_tip3_title"),
+            desc = tr("set_tut_tip3_desc")
         )
 
         FilledTonalButton(
@@ -1314,7 +1324,7 @@ fun MeasurementTutorialPage(
         ) {
             Icon(Icons.Rounded.PlayCircleOutline, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(8.dp))
-            Text("重播完整歡迎導覽", fontFamily = GoogleSansRounded, fontWeight = FontWeight.Bold)
+            Text(tr("set_tut_replay_btn"), fontFamily = GoogleSansRounded, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -1324,11 +1334,12 @@ fun AboutFeedbackPage(
     onNavigateBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val lang = LocalAppLanguage.current
     val feedbackEmail = "jeremy1030623@gmail.com"
 
     SettingsSubPageScaffold(
-        title = "關於 Measure",
-        subtitle = "Google Pixel 原生 AR 空間與日常測量工具",
+        title = tr("set_sub_about_title"),
+        subtitle = tr("set_sub_about_sub"),
         icon = Icons.Rounded.Info,
         testTag = "settings_about_page",
         onNavigateBack = onNavigateBack
@@ -1343,13 +1354,13 @@ fun AboutFeedbackPage(
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text(
-                    text = "Measure",
+                    text = tr("brand_name"),
                     style = MaterialTheme.typography.titleMedium,
                     fontFamily = GoogleSansRounded,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "整合 Google Play Services for AR 空間測距、3D 圓圈擬合與螢幕直尺，提供直覺精準的日常量測體驗。",
+                    text = tr("set_about_desc"),
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = GoogleSansRounded,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1367,7 +1378,7 @@ fun AboutFeedbackPage(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
-                    text = "問題回報與建議信箱",
+                    text = tr("set_about_feedback_label"),
                     style = MaterialTheme.typography.labelLarge,
                     fontFamily = GoogleSansRounded,
                     fontWeight = FontWeight.Bold,
@@ -1384,7 +1395,13 @@ fun AboutFeedbackPage(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     OutlinedButton(
-                        onClick = { ShareUtility.copyToClipboard(context, feedbackEmail, "已複製信箱：$feedbackEmail") },
+                        onClick = {
+                            ShareUtility.copyToClipboard(
+                                context,
+                                feedbackEmail,
+                                TranslationManager.formatString("set_about_copied_email_fmt", lang, feedbackEmail)
+                            )
+                        },
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier
                             .weight(1f)
@@ -1392,10 +1409,10 @@ fun AboutFeedbackPage(
                     ) {
                         Icon(Icons.Rounded.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("複製信箱", fontFamily = GoogleSansRounded)
+                        Text(tr("set_about_copy_email"), fontFamily = GoogleSansRounded)
                     }
                     Button(
-                        onClick = { ShareUtility.sendFeedbackEmail(context, feedbackEmail) },
+                        onClick = { ShareUtility.sendFeedbackEmail(context, feedbackEmail, lang) },
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier
                             .weight(1f)
@@ -1403,7 +1420,7 @@ fun AboutFeedbackPage(
                     ) {
                         Icon(Icons.Rounded.Mail, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("寄送回饋", fontFamily = GoogleSansRounded)
+                        Text(tr("set_about_send_feedback"), fontFamily = GoogleSansRounded)
                     }
                 }
             }
@@ -1467,7 +1484,7 @@ fun SettingsConfirmDialog(
                 shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.heightIn(min = 48.dp)
             ) {
-                Text("取消", fontFamily = GoogleSansRounded)
+                Text(tr("cancel"), fontFamily = GoogleSansRounded)
             }
         }
     )

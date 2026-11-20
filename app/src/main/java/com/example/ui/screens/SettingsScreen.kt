@@ -42,6 +42,8 @@ import com.example.ui.adaptive.LocalAdaptiveWindowState
 import com.example.ui.adaptive.rememberLocalHingeTracker
 import com.example.ui.components.GradientBlurTopBar
 import com.example.ui.components.LanguageSelectionPage
+import com.example.ui.i18n.LocalAppLanguage
+import com.example.ui.i18n.tr
 import com.example.ui.theme.getGroupedPosition
 import com.example.ui.components.gradientBlurSource
 import com.example.ui.components.rememberGradientBlurBackdropState
@@ -157,21 +159,22 @@ fun SettingsScreen(
     val rulerTheme by viewModel.rulerTheme.collectAsStateWithLifecycle()
     val rulerDualUnit by viewModel.rulerDualUnit.collectAsStateWithLifecycle()
 
+    CompositionLocalProvider(LocalAppLanguage provides currentLanguage) {
     val currentLanguageDisplay = remember(currentLanguage) {
         TranslationManager.supportedLanguages.find { it.code == currentLanguage }?.name ?: currentLanguage
     }
     val themeLabel = when (themeMode) {
-        "LIGHT" -> "日間模式"
-        "DARK" -> "夜間模式"
-        else -> "跟隨系統"
+        "LIGHT" -> tr("set_theme_light_short")
+        "DARK" -> tr("set_theme_dark_short")
+        else -> tr("set_theme_system_short")
     }
     val unitLabel = when (selectedUnit) {
-        "mm" -> "公釐 (mm)"
-        "m" -> "公尺 (m)"
-        "in" -> "英吋 (in)"
-        "ft" -> "英呎 (ft)"
-        "yd" -> "碼 (yd)"
-        else -> "公分 (cm)"
+        "mm" -> tr("unit_mm")
+        "m" -> tr("unit_meter")
+        "in" -> tr("unit_inch")
+        "ft" -> tr("unit_ft")
+        "yd" -> tr("unit_yd")
+        else -> tr("unit_cm")
     }
     val smartAssistCount = listOf(
         vibrateOnAlign,
@@ -181,162 +184,164 @@ fun SettingsScreen(
         showPointCloud
     ).count { it }
 
-    val ratioLabel = if (cameraAspectRatio == "FULL") "全螢幕" else cameraAspectRatio.replace("_", ":")
+    val ratioLabel = if (cameraAspectRatio == "FULL") tr("set_ratio_full") else cameraAspectRatio.replace("_", ":")
     val cameraSummary = "$ratioLabel · $refreshRateMode"
     val rulerSummary = "${(rulerFontScale * 100).roundToInt()}% · ${String.format(Locale.US, "%.3fx", rulerCalibration)}"
+    val ifaceKeepOn = tr("set_iface_keep_on")
+    val ifaceAutoCopy = tr("set_iface_auto_copy")
     val interfaceSummary = buildString {
         append("${(uiButtonScale * 100).roundToInt()}%")
-        if (keepScreenOn) append(" · 恆亮")
-        if (autoCopyOnComplete) append(" · 自動複製")
+        if (keepScreenOn) append(" · $ifaceKeepOn")
+        if (autoCopyOnComplete) append(" · $ifaceAutoCopy")
     }
     val rulerThemeLabel = when (rulerTheme) {
-        "STEEL" -> "鋼鐵灰"
-        "NEON_CYAN" -> "霓光青"
-        "HIGH_CONTRAST" -> "工程黃"
-        else -> "動態色"
+        "STEEL" -> tr("set_ruler_steel")
+        "NEON_CYAN" -> tr("set_ruler_cyan")
+        "HIGH_CONTRAST" -> tr("set_ruler_contrast")
+        else -> tr("set_ruler_dynamic")
     }
-    val toolsSummary = if (rulerDualUnit) "$rulerThemeLabel · 雙制對照" else rulerThemeLabel
+    val toolsSummary = if (rulerDualUnit) tr("set_tools_dual_fmt", rulerThemeLabel) else rulerThemeLabel
     val reticleLabel = when (reticleStyle) {
-        "PRECISION_CROSSHAIR" -> "十字"
-        "MINIMAL_DOT" -> "圓點"
-        "HOLOGRAPHIC_RADAR" -> "雷達"
-        else -> "雙環"
+        "PRECISION_CROSSHAIR" -> tr("set_reticle_crosshair")
+        "MINIMAL_DOT" -> tr("set_reticle_dot")
+        "HOLOGRAPHIC_RADAR" -> tr("set_reticle_radar")
+        else -> tr("set_reticle_double")
     }
     val visualSummary = "$reticleLabel · ${String.format(Locale.US, "%.1f dp", lineThickness)}"
 
     val categories = listOf(
-        "外觀與操作介面" to listOf(
+        tr("set_cat_appearance") to listOf(
             SettingsRowEntry(
                 id = "theme",
                 icon = Icons.Rounded.DarkMode,
-                title = "日間與夜間外觀",
-                subtitle = "切換明亮、深色或跟隨系統主題",
+                title = tr("set_row_theme_title"),
+                subtitle = tr("set_row_theme_sub"),
                 badge = themeLabel,
-                keywords = listOf("外觀", "主題", "日間", "夜間", "深色", "淺色", "系統"),
+                keywords = tr("set_kw_theme").split(","),
                 testTag = "settings_row_theme",
                 subPage = SettingsSubPage.THEME
             ),
             SettingsRowEntry(
                 id = "language",
                 icon = Icons.Rounded.Language,
-                title = "應用程式語言",
-                subtitle = "選擇顯示與量測單位介面語言",
+                title = tr("set_row_lang_title"),
+                subtitle = tr("set_row_lang_sub"),
                 badge = currentLanguageDisplay,
-                keywords = listOf("語言", "中文", "英文", "language"),
+                keywords = tr("set_kw_lang").split(","),
                 testTag = "settings_row_language",
                 subPage = SettingsSubPage.LANGUAGE
             ),
             SettingsRowEntry(
                 id = "interface_custom",
                 icon = Icons.Rounded.Tune,
-                title = "操作介面與便利自訂",
-                subtitle = "調整主按鈕大小、測量恆亮與完成後自動複製",
+                title = tr("set_row_iface_title"),
+                subtitle = tr("set_row_iface_sub"),
                 badge = interfaceSummary,
-                keywords = listOf("介面", "按鈕", "大小", "恆亮", "複製", "剪貼簿", "便利", "自訂"),
+                keywords = tr("set_kw_iface").split(","),
                 testTag = "settings_row_interface_custom",
                 subPage = SettingsSubPage.INTERFACE_CUSTOM
             )
         ),
-        "測量與視覺" to listOf(
+        tr("set_cat_measure") to listOf(
             SettingsRowEntry(
                 id = "unit",
                 icon = Icons.Rounded.Straighten,
-                title = "預設測量單位",
-                subtitle = "切換公釐、公分、公尺、英吋或英呎",
+                title = tr("set_row_unit_title"),
+                subtitle = tr("set_row_unit_sub"),
                 badge = unitLabel,
-                keywords = listOf("單位", "公釐", "公分", "公尺", "英吋", "英呎", "mm", "cm", "m", "in", "ft"),
+                keywords = tr("set_kw_unit").split(","),
                 testTag = "settings_row_unit",
                 subPage = SettingsSubPage.UNIT
             ),
             SettingsRowEntry(
                 id = "visual_style",
                 icon = Icons.Rounded.Palette,
-                title = "AR 準心、色彩與線條樣式",
-                subtitle = "自訂 3D 準心外觀、主題色調、線條粗細與參考網格",
+                title = tr("set_row_visual_title"),
+                subtitle = tr("set_row_visual_sub"),
                 badge = visualSummary,
-                keywords = listOf("準心", "顏色", "線條", "粗細", "字體", "標籤", "網格", "透明度", "樣式", "自訂"),
+                keywords = tr("set_kw_visual").split(","),
                 testTag = "settings_row_visual_style",
                 subPage = SettingsSubPage.VISUAL_STYLE
             ),
             SettingsRowEntry(
                 id = "smart_assist",
                 icon = Icons.Rounded.AutoFixHigh,
-                title = "智慧對齊與觸覺輔助",
-                subtitle = "防手震、直角吸附、磁吸靈敏度與空間尺度微調",
-                badge = "$smartAssistCount/5 開啟",
-                keywords = listOf("震動", "防手震", "吸附", "對齊", "直角", "點雲", "垂直", "磁吸", "尺度", "校正"),
+                title = tr("set_row_assist_title"),
+                subtitle = tr("set_row_assist_sub"),
+                badge = tr("set_smart_count_fmt", smartAssistCount),
+                keywords = tr("set_kw_assist").split(","),
                 testTag = "settings_row_smart_assist",
                 subPage = SettingsSubPage.SMART_ASSIST
             )
         ),
-        "相機與工具個人化" to listOf(
+        tr("set_cat_camera_tools") to listOf(
             SettingsRowEntry(
                 id = "camera_quality",
                 icon = Icons.Rounded.CameraAlt,
-                title = "相機畫質、色彩與補光",
-                subtitle = "調整取景比例、120Hz、Display P3 與手電筒預設亮度",
+                title = tr("set_row_camera_title"),
+                subtitle = tr("set_row_camera_sub"),
                 badge = cameraSummary,
-                keywords = listOf("相機", "畫質", "fps", "120", "60", "清晰", "比例", "全螢幕", "p3", "補光", "手電筒", "鏡頭"),
+                keywords = tr("set_kw_cam").split(","),
                 testTag = "settings_row_camera_quality",
                 subPage = SettingsSubPage.CAMERA_QUALITY
             ),
             SettingsRowEntry(
                 id = "ruler_edit",
                 icon = Icons.Rounded.Edit,
-                title = "螢幕尺數字大小與校正",
-                subtitle = "調整螢幕尺刻度文字大小與實體比例係數",
+                title = tr("set_row_ruler_edit_title"),
+                subtitle = tr("set_row_ruler_edit_sub"),
                 badge = rulerSummary,
-                keywords = listOf("螢幕尺", "尺規", "數字", "大小", "校正", "實體"),
+                keywords = tr("set_kw_ruler").split(","),
                 testTag = "settings_row_ruler_edit",
                 subPage = SettingsSubPage.RULER_EDIT
             ),
             SettingsRowEntry(
                 id = "tools_custom",
                 icon = Icons.Rounded.Colorize,
-                title = "螢幕尺風格與對照設定",
-                subtitle = "自訂尺規色彩主題與英吋雙制對照刻度",
+                title = tr("set_row_tools_title"),
+                subtitle = tr("set_row_tools_sub"),
                 badge = toolsSummary,
-                keywords = listOf("螢幕尺", "主題", "霓光", "鋼鐵", "雙制", "英吋", "個人化"),
+                keywords = tr("set_kw_tools").split(","),
                 testTag = "settings_row_tools_custom",
                 subPage = SettingsSubPage.TOOLS_CUSTOM
             )
         ),
-        "說明與資料管理" to listOf(
+        tr("set_cat_help_data") to listOf(
             SettingsRowEntry(
                 id = "tutorial",
                 icon = Icons.Rounded.AutoAwesome,
-                title = "AR 測量使用指南",
-                subtitle = "查看 3D 空間圓圈量測、拍照與錄影訣竅",
-                keywords = listOf("教學", "指南", "導覽", "圓圈", "使用", "說明"),
+                title = tr("set_row_tutorial_title"),
+                subtitle = tr("set_row_tutorial_sub"),
+                keywords = tr("set_kw_tut").split(","),
                 testTag = "settings_row_tutorial",
                 subPage = SettingsSubPage.TUTORIAL
             ),
             SettingsRowEntry(
                 id = "about",
                 icon = Icons.Rounded.Info,
-                title = "關於 Measure 與意見回饋",
-                subtitle = "版本介紹與開發者回饋信箱",
-                keywords = listOf("關於", "回饋", "信箱", "意見", "版本"),
+                title = tr("set_row_about_title"),
+                subtitle = tr("set_row_about_sub"),
+                keywords = tr("set_kw_about").split(","),
                 testTag = "settings_row_about",
                 subPage = SettingsSubPage.ABOUT
             ),
             SettingsRowEntry(
                 id = "reset",
                 icon = Icons.Rounded.RestartAlt,
-                title = "恢復預設設定",
-                subtitle = "還原所有視覺與量測設定（保留歷史紀錄）",
+                title = tr("set_row_reset_title"),
+                subtitle = tr("set_row_reset_sub"),
                 isDestructive = true,
-                keywords = listOf("重設", "預設", "恢復", "還原"),
+                keywords = tr("set_kw_reset").split(","),
                 testTag = "settings_row_reset",
                 confirmDialog = PendingConfirmDialog.RESET_CONFIRM
             ),
             SettingsRowEntry(
                 id = "clear",
                 icon = Icons.Rounded.DeleteForever,
-                title = "清除所有測量紀錄",
-                subtitle = "永久刪除已保存的 AR 數據、照片與影片",
+                title = tr("set_row_clear_title"),
+                subtitle = tr("set_row_clear_sub"),
                 isDestructive = true,
-                keywords = listOf("清除", "刪除", "歷史", "紀錄", "照片", "影片"),
+                keywords = tr("set_kw_clear").split(","),
                 testTag = "settings_row_clear",
                 confirmDialog = PendingConfirmDialog.CLEAR_CONFIRM
             )
@@ -500,7 +505,7 @@ fun SettingsScreen(
                     TopAppBar(
                         title = {
                             Text(
-                                text = "設定",
+                                text = tr("set_title"),
                                 style = MaterialTheme.typography.titleLarge,
                                 fontFamily = GoogleSansRounded,
                                 fontWeight = FontWeight.Bold
@@ -518,7 +523,7 @@ fun SettingsScreen(
                             ) {
                                 Icon(
                                     imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                                    contentDescription = "返回測量"
+                                    contentDescription = tr("set_back_measure")
                                 )
                             }
                         },
@@ -534,7 +539,7 @@ fun SettingsScreen(
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.Language,
-                                    contentDescription = "切換語言",
+                                    contentDescription = tr("set_switch_lang"),
                                     tint = MaterialTheme.colorScheme.primary
                                 )
                             }
@@ -549,7 +554,7 @@ fun SettingsScreen(
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.RestartAlt,
-                                    contentDescription = "恢復預設值",
+                                    contentDescription = tr("set_restore_defaults"),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
@@ -588,7 +593,7 @@ fun SettingsScreen(
                         onValueChange = { searchQuery = it },
                         placeholder = {
                             Text(
-                                text = "搜尋設定（外觀、單位、線條、螢幕尺...）",
+                                text = tr("set_search_hint"),
                                 fontSize = 13.sp,
                                 fontFamily = GoogleSansRounded,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f)
@@ -610,7 +615,7 @@ fun SettingsScreen(
                                 ) {
                                     Icon(
                                         imageVector = Icons.Rounded.Close,
-                                        contentDescription = "清除搜尋",
+                                        contentDescription = tr("common_clear_search"),
                                         modifier = Modifier.size(18.dp)
                                     )
                                 }
@@ -649,13 +654,13 @@ fun SettingsScreen(
                                     modifier = Modifier.size(32.dp)
                                 )
                                 Text(
-                                    text = "找不到符合「$searchQuery」的設定",
+                                    text = tr("set_no_match_fmt", searchQuery),
                                     style = MaterialTheme.typography.titleSmall,
                                     fontFamily = GoogleSansRounded,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = "請嘗試其他關鍵字或清除搜尋欄",
+                                    text = tr("set_no_match_sub"),
                                     style = MaterialTheme.typography.bodySmall,
                                     fontFamily = GoogleSansRounded,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -791,9 +796,9 @@ fun SettingsScreen(
     when (pendingConfirm) {
         PendingConfirmDialog.NONE -> Unit
         PendingConfirmDialog.RESET_CONFIRM -> SettingsConfirmDialog(
-            title = "恢復預設設定？",
-            message = "這會將外觀、單位、線條樣式與螢幕尺調整恢復為預設狀態，已儲存的測量紀錄不會被刪除。",
-            confirmLabel = "恢復預設值",
+            title = tr("set_reset_confirm_title"),
+            message = tr("set_reset_confirm_msg"),
+            confirmLabel = tr("set_restore_defaults"),
             icon = Icons.Rounded.RestartAlt,
             onConfirm = {
                 viewModel.resetAllSettingsToDefault()
@@ -802,17 +807,22 @@ fun SettingsScreen(
             onDismiss = { pendingConfirm = PendingConfirmDialog.NONE }
         )
         PendingConfirmDialog.CLEAR_CONFIRM -> SettingsConfirmDialog(
-            title = "確認清除所有紀錄？",
-            message = "此操作無法復原，本機保存的所有歷史測量數據、照片與影片都將被永久刪除。",
-            confirmLabel = "確定清除",
+            title = tr("set_clear_confirm_title"),
+            message = tr("set_clear_confirm_msg"),
+            confirmLabel = tr("ok_clear"),
             icon = Icons.Rounded.DeleteForever,
             onConfirm = {
                 viewModel.clearAllRecords()
                 pendingConfirm = PendingConfirmDialog.NONE
-                Toast.makeText(context, "已清除所有測量紀錄", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    context,
+                    TranslationManager.getString("set_cleared_toast", currentLanguage),
+                    Toast.LENGTH_SHORT
+                ).show()
             },
             onDismiss = { pendingConfirm = PendingConfirmDialog.NONE }
         )
+    }
     }
 }
 

@@ -2,20 +2,55 @@ package com.example.logic
 
 import android.content.Context
 import android.os.Build
+import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import com.example.ui.viewmodel.HapticType
+import java.util.EnumMap
 
 /**
  * Advanced Google Pixel LRA (Linear Resonance Actuator) Haptic Feedback Engine.
  * Leverages API 31+ VibrationEffect.Composition primitives (PRIMITIVE_CLICK, PRIMITIVE_TICK,
  * PRIMITIVE_QUICK_RISE, PRIMITIVE_THUD, PRIMITIVE_LOW_TICK) for ultra-crisp, physical-grade
- * tactile feedback, with robust waveforms and fallback chains.
+ * tactile feedback, with robust waveforms, IMU-safe cooldown throttling, and fallback chains.
  */
 object ModernHapticFeedback {
 
+    private val cooldownLock = Any()
+    private val lastPlayedAtMs = EnumMap<HapticType, Long>(HapticType::class.java)
+
+    internal fun cooldownMsFor(type: HapticType): Long = when (type) {
+        HapticType.SNAP -> 160L
+        HapticType.CLICK -> 45L
+        HapticType.HEAVY -> 90L
+        HapticType.DOUBLE -> 200L
+    }
+
+    /**
+     * Thread-safe cooldown check preventing continuous vibration bursts that disturb ARCore IMU tracking.
+     * Returns true if playback is allowed for [type] at [nowMs].
+     */
+    internal fun shouldAllowHaptic(type: HapticType, nowMs: Long = SystemClock.uptimeMillis()): Boolean {
+        synchronized(cooldownLock) {
+            val minGap = cooldownMsFor(type)
+            val prev = lastPlayedAtMs[type]
+            if (prev != null && (nowMs - prev) in 0 until minGap) {
+                return false
+            }
+            lastPlayedAtMs[type] = nowMs
+            return true
+        }
+    }
+
+    internal fun resetCooldowns() {
+        synchronized(cooldownLock) {
+            lastPlayedAtMs.clear()
+        }
+    }
+
     fun play(context: Context, type: HapticType) {
+        if (!shouldAllowHaptic(type)) return
         val vibrator = getVibrator(context) ?: return
 
         try {
