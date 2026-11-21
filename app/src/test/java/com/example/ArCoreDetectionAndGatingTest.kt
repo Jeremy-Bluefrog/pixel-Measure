@@ -12,6 +12,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -26,6 +27,9 @@ import org.robolectric.Robolectric
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class ArCoreDetectionAndGatingTest {
+
+    @get:Rule
+    val vmRule = ManagedViewModelRule()
 
     @Test
     fun `isArCorePackageInstalled returns false when com_google_ar_core is missing`() {
@@ -199,7 +203,7 @@ class ArCoreDetectionAndGatingTest {
         val app = ApplicationProvider.getApplicationContext<Application>()
         Shadows.shadowOf(app).grantPermissions(Manifest.permission.CAMERA)
 
-        val viewModel = MeasureViewModel(app)
+        val viewModel = vmRule.create(app)
         assertFalse(viewModel.isArCoreInstalled())
         assertFalse(viewModel.isMeasurementAvailable.value)
 

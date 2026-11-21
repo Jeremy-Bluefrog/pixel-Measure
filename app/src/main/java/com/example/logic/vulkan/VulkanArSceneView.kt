@@ -139,8 +139,11 @@ class VulkanArSceneView(
     }
 
     private fun getCurrentDisplayRotation(): Int {
-        val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            context.display
+        val attachedDisplay = runCatching { this.display }.getOrNull()
+        val display = attachedDisplay ?: if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            runCatching { context.display }.getOrNull()
+                ?: @Suppress("DEPRECATION")
+                (context.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager)?.defaultDisplay
         } else {
             @Suppress("DEPRECATION")
             (context.getSystemService(Context.WINDOW_SERVICE) as? android.view.WindowManager)?.defaultDisplay

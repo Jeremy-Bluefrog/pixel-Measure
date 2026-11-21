@@ -14,6 +14,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -28,6 +29,9 @@ import kotlin.math.sqrt
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class ArCircleAndThemeStrictModeTest {
+
+    @get:Rule
+    val vmRule = ManagedViewModelRule()
 
     @Test
     fun `app_name string resource matches Measure`() {
@@ -124,7 +128,7 @@ class ArCircleAndThemeStrictModeTest {
     @Test
     fun `MeasureViewModel themeMode updates StateFlow and persists choice`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
 
         vm.setThemeMode("LIGHT")
         assertEquals("LIGHT", vm.themeMode.value)
@@ -151,7 +155,7 @@ class ArCircleAndThemeStrictModeTest {
             }
         )
 
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
         // Even with com.google.ar.core installed, ARCore Session is null in Robolectric -> must NOT capture fallback points
         assertFalse(vm.isCameraSimulationActive.value)
         vm.requestHitTest(540f, 1200f)
@@ -174,7 +178,7 @@ class ArCircleAndThemeStrictModeTest {
                 }
             }
         )
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
         vm.setCameraSubMode(4)
         vm.setCameraSimulationActive(true)
         vm.clearActivePoints()

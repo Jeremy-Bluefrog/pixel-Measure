@@ -22,6 +22,7 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -30,8 +31,11 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35], qualifiers = "zh-rTW-w411dp-h891dp")
 class LocalizationCompletenessTest {
 
-    @get:Rule
+    private val vmRule = ManagedViewModelRule()
     val composeTestRule = createComposeRule()
+
+    @get:Rule
+    val ruleChain: RuleChain = RuleChain.outerRule(vmRule).around(composeTestRule)
 
     private val printfPlaceholderRegex =
         Regex("%(?:\\d+\\$)?[\\-#+0,(]*\\d*(?:\\.\\d+)?[sdfox]")
@@ -158,7 +162,7 @@ class LocalizationCompletenessTest {
     @Test
     fun `WelcomeScreen updates rendered copy dynamically when switching languages`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
         vm.setLanguage("zh-TW")
 
         composeTestRule.setContent {
@@ -183,7 +187,7 @@ class LocalizationCompletenessTest {
     @Test
     fun `SettingsScreen updates rendered labels dynamically when switching languages`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
         vm.setLanguage("zh-TW")
 
         composeTestRule.setContent {
@@ -209,7 +213,7 @@ class LocalizationCompletenessTest {
     @Test
     fun `HistorySheetContent updates rendered labels dynamically when switching languages`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
         vm.setLanguage("zh-TW")
 
         composeTestRule.setContent {
@@ -238,7 +242,7 @@ class LocalizationCompletenessTest {
     @Test
     fun `RulerComponent updates edit button label dynamically when switching languages`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
         vm.setLanguage("zh-TW")
 
         composeTestRule.setContent {

@@ -160,25 +160,96 @@ class Vulkan14CapabilitiesTest {
         val optimal60 = PixelGpuOptimizer.evaluateRenderPolicy(profile, ThermalTier.OPTIMAL, 60)
         assertEquals(16, optimal60.agslBlurTapCount)
         assertEquals(0.67f, optimal60.backdropDownsampleScale, 0.001f)
+        assertEquals(0.50f, optimal60.tier2DownsampleMultiplier, 0.001f)
+        assertEquals(48, optimal60.maxCircleSegments)
+        assertTrue(optimal60.enableSpatialGridPass)
         assertTrue(optimal60.enableDeepGaussianTier2)
+        assertTrue(optimal60.estimatedTbdrBandwidthSavedPercent() >= 70)
 
         val optimal120 = PixelGpuOptimizer.evaluateRenderPolicy(profile, ThermalTier.OPTIMAL, 120)
         assertEquals(12, optimal120.agslBlurTapCount)
         assertEquals(0.60f, optimal120.backdropDownsampleScale, 0.001f)
+        assertEquals(40, optimal120.maxCircleSegments)
         assertTrue(optimal120.enableDeepGaussianTier2)
 
         val warm = PixelGpuOptimizer.evaluateRenderPolicy(profile, ThermalTier.WARM, 60)
         assertEquals(12, warm.agslBlurTapCount)
         assertEquals(0.55f, warm.backdropDownsampleScale, 0.001f)
+        assertEquals(32, warm.maxCircleSegments)
         assertTrue(warm.enableDeepGaussianTier2)
 
         val throttled = PixelGpuOptimizer.evaluateRenderPolicy(profile, ThermalTier.THROTTLED, 30)
         assertEquals(8, throttled.agslBlurTapCount)
         assertEquals(0.50f, throttled.backdropDownsampleScale, 0.001f)
+        assertEquals(24, throttled.maxCircleSegments)
+        assertFalse(throttled.enableSpatialGridPass)
         assertFalse(throttled.enableDeepGaussianTier2)
+        assertTrue(throttled.estimatedTbdrBandwidthSavedPercent() >= 85)
 
         // ADPF duration target reserves ~4% headroom below VSync period
         assertEquals(8_000_000L, PixelGpuHintSession.targetFpsToDurationNs(120))
+
+        // ADPF EMA smoothing absorbs transient single-frame GC spikes without DVFS oscillation
+        val target120Ns = PixelGpuHintSession.targetFpsToDurationNs(120)
+        val firstSmoothed = PixelGpuHintSession.smoothWorkDurationNs(0L, 4_000_000L, target120Ns)
+        assertEquals(4_000_000L, firstSmoothed)
+        val spikeSmoothed = PixelGpuHintSession.smoothWorkDurationNs(firstSmoothed, 90_000_000L, target120Ns)
+        assertTrue(spikeSmoothed in 8_000_000L..15_000_000L)
+    }
+
+    @Test
+    fun `VulkanArGraphicsPipeline batches 3D bounding box edges and adapts grid LOD by thermal tier`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val pipeline = VulkanArGraphicsPipeline(app)
+
+        val view = FloatArray(16)
+        val proj = FloatArray(16)
+        VulkanMatrix4.setIdentity(view, 0)
+        VulkanMatrix4.perspective(proj, 0, 60f, 0.5625f, 0.05f, 50f)
+
+        val boxCorners = listOf(
+            Point3D(0.0, 0.0, -1.0), Point3D(1.0, 0.0, -1.0),
+            Point3D(1.0, 0.0, -2.0), Point3D(0.0, 0.0, -2.0),
+            Point3D(0.0, 1.0, -1.0), Point3D(1.0, 1.0, -1.0),
+            Point3D(1.0, 1.0, -2.0), Point3D(0.0, 1.0, -2.0)
+        )
+
+        pipeline.updateGpuPolicy(ThermalTier.OPTIMAL, 60)
+        pipeline.recordAndExecuteDrawPass(
+            viewMatrix = view,
+            projectionMatrix = proj,
+            capturedPoints = emptyList(),
+            liveTarget = null,
+            boxCorners = boxCorners,
+            displayRotation = Surface.ROTATION_0
+        )
+        // 12 edges * 2 vertices = 24 vertices submitted cleanly
+        assertEquals(24, pipeline.lastSubmittedLineVertices)
+        val optimalGridVerts = pipeline.lastSubmittedGridVertices
+        assertTrue(optimalGridVerts > 0)
+
+        pipeline.updateGpuPolicy(ThermalTier.WARM, 60)
+        pipeline.recordAndExecuteDrawPass(view, proj, emptyList(), null, boxCorners)
+        val warmGridVerts = pipeline.lastSubmittedGridVertices
+        assertEquals(optimalGridVerts / 2, warmGridVerts)
+
+        pipeline.updateGpuPolicy(ThermalTier.THROTTLED, 30)
+        pipeline.recordAndExecuteDrawPass(view, proj, emptyList(), null, boxCorners)
+        assertEquals(0, pipeline.lastSubmittedGridVertices)
+
+        val telemetry = pipeline.getTelemetrySnapshot()
+        assertEquals(ThermalTier.THROTTLED, telemetry.thermalTier)
+        assertEquals(24, telemetry.activeCircleLodSegments)
+        assertTrue(telemetry.renderedFrames >= 3L)
+        assertTrue(telemetry.tbdrBandwidthSavedPercent >= 85)
+
+        val hbManager = com.example.logic.vulkan.VulkanHardwareBufferManager(1280, 720)
+        assertEquals(1280, hbManager.getStats().width)
+        assertFalse(hbManager.getStats().isReleased)
+        hbManager.release()
+        assertTrue(hbManager.getStats().isReleased)
+
+        pipeline.release()
     }
 
     @Test

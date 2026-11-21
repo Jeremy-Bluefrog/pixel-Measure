@@ -12,6 +12,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -20,6 +21,9 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class ArAccuracyFixTest {
+
+    @get:Rule
+    val vmRule = ManagedViewModelRule()
 
     @Test
     fun `ArKalmanFilter3D handles Z axis tracking identically to X and tiny dt safely`() {
@@ -103,7 +107,7 @@ class ArAccuracyFixTest {
     @Test
     fun `MeasureViewModel applies scaleCalibrationFactor strictly once across all geometry types`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
         val factor = 1.05f
         vm.setScaleCalibrationFactor(factor)
         val f = factor.toDouble()
@@ -319,7 +323,7 @@ class ArAccuracyFixTest {
     @Test
     fun `MeasureViewModel syncs multiSampleAveragingEnabled and BALANCED preset with engine`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
 
         // Initialized state must mirror multiSampleAveragingEnabled into sensorCorrectionEngine
         assertEquals(

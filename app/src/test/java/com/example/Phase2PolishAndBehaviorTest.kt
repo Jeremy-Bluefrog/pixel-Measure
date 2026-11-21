@@ -30,6 +30,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows
@@ -40,8 +41,11 @@ import java.io.File
 @Config(sdk = [35], qualifiers = "zh-rTW-w411dp-h891dp")
 class Phase2PolishAndBehaviorTest {
 
-    @get:Rule
+    private val vmRule = ManagedViewModelRule()
     val composeTestRule = createComposeRule()
+
+    @get:Rule
+    val ruleChain: RuleChain = RuleChain.outerRule(vmRule).around(composeTestRule)
 
     @Test
     fun `rounded typography and native rounded typeface load cleanly`() {
@@ -55,7 +59,7 @@ class Phase2PolishAndBehaviorTest {
     @Test
     fun `MeasureViewModel rulerFontScale clamps persists and resets cleanly`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
 
         vm.updateRulerFontScale(1.45f)
         assertEquals(1.45f, vm.rulerFontScale.value, 0.001f)
@@ -73,7 +77,7 @@ class Phase2PolishAndBehaviorTest {
     @Test
     fun `MeasureViewModel saveMeasurementRecord saves media-only video record when value is zero`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
         vm.clearActivePoints()
 
         val tempVideo = File(app.cacheDir, "test_ar_video.mp4").apply { writeText("mp4") }
@@ -102,7 +106,7 @@ class Phase2PolishAndBehaviorTest {
     @Test
     fun `HistorySheetContent displays unified connected filters, excludes ruler and level, and shows video badge`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
         val records = listOf(
             MeasureRecord(
                 id = 1,
@@ -165,7 +169,7 @@ class Phase2PolishAndBehaviorTest {
     @Test
     fun `RulerComponent uses edit button opening font size and calibration dialog without history`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
 
         composeTestRule.setContent {
             MyApplicationTheme(dynamicColor = false) {
@@ -186,7 +190,7 @@ class Phase2PolishAndBehaviorTest {
     @Test
     fun `ModernArTopBar omits roll and pitch horizon indicators and shows detected planes pill`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
 
         composeTestRule.setContent {
             MyApplicationTheme(dynamicColor = false) {
@@ -218,7 +222,7 @@ class Phase2PolishAndBehaviorTest {
     @Test
     fun `SettingsScreen renders clean categories, opens sub-pages, and hides developer clutter`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
 
         composeTestRule.setContent {
             MyApplicationTheme(dynamicColor = false) {
@@ -280,7 +284,7 @@ class Phase2PolishAndBehaviorTest {
     @Test
     fun `WelcomeScreen renders redesigned 3-step onboarding without jargon and launches ruler or AR`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
         var launchedMode = -1
 
         composeTestRule.setContent {
@@ -318,7 +322,7 @@ class Phase2PolishAndBehaviorTest {
     @Test
     fun `RecordDetailDialog renders safely and exposes video preview player`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
         val tempVideo = File(app.cacheDir, "detail_test.mp4").apply { writeText("mp4") }
         val record = MeasureRecord(
             id = 42,
@@ -350,7 +354,7 @@ class Phase2PolishAndBehaviorTest {
     @Test
     fun `SettingsScreen supports custom reticle, AR palette, grid, interface, and tool customization`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
         vm.resetAllSettingsToDefault()
 
         composeTestRule.setContent {
@@ -436,7 +440,7 @@ class Phase2PolishAndBehaviorTest {
     @Test
     fun `SettingsScreen opens Camera Quality page and enables 120Hz Smooth Display`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
 
         composeTestRule.setContent {
             MyApplicationTheme(dynamicColor = false) {
@@ -463,7 +467,7 @@ class Phase2PolishAndBehaviorTest {
     @Test
     fun `ModernArTopBar exposes 3D Volume mode and millimeter quick unit selection`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
 
         composeTestRule.setContent {
             MyApplicationTheme(dynamicColor = false) {
@@ -504,7 +508,7 @@ class Phase2PolishAndBehaviorTest {
     @Test
     fun `RulerComponent toggles interactive dual-line caliper card and closes cleanly`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
 
         assertEquals(40.0, com.example.ui.components.computeCaliperDeltaMm(10.0, 50.0), 1e-6)
         assertEquals("40.0 mm · 4.00 cm · 1.57 in", com.example.ui.components.formatCaliperDeltaSummary(40.0))
@@ -532,7 +536,7 @@ class Phase2PolishAndBehaviorTest {
     @Test
     fun `HistorySheetContent shows filter reset button when filtered empty and restores list`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
         val records = listOf(
             MeasureRecord(id = 10, title = "書桌寬度", value = 1.4, unit = "m", type = "DISTANCE")
         )
@@ -562,7 +566,7 @@ class Phase2PolishAndBehaviorTest {
     @Test
     fun `ModernArBottomDeck shows clear-all button with 2+ points and gates Angle summary to 3 points`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
         vm.setCameraSubMode(5) // Angle mode
         vm.capturedPoints.add(com.example.ui.viewmodel.Point3D(0.0, 0.0, -1.0))
         vm.capturedPoints.add(com.example.ui.viewmodel.Point3D(1.0, 0.0, -1.0))

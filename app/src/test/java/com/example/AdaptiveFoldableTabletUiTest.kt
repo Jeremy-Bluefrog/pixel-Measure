@@ -39,6 +39,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.RuleChain
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows
@@ -48,8 +49,11 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35], qualifiers = "w960dp-h720dp")
 class AdaptiveFoldableTabletUiTest {
 
-    @get:Rule
+    private val vmRule = ManagedViewModelRule()
     val composeTestRule = createComposeRule()
+
+    @get:Rule
+    val ruleChain: RuleChain = RuleChain.outerRule(vmRule).around(composeTestRule)
 
     private fun fakeFoldingFeature(
         bounds: Rect,
@@ -155,7 +159,7 @@ class AdaptiveFoldableTabletUiTest {
     @Test
     fun `HistoryTwoPaneWorkspace renders list and detail side by side in Book posture`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
         val sampleRecords = listOf(
             MeasureRecord(
                 id = 101,
@@ -212,7 +216,7 @@ class AdaptiveFoldableTabletUiTest {
     @Test
     fun `SettingsScreen renders side by side list and embedded subpage on unfolded tablet`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
         val tabletBookState = AdaptiveWindowState(
             widthClass = AdaptiveWidthClass.EXPANDED,
             heightClass = AdaptiveHeightClass.EXPANDED,
@@ -245,7 +249,7 @@ class AdaptiveFoldableTabletUiTest {
     fun `ModernArCameraView splits viewport and controls cleanly in Tabletop posture without horizon tilt UI`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
         Shadows.shadowOf(app).grantPermissions(Manifest.permission.CAMERA)
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
         vm.setCameraSimulationActive(true)
         val tabletopState = AdaptiveWindowState(
             widthClass = AdaptiveWidthClass.MEDIUM,
@@ -277,12 +281,13 @@ class AdaptiveFoldableTabletUiTest {
         composeTestRule.onNodeWithTag("ar_tabletop_controls_pane").assertIsDisplayed()
         composeTestRule.onAllNodesWithText("基準水平對齊 (0°)").assertCountEquals(0)
         composeTestRule.onAllNodesWithText("水準對齊調整中").assertCountEquals(0)
+        composeTestRule.mainClock.autoAdvance = true
     }
 
     @Test
     fun `RulerComponent renders on Book posture and Expanded tablet with hinge-aware controls`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
         val bookTabletState = AdaptiveWindowState(
             widthClass = AdaptiveWidthClass.EXPANDED,
             heightClass = AdaptiveHeightClass.EXPANDED,

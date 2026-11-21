@@ -60,13 +60,29 @@ data class PixelGpuRenderPolicy(
     val targetFps: Int = 60,
     val agslBlurTapCount: Int = 16,
     val backdropDownsampleScale: Float = 0.67f,
+    val tier2DownsampleMultiplier: Float = 0.50f,
     val enableDeepGaussianTier2: Boolean = true,
     val useHalfPrecisionShaders: Boolean = true,
     val enablePreRotation: Boolean = true,
     val tbdrLoadOpDontCare: Boolean = true,
     val tbdrDepthStoreDontCare: Boolean = true,
-    val maxScratchTextureDim: Int = 2048
+    val maxScratchTextureDim: Int = 2048,
+    val maxCircleSegments: Int = 48,
+    val enableSpatialGridPass: Boolean = true
 ) {
+    /**
+     * Estimates DRAM memory bandwidth reduction (%) compared to unscaled dual-pass full-res blur:
+     * - Baseline dual-pass full-res = 2.0x pixel fill area
+     * - Tier 1 sampled once from source = s^2
+     * - Tier 2 chained from Tier 1 (half-res pyramid) = (s * tier2Mult)^2 when enabled, else 0
+     */
+    fun estimatedTbdrBandwidthSavedPercent(): Int {
+        val s = backdropDownsampleScale.coerceIn(0.35f, 1.0f)
+        val t2 = if (enableDeepGaussianTier2) (s * tier2DownsampleMultiplier.coerceIn(0.35f, 1.0f)) else 0f
+        val usedFillRatio = (s * s + t2 * t2) / 2.0f
+        return ((1.0f - usedFillRatio) * 100f).toInt().coerceIn(0, 95)
+    }
+
     companion object {
         val DEFAULT = PixelGpuRenderPolicy()
     }
@@ -75,13 +91,15 @@ data class PixelGpuRenderPolicy(
 /**
  * Safe wrapper around Android ADPF [PerformanceHintManager.Session] (API 31+).
  * Informs Google Tensor's power governor & Mali/PowerVR DVFS about the Vulkan render thread's
- * frame work duration target (e.g. 8.33ms for 120Hz, 16.67ms for 60Hz) to lock smooth GPU clocks.
+ * frame work duration target (e.g. 8.33ms for 120Hz, 16.67ms for 60Hz) to lock smooth GPU clocks
+ * using EMA-smoothed duration reports that suppress single-frame jitter.
  */
 class PixelGpuHintSession private constructor(
     private val session: Any?
 ) {
     companion object {
         private const val TAG = "PixelGpuHintSession"
+        private const val DURATION_EMA_ALPHA = 0.25f
 
         fun createForCurrentThread(context: Context, targetFps: Int): PixelGpuHintSession? {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
@@ -91,7 +109,10 @@ class PixelGpuHintSession private constructor(
                 val targetNs = targetFpsToDurationNs(targetFps)
                 val hintSession = manager.createHintSession(intArrayOf(tid), targetNs) ?: return null
                 Log.i(TAG, "ADPF PerformanceHintManager session created (tid=$tid, targetFps=$targetFps, budget=${targetNs / 1_000_000f}ms)")
-                PixelGpuHintSession(hintSession)
+                PixelGpuHintSession(hintSession).apply {
+                    lastTargetFps = targetFps
+                    targetDurationNs = targetNs
+                }
             } catch (t: Throwable) {
                 Log.d(TAG, "ADPF PerformanceHintManager unavailable: ${t.message}")
                 null
@@ -103,17 +124,43 @@ class PixelGpuHintSession private constructor(
             // Keep a slight 4% safety headroom below VSync period for Tensor DVFS stability
             return (1_000_000_000L * 96L) / (safeFps.toLong() * 100L)
         }
+
+        /**
+         * Pure helper computing outlier-clamped EMA work duration in nanoseconds so
+         * OS/garbage-collection spikes don't cause excessive DVFS clock oscillation.
+         */
+        fun smoothWorkDurationNs(
+            previousSmoothedNs: Long,
+            rawActualNs: Long,
+            targetBudgetNs: Long
+        ): Long {
+            val clampedRaw = rawActualNs.coerceIn(100_000L, (targetBudgetNs * 5L).coerceIn(20_000_000L, 100_000_000L))
+            if (previousSmoothedNs <= 0L) return clampedRaw
+            return ((previousSmoothedNs * (1f - DURATION_EMA_ALPHA)) + (clampedRaw * DURATION_EMA_ALPHA)).toLong()
+                .coerceAtLeast(100_000L)
+        }
     }
 
+    @Volatile
     private var lastTargetFps: Int = -1
+    @Volatile
+    private var targetDurationNs: Long = 16_000_000L
+    @Volatile
+    var lastSmoothedDurationNs: Long = 0L
+        private set
+    @Volatile
+    var reportedFrameCount: Long = 0L
+        private set
 
     fun updateTargetFps(targetFps: Int) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
         if (lastTargetFps == targetFps) return
         lastTargetFps = targetFps
+        val nextBudgetNs = targetFpsToDurationNs(targetFps)
+        targetDurationNs = nextBudgetNs
         try {
             val s = session as? PerformanceHintManager.Session ?: return
-            s.updateTargetWorkDuration(targetFpsToDurationNs(targetFps))
+            s.updateTargetWorkDuration(nextBudgetNs)
         } catch (_: Throwable) {
         }
     }
@@ -121,9 +168,12 @@ class PixelGpuHintSession private constructor(
     fun reportFrameDurationNs(actualDurationNs: Long) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
         if (actualDurationNs <= 0L) return
+        val smoothed = smoothWorkDurationNs(lastSmoothedDurationNs, actualDurationNs, targetDurationNs)
+        lastSmoothedDurationNs = smoothed
+        reportedFrameCount++
         try {
             val s = session as? PerformanceHintManager.Session ?: return
-            s.reportActualWorkDuration(actualDurationNs.coerceIn(100_000L, 100_000_000L))
+            s.reportActualWorkDuration(smoothed)
         } catch (_: Throwable) {
         }
     }
@@ -252,7 +302,7 @@ object PixelGpuOptimizer {
             ThermalTier.OPTIMAL -> if (isHighRefresh) 12 else 16
         }
 
-        // Downsampled offscreen backdrop buffers cut Mali/PowerVR TBDR DRAM bandwidth by ~55%-75%
+        // Downsampled offscreen backdrop buffers cut Mali/PowerVR TBDR DRAM bandwidth by ~70%-88%
         val downsampleScale = when (thermalTier) {
             ThermalTier.THROTTLED -> 0.50f
             ThermalTier.WARM -> 0.55f
@@ -263,8 +313,21 @@ object PixelGpuOptimizer {
             }
         }
 
-        // Avoid dual offscreen Gaussian layers when thermally throttled to keep tile memory pressure low
+        val tier2Multiplier = when {
+            profile.architecture == PixelGpuArchitecture.POWERVR_TBDR -> 0.45f
+            thermalTier == ThermalTier.WARM -> 0.45f
+            else -> 0.50f
+        }
+
+        val circleSegments = when (thermalTier) {
+            ThermalTier.THROTTLED -> 24
+            ThermalTier.WARM -> 32
+            ThermalTier.OPTIMAL -> if (isHighRefresh) 40 else 48
+        }
+
+        // Avoid dual offscreen Gaussian layers and spatial grid overhead when thermally throttled
         val enableTier2 = thermalTier != ThermalTier.THROTTLED
+        val enableGridPass = thermalTier != ThermalTier.THROTTLED
 
         return PixelGpuRenderPolicy(
             architecture = profile.architecture,
@@ -272,12 +335,15 @@ object PixelGpuOptimizer {
             targetFps = targetFps,
             agslBlurTapCount = tapCount,
             backdropDownsampleScale = downsampleScale,
+            tier2DownsampleMultiplier = tier2Multiplier,
             enableDeepGaussianTier2 = enableTier2,
             useHalfPrecisionShaders = profile.supportsFp16Alu,
             enablePreRotation = true,
             tbdrLoadOpDontCare = true,
             tbdrDepthStoreDontCare = true,
-            maxScratchTextureDim = profile.maxSafeScratchTextureDim
+            maxScratchTextureDim = profile.maxSafeScratchTextureDim,
+            maxCircleSegments = circleSegments,
+            enableSpatialGridPass = enableGridPass
         )
     }
 }

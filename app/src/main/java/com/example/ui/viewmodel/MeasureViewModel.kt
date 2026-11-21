@@ -33,6 +33,7 @@ import com.example.logic.sensor.SensorFusionCorrectionEngine
 import com.example.logic.vulkan.PixelGpuProfile
 import com.example.logic.vulkan.PixelGpuRenderPolicy
 import com.example.logic.vulkan.VulkanArGraphicsPipeline
+import com.example.logic.vulkan.VulkanGpuTelemetrySnapshot
 import com.google.ar.core.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
@@ -1119,6 +1120,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         _effectiveTargetFps.value = policy.targetFps
         vulkanGraphicsPipeline.updateGpuPolicy(policy.tier, policy.targetFps)
         _gpuRenderPolicy.value = vulkanGraphicsPipeline.currentRenderPolicy
+        _gpuTelemetry.value = vulkanGraphicsPipeline.getTelemetrySnapshot()
         highSpeedCamera2Manager?.updatePerformanceConfig(
             highFps = highFps,
             highDef = highDefinitionQualityEnabled.value,
@@ -1155,6 +1157,10 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
     val gpuProfile: PixelGpuProfile = vulkanGraphicsPipeline.gpuProfile
     private val _gpuRenderPolicy = MutableStateFlow(vulkanGraphicsPipeline.currentRenderPolicy)
     val gpuRenderPolicy: StateFlow<PixelGpuRenderPolicy> = _gpuRenderPolicy.asStateFlow()
+    private val _gpuTelemetry = MutableStateFlow(vulkanGraphicsPipeline.getTelemetrySnapshot())
+    val gpuTelemetry: StateFlow<VulkanGpuTelemetrySnapshot> = _gpuTelemetry.asStateFlow()
+    @Volatile
+    private var lastGpuTelemetryEmitMs: Long = 0L
 
     val isVulkanGraphicsEnabled = MutableStateFlow(prefs.getBoolean("vulkan_graphics_enabled", true))
 
@@ -1446,6 +1452,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         _effectiveTargetFps.value = policy.targetFps
         vulkanGraphicsPipeline.updateGpuPolicy(policy.tier, policy.targetFps)
         _gpuRenderPolicy.value = vulkanGraphicsPipeline.currentRenderPolicy
+        _gpuTelemetry.value = vulkanGraphicsPipeline.getTelemetrySnapshot()
         modernArEngine.allowDepthMode = policy.allowDepth
         modernArEngine.applyRuntimePerformanceConfig(policy.allowDepth)
         highSpeedCamera2Manager?.updatePerformanceConfig(
@@ -1553,6 +1560,11 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                 circleVertexCount = vulkanCircleVertsCount,
                 displayRotation = displayRotation
             )
+            val nowTeleMs = System.currentTimeMillis()
+            if (nowTeleMs - lastGpuTelemetryEmitMs >= 500L) {
+                lastGpuTelemetryEmitMs = nowTeleMs
+                _gpuTelemetry.value = vulkanGraphicsPipeline.getTelemetrySnapshot()
+            }
         }
 
         if (centerHit != null) {
@@ -1893,7 +1905,7 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
         snapshotPts: List<Point3D>,
         liveTarget: Point3D?
     ): Int {
-        val segments = 48
+        val segments = vulkanGraphicsPipeline.currentRenderPolicy.maxCircleSegments.coerceIn(16, 48)
         if (_cameraSubMode.value == 4) {
             if (snapshotPts.size >= 3) {
                 val c = ArMath.fitCircle3Points(snapshotPts[0], snapshotPts[1], snapshotPts[2])
@@ -3013,7 +3025,9 @@ class MeasureViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                 }
             }
-            capturedPoints.clear()
+            if (capturedPoints.isNotEmpty()) {
+                capturedPoints.clear()
+            }
             undoStack.clear()
             updateCapturedPointsSnapshotCache()
         }

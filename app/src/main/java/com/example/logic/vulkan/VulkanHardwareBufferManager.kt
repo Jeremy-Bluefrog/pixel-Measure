@@ -7,11 +7,21 @@ import android.media.ImageReader
 import android.os.Build
 import android.util.Log
 import android.view.Surface
-import androidx.annotation.RequiresApi
+
+data class HardwareBufferStats(
+    val width: Int,
+    val height: Int,
+    val producedFrames: Long,
+    val acquiredFrames: Long,
+    val overwrittenPendingFrames: Long,
+    val hasActiveInUseBuffer: Boolean,
+    val isReleased: Boolean
+)
 
 /**
  * Manages zero-copy AHardwareBuffer memory bridging from Camera to Vulkan rendering pipeline.
- * Eliminates intermediate CPU byte-array copies and bypasses legacy OpenGL ES EGLImage wrappers.
+ * Uses double-slot handoff (pending vs in-use) so ImageReader callbacks never close a buffer
+ * while it is actively sampled by the Vulkan GPU thread, eliminating intermediate CPU copies.
  */
 class VulkanHardwareBufferManager(
     val width: Int = 1920,
@@ -22,15 +32,35 @@ class VulkanHardwareBufferManager(
     }
 
     private var imageReader: ImageReader? = null
-    private var lastHardwareBuffer: HardwareBuffer? = null
+    private var pendingBuffer: HardwareBuffer? = null
+    private var inUseBuffer: HardwareBuffer? = null
     @Volatile
     private var isReleased = false
+
+    private var producedFrames: Long = 0L
+    private var acquiredFrames: Long = 0L
+    private var overwrittenPendingFrames: Long = 0L
+
+    private fun closeBufferQuietly(buffer: HardwareBuffer?) {
+        if (buffer == null) return
+        try {
+            if (!buffer.isClosed) {
+                buffer.close()
+            }
+        } catch (_: Throwable) {
+        }
+    }
 
     /**
      * Creates an ImageReader configured with GPU Sampled Image flags to produce HardwareBuffers directly.
      */
     fun createHardwareBufferSurface(): Surface? {
-        isReleased = false
+        synchronized(this) {
+            isReleased = false
+            producedFrames = 0L
+            acquiredFrames = 0L
+            overwrittenPendingFrames = 0L
+        }
         return try {
             val usage = HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE or HardwareBuffer.USAGE_GPU_COLOR_OUTPUT
             imageReader = ImageReader.newInstance(
@@ -54,10 +84,14 @@ class VulkanHardwareBufferManager(
                             if (hb != null) {
                                 synchronized(this@VulkanHardwareBufferManager) {
                                     if (isReleased) {
-                                        hb.close()
+                                        closeBufferQuietly(hb)
                                     } else {
-                                        lastHardwareBuffer?.close()
-                                        lastHardwareBuffer = hb
+                                        if (pendingBuffer != null && pendingBuffer !== inUseBuffer) {
+                                            closeBufferQuietly(pendingBuffer)
+                                            overwrittenPendingFrames++
+                                        }
+                                        pendingBuffer = hb
+                                        producedFrames++
                                     }
                                 }
                             }
@@ -76,12 +110,55 @@ class VulkanHardwareBufferManager(
     }
 
     /**
-     * Retrieves the latest zero-copy HardwareBuffer for direct Vulkan texture sampling.
+     * Promotes the latest produced zero-copy HardwareBuffer into active GPU ownership
+     * and safely closes the previously retired in-use slot if unused.
      */
     fun acquireLatestBuffer(): HardwareBuffer? {
         synchronized(this) {
             if (isReleased) return null
-            return lastHardwareBuffer
+            val next = pendingBuffer
+            if (next != null) {
+                if (inUseBuffer != null && inUseBuffer !== next) {
+                    closeBufferQuietly(inUseBuffer)
+                }
+                inUseBuffer = next
+                pendingBuffer = null
+                acquiredFrames++
+                return next
+            }
+            val active = inUseBuffer
+            return if (active != null && !active.isClosed) active else null
+        }
+    }
+
+    /**
+     * Explicitly releases the currently pinned [HardwareBuffer] after a Vulkan GPU command
+     * buffer fence signals completion.
+     */
+    fun releaseAcquiredBuffer(buffer: HardwareBuffer? = inUseBuffer) {
+        if (buffer == null) return
+        synchronized(this) {
+            if (inUseBuffer === buffer) {
+                inUseBuffer = null
+            }
+            if (pendingBuffer === buffer) {
+                pendingBuffer = null
+            }
+            closeBufferQuietly(buffer)
+        }
+    }
+
+    fun getStats(): HardwareBufferStats {
+        synchronized(this) {
+            return HardwareBufferStats(
+                width = width,
+                height = height,
+                producedFrames = producedFrames,
+                acquiredFrames = acquiredFrames,
+                overwrittenPendingFrames = overwrittenPendingFrames,
+                hasActiveInUseBuffer = inUseBuffer != null && !inUseBuffer!!.isClosed,
+                isReleased = isReleased
+            )
         }
     }
 
@@ -92,8 +169,14 @@ class VulkanHardwareBufferManager(
     fun release() {
         synchronized(this) {
             isReleased = true
-            lastHardwareBuffer?.close()
-            lastHardwareBuffer = null
+            val p = pendingBuffer
+            val u = inUseBuffer
+            pendingBuffer = null
+            inUseBuffer = null
+            closeBufferQuietly(p)
+            if (u !== p) {
+                closeBufferQuietly(u)
+            }
         }
         try {
             imageReader?.setOnImageAvailableListener(null, null)

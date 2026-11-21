@@ -24,6 +24,7 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -37,6 +38,9 @@ import java.util.concurrent.atomic.AtomicInteger
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class ReliabilityAndErrorReductionTest {
+
+    @get:Rule
+    val vmRule = ManagedViewModelRule()
 
     @Test
     fun `VulkanFrameSyncManager watchdog invokes callback safely outside lock without deadlock`() {
@@ -129,7 +133,7 @@ class ReliabilityAndErrorReductionTest {
     @Test
     fun `applyMeasurementProfile emits single consolidated toast instead of toast storm`() = runBlocking {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val viewModel = MeasureViewModel(app)
+        val viewModel = vmRule.create(app)
         viewModel.setLanguage("zh-TW")
 
         val collected = mutableListOf<String>()
@@ -161,7 +165,7 @@ class ReliabilityAndErrorReductionTest {
         }
         shadowPm.installPackage(info)
 
-        val viewModel = MeasureViewModel(app)
+        val viewModel = vmRule.create(app)
         viewModel.setCameraSimulationActive(true)
         viewModel.requestHitTest(300f, 800f)
         assertEquals(1, viewModel.getCapturedPointsSnapshot().size)
@@ -177,7 +181,7 @@ class ReliabilityAndErrorReductionTest {
     @Test
     fun `openSystemLanguageSettings safely handles non-Activity context without crashing`() {
         val app = ApplicationProvider.getApplicationContext<Application>()
-        val viewModel = MeasureViewModel(app)
+        val viewModel = vmRule.create(app)
 
         // Should never throw AndroidRuntimeException / ActivityNotFoundException
         viewModel.openSystemLanguageSettings(app)
@@ -197,7 +201,7 @@ class ReliabilityAndErrorReductionTest {
         }
         shadowPm.installPackage(info)
 
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
         vm.setCameraSubMode(0) // Auto-detect
         vm.setSelectedUnit("cm")
         vm.setAntiJitterEnabled(false)
@@ -367,7 +371,7 @@ class ReliabilityAndErrorReductionTest {
         }
         shadowPm.installPackage(info)
 
-        val vm = MeasureViewModel(app)
+        val vm = vmRule.create(app)
         vm.setCameraSimulationActive(true)
         vm.updateDisplayGeometry(0, 1080, 2400)
 
